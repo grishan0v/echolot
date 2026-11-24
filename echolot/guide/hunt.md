@@ -22,13 +22,53 @@ one is not. The tool localises a **specific** regression well and searches for
 the unknown badly — without the change you will hunt everything that looks
 expensive and come back with a guess.
 
+**A reference.** A change is two builds: the one on the phone and one from
+before it. When the change is "unknown", or the words describe how it is now
+— "the list stutters", "it is slow" — there is none yet, and one build
+measured gives back where that build spends its time: five blind hunts with
+no earlier build all named the same long-standing cost, a control with no
+change among them. Before recording anything, ask for one, the cheapest
+first:
+
+1. traces of an earlier build on disk: an earlier investigation's rounds
+   (`echolot hunt --list`, `--show <n>`), or a set recorded on a release
+   before;
+2. an earlier build to record: the store build, a release's APK, a commit
+   before the change. Outside `gradle` mode, once the investigation is open:
+   install it (`adb install -r -d <its file>`), `collect --hunt <n>`, then
+   reinstall the build to hunt before its own set. In `gradle` mode the
+   macrobenchmark builds the checkout, so that is the checkout at the
+   earlier commit, the human's to set up;
+3. none.
+
+With one, `--since` names what lies between the two builds and the brief's
+`Reference:` names its traces and build. With none, `Reference: none`, and
+tell the human what the answer will be: what counts as slow for the scenario
+(its `budget_ms` for a launch, the frames the app made late for a scroll),
+how this build stands against it, and where it spends its time — not what
+changed. The same build recorded twice is no reference: it says how far the
+numbers wander, which each report's repeats already say.
+
 **The scenario.** `echolot.yml` may name several journeys under
-`scenarios:`, and `echolot status` lists them, a line each. With one there is
-nothing to choose. With several, match the human's words to one by its name
-and its anchors — "the feed stutters when scrolling" is a scroll, "the app
-opens slowly" is the cold start — and ask, with the scenarios as the options,
-when the words fit none of them or more than one. Carrying on the open
-investigation, its scenario is chosen already: `echolot hunt` names it.
+`scenarios:`, and `echolot status` lists them, a line each. With several,
+match the human's words to one by its name and its anchors — "the feed
+stutters when scrolling" is a scroll, "the app opens slowly" is the cold
+start — and ask, with the scenarios as the options, when they fit more than
+one. With one, the words still have to fit it, by its name, its window and
+its runner: `window: launch` is a start, a `command` runner is whatever its
+script drives.
+
+When the words fit none — a scroll, and the one scenario is a cold start —
+do not hunt them on it. Propose a scenario of its own before anything is
+recorded: `echolot guide setup`, "Adding a scenario". A journey a script
+paces is a `command` runner that drives the screen with
+`adb shell input swipe` (400 ms or more a swipe: a shorter one lands as a tap
+on a loaded phone), `reset_policy: none`, no `start` or `end` so the whole
+recording is the scenario, and `duration_ms` longer than the script; or the
+project's own frame-timing macrobenchmark (`FrameTimingMetric`) in `gradle`
+mode, when `echolot scan` lists one. Carrying on the open investigation, its
+scenario is chosen already — `echolot hunt` names it — and the words are held
+to it the same way: another journey is a new investigation.
 
 **The investigation.** Record what is being chased before you measure or
 record anything for it:
@@ -118,6 +158,7 @@ regression means `--defaults`.
 Run `echolot guide loop` first and follow it: it is your guide to the loop.
 Traces: <each trace file by name, from the directory `echolot hunt` set aside or from .echolot/traces>
 Regressed: <what, against what>, after <the change, or "unknown">
+Reference: <the earlier build's traces, each file by name, and which build | none>
 Investigation #<n> is open: pass `--hunt <n>` to every `collect` and `analyze`, so `echolot compare` reads what they file.
 Thresholds: <the config's can be trusted | start with `echolot analyze --defaults`>
 Doctor passed at <time>: do not run it again.
@@ -160,10 +201,11 @@ since it has the evidence, and run the command again on the corrected file;
 without `--done` it only checks, which is the way to try a correction first.
 When the loop was yours, write the file yourself, in the form
 `echolot guide loop` gives, and check it the same way. With no file at all,
-close with the text:
+close with the text, which says so when there was no reference:
 
 ```bash
 echolot hunt --done "TextLayout:initLayout on the main thread, :feature:profile — confidence high"
+echolot hunt --done "no reference: TextLayout:initLayout on the main thread — confidence high that it costs this"
 ```
 
 Left open, a finished hunt stays the open one: the next visit is asked
@@ -179,6 +221,9 @@ guesses.
   is unclear, check from the checkout's root:
   `grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .` must come back empty.
 - **Confidence.** If it is low, say so rather than smoothing it over.
+- **Against.** With no reference, say that the answer is where this build
+  spends its time, against its limit or its late frames, and not shown to be
+  what changed; `hunt --show` and the page read the verdict that way too.
 - **The device.** A finding about the device rather than the code —
   `runnable_starvation` on an emulator or a loaded machine — is worth a run
   on real hardware before anything is fixed. When the main thread's row says

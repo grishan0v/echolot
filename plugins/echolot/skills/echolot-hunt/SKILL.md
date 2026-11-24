@@ -5,59 +5,58 @@ description: Find the cause of one Android performance regression with echolot. 
 
 # The hunt
 
-The main thread's part; `echolot guide hunt` prints it at length, and the
-loop's guide is the subagent's.
+The main thread's part; `echolot guide hunt` has it at length.
 
-1. `echolot doctor -q`, on its own. A non-zero exit: show what failed, and
-   stop. If it says a sandbox refused a port, ask to run it outside the
-   sandbox before you stop.
+1. `echolot doctor -q`, on its own. Non-zero: show what failed, and stop.
+   If a sandbox refused a port, ask to run it outside the sandbox first.
 2. **Three facts, in the human's words**: what regressed against what ("it was
    3 s, now 7 s"), which traces show it, and **after which change**. Ask for
-   the change even when the rest is clear. "Unknown" is an answer; not asking
-   is not.
-3. **Open the investigation before anything is recorded**, unless the human
-   chose to carry on the open one; else ask, and if that one came to
-   something, `echolot hunt --done "<what>"` it first.
+   the change even when the rest is clear; "unknown" is an answer. Then a
+   reference, an earlier build's traces or a build to record first
+   (`echolot guide hunt`, "A reference"): with none, the answer is where this
+   build spends its time, not what changed. Say so.
+3. **The scenario**, as `echolot status` lists them: the words fit one by its
+   name, window and runner, even when there is one; fitting none (a scroll,
+   only a cold start), add one first, `echolot guide setup`, "Adding a
+   scenario". Several: ask when unsure; add `--scenario <name>` below.
+4. **Open the investigation before anything is recorded**, unless the human
+   chose to carry on the open one; else ask, and if it came to something,
+   `echolot hunt --done "<what>"` it first.
 
    ```bash
    echolot hunt "<what regressed, in their words>" --since "<the change, or unknown>"
    ```
 
-   Several scenarios in `echolot.yml`, as `echolot status` lists them: match
-   the question to one, ask when you cannot tell, and add `--scenario <name>`.
-   It moves the scenario's loose traces aside, and stderr names the directory.
-   They are this question's evidence only if the human recorded them for it
-   before asking; most often an earlier question's last round or setup's
-   probe. Exit 2 means
-   `echolot.yml` does not load: show the error and stop. Markers the previous
-   investigation left go before anything is recorded: `echolot mark --remove`,
-   and by hand the lines it lists. No traces recorded for this question:
-   `echolot collect -c echolot.yml -n 5 --hunt <n>`, `-n 1` first after a
-   runner change.
-4. **Hand the loop to a subagent that starts with none of this conversation**,
-   with this brief as its first message, filled in. `#<n>` is `opened #<n>`,
-   or the `→` row of `echolot hunt --list`; `Thresholds:` comes from the
-   `thresholds` column of `echolot report`: calibrated on the runs that hold
-   the regression means `--defaults`.
+   It moves the scenario's loose traces aside (stderr says where): they are
+   this question's evidence only if the human recorded them for it before
+   asking. Exit 2: `echolot.yml` does not load; show why, stop. The last
+   investigation's markers go first: `echolot mark --remove`, and by hand the
+   lines it lists. No traces recorded for this question:
+   `echolot collect -c echolot.yml -n 5 --hunt <n>`, `-n 1` after a runner
+   change.
+5. **Hand the loop to a subagent that starts with none of this conversation**,
+   this brief as its first message, filled in. `#<n>` is `opened #<n>` (or
+   `echolot hunt --list`'s `→` row); `Thresholds:` reads the `thresholds`
+   column of `echolot report`: calibrated on the runs that hold the
+   regression means `--defaults`.
 
    ```text
    Run `echolot guide loop` first and follow it: it is your guide to the loop.
    Traces: <each trace file by name, from the directory `echolot hunt` set aside or from .echolot/traces>
    Regressed: <what, against what>, after <the change, or "unknown">
+   Reference: <the earlier build's traces, each file by name, and which build | none>
    Investigation #<n> is open: pass `--hunt <n>` to every `collect` and `analyze`, so `echolot compare` reads what they file.
    Thresholds: <the config's can be trusted | start with `echolot analyze --defaults`>
    Doctor passed at <time>: do not run it again.
    Instrumentation: <what `echolot domains --root .` found | none: start with `echolot mark`, not with reading the app>
    ```
 
-   **Do not run `echolot guide loop` yourself**: it is the subagent's, and here
-   it only fills this window. Then **wait for its conclusion**. Do not end
-   your turn while it runs: a turn that ends on "I will come back with its
-   output" may never get a next one. If your host has no subagent tool, even
-   among those it lists on request, the loop is yours: `echolot guide loop`,
-   in short passes.
-5. **When the conclusion comes back, close the investigation first**, every
-   time, then answer the human. When it ends with a verdict file:
+   **Do not run `echolot guide loop` yourself**: it is the subagent's. Then
+   **wait for its conclusion**: a turn that ends while it runs may get no
+   next one. With no subagent tool, even among those listed on request, the
+   loop is yours: `echolot guide loop`.
+6. **When the conclusion comes back, close the investigation first**, every
+   time, then answer the human:
 
    ```bash
    echolot hunt --done --verdict .echolot/verdict.json
@@ -67,6 +66,6 @@ loop's guide is the subagent's.
    subagent and run it again (without `--done` it only checks). With no file:
    `echolot hunt --done "<place> — <what happens there>; confidence <high|medium|low>"`.
 
-   Then show the conclusion as it is. If it does not say the markers are
-   gone, check with the command `echolot guide hunt` gives. Say a low
-   confidence out loud; a device finding wants a run on real hardware.
+   Show the conclusion as it is; unsure the markers are gone, check as
+   `echolot guide hunt` says. Say a low confidence or no reference out loud;
+   a device finding wants a run on real hardware.

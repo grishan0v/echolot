@@ -307,8 +307,13 @@ def test_a_hunt_opens_on_the_scenario_its_question_is_about():
         check(f"{path.name}: the investigation opens on one", "--scenario <name>" in flat,
               flat[:300])
     command = _flat(HUNT_COMMAND)
-    check("the command asks when the words fit none or more than one",
-          "fit none of them, or more than one, ask with `AskUserQuestion`" in command, command)
+    check("the command asks when the words fit more than one",
+          "when the words fit more than one, ask with `AskUserQuestion`" in command, command)
+    # And proposes a scenario when they fit none, one scenario or several,
+    # rather than hunting a scroll on the only scenario there is (#539).
+    check("and proposes a new one when they fit none",
+          "When the words fit none of the scenarios, propose adding one before anything is "
+          "recorded" in command and "With one, the words still have to fit it" in command, command)
     check("and the agent is told which scenario the investigation is about",
           "which one the investigation is about" in command, command)
 

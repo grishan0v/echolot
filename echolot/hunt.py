@@ -59,6 +59,21 @@ FRESH_MINUTES = 30
 STALE_DAYS = 7
 
 
+# What `--since` holds when the human could not name the change: the word the
+# hunt texts pass for it, or nothing at all.
+UNKNOWN_CHANGE = ("", "unknown")
+
+
+def change_named(since: object) -> bool:
+    """Whether an investigation names the change it is after.
+
+    Without one, nothing says what to set the build against, and a hunt
+    returns where that build spends its time — the costliest places, changed
+    or not (#538). `hunt` says so when it opens one.
+    """
+    return isinstance(since, str) and since.strip().lower() not in UNKNOWN_CHANGE
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -1086,7 +1101,10 @@ def _did(hunt: dict[str, Any]) -> list[str]:
     if isinstance(verdict, dict):
         causes = [c for c in verdict.get("causes") or [] if isinstance(c, dict)] \
             if isinstance(verdict.get("causes"), list) else []
-        bits.append(f"verdict: {len(causes)} cause(s)")
+        kind = verdict_mod.reads_as(verdict, hunt.get("verdict_check"))
+        bits.append(f"verdict: {len(causes)} cause(s)"
+                    + (f" against report {verdict_mod.against(verdict)}" if kind == "regression"
+                       else ", no reference" if kind == "hotspots" else ""))
     return bits
 
 

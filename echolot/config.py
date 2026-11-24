@@ -96,6 +96,22 @@ _SCENARIO_NAME = re.compile(r"[A-Za-z0-9][\w.-]*")
 # changes.
 _SCENARIO_KEYS = ("start", "end", "window", "budget_ms", "runner", "detectors")
 
+# A journey the config does not measure — a scroll beside a cold start — is a
+# scenario of its own, never a question put to the one there is: a question
+# about a list stuttering was hunted on a cold start, and its scroll traces
+# were recorded by hand outside `collect` (#539). The two shapes that work,
+# said where a name the config lacks is refused.
+NEW_SCENARIO = (
+    "A journey this config does not measure gets a scenario of its own under "
+    "`scenarios:` (`echolot guide setup`, \"Adding a scenario\"), in one of two shapes:\n"
+    "  - a `command` runner that drives the screen, such as `adb shell input swipe "
+    "500 1500 500 300 600` (400 ms or more a swipe: a shorter one lands as a tap on a "
+    "loaded phone), with `reset_policy: none`, no `start` or `end`, so the whole "
+    "recording is the scenario, and `duration_ms` longer than the script;\n"
+    "  - the project's own frame-timing macrobenchmark (`FrameTimingMetric`), as a "
+    "`runner:` in `gradle` mode with its class in `gradle_args`: `echolot scan` lists "
+    "the project's benchmarks")
+
 # The sections of echolot.yml and local.yml. A key that is none of these was
 # dropped without a word: `detectros:` ran on the built-in thresholds, and
 # `instrumentaton:` on no allowed paths (#582). `threads` is read by nobody
@@ -606,7 +622,8 @@ class Config:
         name, and its runner keys and thresholds over the config's.
 
         None reads the first. A name this config does not have is refused,
-        with the names it does have.
+        with the names it does have and the two shapes a scenario for another
+        journey takes, so that the refusal says how to add one (#539).
         """
         many = self._many()
         if name is None:
@@ -616,11 +633,11 @@ class Config:
                 raise ConfigError(
                     f"--scenario {name}: this config has one scenario, "
                     f"`{self.scenario_name}`. Name several under `scenarios:` "
-                    f"to choose among them")
+                    f"to choose among them.\n{NEW_SCENARIO}")
         elif name not in many:
             raise ConfigError(
                 f"--scenario {name}: no such scenario in this config. It has "
-                + ", ".join(f"`{n}`" for n in many))
+                + ", ".join(f"`{n}`" for n in many) + f".\n{NEW_SCENARIO}")
         else:
             self.scenario_key = name
         return self

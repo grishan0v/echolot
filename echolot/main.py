@@ -3515,6 +3515,24 @@ def _held_verdict(project: Path, config: str, last: dict[str, Any], source: str,
     return verdict, reports, left
 
 
+def _say_against(verdict: dict[str, Any]) -> None:
+    """How the verdict reads, by what it was set against (#538).
+
+    With a reference, its causes are what changed, and the check held each to
+    a row outside the reference. With none, they are where the build measured
+    spends its time: said here, where whoever wrote it reads, and kept so in
+    the record, `--show` and the page, whatever the summary's words.
+    """
+    reference = verdict_mod.against(verdict)
+    if reference is not None:
+        print(f"  against report {reference}: a regression — each cause cites a row of the "
+              f"build measured, outside the reference")
+    else:
+        print('  against nothing: no reference, so its causes read as where this build '
+              'spends its time, not as what changed. A report of an earlier build filed '
+              'under this investigation, named in "against", makes it a regression')
+
+
 def _say_cleanup(verdict: dict[str, Any], left: dict[str, Any], closing: bool) -> None:
     """What echolot counted in the sources, beside what the verdict says of it.
 
@@ -3554,6 +3572,7 @@ def _check_verdict(project: Path, config: str, source: str) -> int:
     print(f"the verdict would be accepted: {len(verdict['causes'])} cause(s); the "
           f"{verdict_mod.cited(verdict)} row(s) it cites are all in this "
           f"investigation's reports")
+    _say_against(verdict)
     _say_cleanup(verdict, left, closing=False)
     # Closing is not said here: the one who reads this may be the agent that
     # wrote the file, and closing the investigation is not its to do.
@@ -3599,6 +3618,7 @@ def _close_hunt(project: Path, config: str, text: Any, source: str | None) -> in
     check = h["verdict_check"]
     print(f"  verdict recorded: {len(verdict['causes'])} cause(s); the "
           f"{check['cited']} row(s) it cites are all in this investigation's reports")
+    _say_against(verdict)
     _say_cleanup(verdict, left, closing=True)
     recorder.note(hunt="concluded", verdict=len(verdict["causes"]))
     return 0
@@ -3868,8 +3888,18 @@ def cmd_hunt(args) -> int:
         # open: a page of it that stands there is written again to say so.
         if before and before.get("n"):
             _answer_again(project, config, hunt_mod.find(project, str(before["n"])))
-        if h.get("since"):
+        if hunt_mod.change_named(h.get("since")):
             print(f'  after: {h["since"]}')
+        else:
+            # Said when it opens, because what the hunt can answer is decided
+            # here: with one build measured, the costliest places of that
+            # build, whether or not they changed. Five blind hunts with no
+            # build before the change named the same long-standing hotspot,
+            # a control with no change among them (#538).
+            print(f'  after: {(h.get("since") or "").strip() or "not said"} — with nothing '
+                  f'recorded before the change, the answer is where this build spends its '
+                  f'time, not what changed. A set of an earlier build recorded under this '
+                  f'investigation makes it a regression: `echolot guide hunt`, "A reference"')
         # Instrumentation the previous investigation never took out would
         # otherwise become this one's starting conditions. By the config's
         # prefix, the one `mark` wrote them with: under the default, a

@@ -231,7 +231,17 @@ scenarios:
     runner:                    # the runner keys this scenario changes
       mode: command
       command: "adb shell input swipe 500 1500 500 300 600"
+      reset_policy: none       # nothing between repeats: the app stays where it is
 ```
+
+A swipe takes its last number as its length in milliseconds: 400 or more,
+since a shorter one lands as a tap on a loaded phone. A scroll may also keep
+no `start` or `end`, and the whole recording is then the scenario, with
+`duration_ms` longer than the script; or it is the project's own
+frame-timing macrobenchmark (`FrameTimingMetric`) in `gradle` mode, which
+`echolot scan` lists among the benchmarks. A question about a journey no
+scenario measures gets one of these before it is hunted, never the one
+scenario there is.
 
 Each key is the scenario's name, and its traces carry it:
 `feed_scroll_iter000.perfetto-trace`. A name is letters, digits, `_`, `.` and
