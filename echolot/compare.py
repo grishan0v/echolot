@@ -158,17 +158,25 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
         warnings.append(frames["warning"])
         _per_frame(rows, frames["ratio"], floor_ratio)
     markers = _markers(before, after, floor_ms, floor_ratio, temp_prefix, moved_into)
+    window = _window(before, after, floor_ms, floor_ratio)
+    startup = _startup(before, after, floor_ms, floor_ratio)
 
     # Two processes, two windows, or a window that is not the scenario's: the
     # numbers stay, because a wrong-looking table is more useful than a
     # refusal, but a verdict that a move holds would claim a comparison that
-    # is not there (#534).
+    # is not there (#534). The window and the startup are no detector's, and
+    # go with every row: a move the tool or one set read twice can account
+    # for is not the app's either (#532).
     for r in [*rows, *markers]:
         if not comparable or unjudged is ALL or (
                 "detector" in r and r["detector"] in unjudged):
             r["shift"], r["holds"] = None, None
             if r.get("calls"):
                 r["calls"]["shift"], r["calls"]["holds"] = None, None
+    if not comparable or unjudged is ALL:
+        for r in [window, startup, *((startup or {}).get("reasons") or [])]:
+            if r and "holds" in r:
+                r["shift"], r["holds"] = None, None
 
     # Stable, so the size order holds inside each part. With the frames
     # warning the rows that moved against the frames come first: they are
@@ -219,7 +227,9 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
         "warnings": warnings,
         "before": _side(before, before_path),
         "after": _side(after, after_path),
-        "window": _window(before, after),
+        "window": window,
+        # The platform's startup, when both sides have one; null otherwise.
+        "startup": startup,
         "noise_floor": {"abs_ms": floor_ms, "ratio": floor_ratio},
         "confidence": stats.CONFIDENCE_PCT / 100,
         # What a row's range has to clear for `holds` (#506): the floor, each
@@ -1378,15 +1388,114 @@ def _side(report: dict, path: str) -> dict[str, Any]:
     }
 
 
-def _window(before: dict, after: dict) -> dict[str, Any]:
+def _window(before: dict, after: dict, floor_ms: float = FLOOR_MS,
+            floor_ratio: float = FLOOR_RATIO) -> dict[str, Any]:
+    """The scenario's window on the two sides, tested as a row is (#532).
+
+    The window is the number this tool exists for, and it was the one
+    `compare` did not test: two medians and their difference, whatever the
+    runs' own scatter. Now it gets a row's `change` against a row's floor,
+    and a row's `shift` and `holds` from each run's window (`_judged_once`).
+
+    `untested` names a side of more than one run whose report keeps no
+    per-run windows: written before `window.values` existed. Its move
+    stays the difference of the medians, and is said to be untested.
+    """
     wb, wa = before.get("window") or {}, after.get("window") or {}
     b, a = wb.get("duration_ms"), wa.get("duration_ms")
     out: dict[str, Any] = {"before_ms": b, "after_ms": a,
                            "delta_ms": None, "ratio": None}
-    if b is not None and a is not None:
-        out["delta_ms"] = round(a - b, 2)
-        if b:
-            out["ratio"] = round(a / b, 2)
+    if b is None or a is None:
+        return out
+    out.update(_judged_once(b, a, wb.get("values"), wa.get("values"),
+                            floor_ms, floor_ratio))
+    untested = [side for side, rep, w in (("before", before, wb), ("after", after, wa))
+                if _runs(rep) > 1 and not w.get("values")]
+    if untested:
+        out["untested"] = untested
+    return out
+
+
+def _judged_once(b: float, a: float, vb: list[float] | None,
+                 va: list[float] | None, floor_ms: float,
+                 floor_ratio: float) -> dict[str, Any]:
+    """One number of each side judged as a row is, held against zero.
+
+    `change` is a row's, against a row's floor, and so are the move, its
+    range and the runs it would take. `holds` asks the range to clear zero:
+    the window, or the startup, is one number tested once, not one of two
+    hundred rows tested at once, where chance alone holds a few. A floor
+    there would be a tenth of the window, and a tenth of a five-second
+    cold start is 490 ms: one app's six control sets of ten cold starts,
+    against ten with a 400 ms sleep planted at startup, held the move
+    against every control by zero and against none by that floor.
+    """
+    judged = _row("window", ("location",), _as_row(b, vb), _as_row(a, va),
+                  "name", floor_ms, floor_ratio, metric="ms")
+    shift = _shift(vb, va, judged["delta_ms"] or 0.0)
+    return {"delta_ms": judged["delta_ms"], "ratio": judged["ratio"],
+            "change": judged["change"], "shift": shift,
+            # Off the rounded ends, as a row's is.
+            "holds": None if shift is None else (
+                shift["low_ms"] > 0 or shift["high_ms"] < 0)}
+
+
+def _as_row(ms: float, values: list[float] | None) -> dict[str, Any]:
+    """A side's window, or startup, or one reason of it, in the shape of a
+    report's row: the median, and each run's value under `spread`."""
+    row: dict[str, Any] = {"location": "window", "ms": ms}
+    if values:
+        row["spread"] = {"ms": {"min": min(values), "max": max(values),
+                                "values": list(values)}}
+    return row
+
+
+def _startup(before: dict, after: dict, floor_ms: float = FLOOR_MS,
+             floor_ratio: float = FLOOR_RATIO) -> dict[str, Any] | None:
+    """The platform's startup on the two sides, tested as the window is (#532).
+
+    Perfetto's own measure of the launch, from the intent to the first
+    frame, and its split by reason: `bind_application`, `io`, `binder`,
+    the time before the process ran. A set of fifteen cold starts against
+    four of a later build moved the window by 7% and this by 35%, and
+    `compare` never read it. Both sides need one: with a startup on one
+    side only there is nothing to set it against, and the block is null.
+
+    The reasons are rows of their own here, not of the detectors' table:
+    the time they split is the same time the detectors' rows already
+    count, `io` the disk waits and `binder` the calls, and the table's
+    sums and the plain reading would count it twice. A dozen of them are
+    judged at once, as rows are, so they go through `_row` and hold by
+    the rows' rule; the startup as a whole is one number, as the window.
+    """
+    sb = (before.get("window") or {}).get("startup") or {}
+    sa = (after.get("window") or {}).get("startup") or {}
+    if sb.get("dur_ms") is None or sa.get("dur_ms") is None:
+        return None
+    out: dict[str, Any] = {
+        "type": {"before": sb.get("type"), "after": sa.get("type")},
+        "before_ms": sb["dur_ms"], "after_ms": sa["dur_ms"],
+        **_judged_once(sb["dur_ms"], sa["dur_ms"], sb.get("values"), sa.get("values"),
+                       floor_ms, floor_ratio),
+    }
+    untested = [side for side, rep, s in (("before", before, sb), ("after", after, sa))
+                if _runs(rep) > 1 and not s.get("values")]
+    if untested:
+        out["untested"] = untested
+    rb, ra = sb.get("reasons") or {}, sa.get("reasons") or {}
+    vb, va = sb.get("reason_values") or {}, sa.get("reason_values") or {}
+    reasons = []
+    for name in [*rb, *(n for n in ra if n not in rb)]:
+        r = _row("startup", ("location",),
+                 _as_row(rb[name], vb.get(name)) if name in rb else None,
+                 _as_row(ra[name], va.get(name)) if name in ra else None,
+                 "name", floor_ms, floor_ratio, metric="ms")
+        reasons.append({"reason": name,
+                        "before_ms": rb.get(name), "after_ms": ra.get(name),
+                        "delta_ms": r["delta_ms"], "ratio": r["ratio"],
+                        "change": r["change"], "shift": r["shift"], "holds": r["holds"]})
+    reasons.sort(key=lambda r: abs(r["delta_ms"] or 0.0), reverse=True)
+    out["reasons"] = reasons
     return out
 
 
@@ -1853,13 +1962,9 @@ def to_markdown(cmp: dict[str, Any]) -> str:
 
     w = cmp["window"]
     if w["before_ms"] is not None and w["after_ms"] is not None:
-        line = f"Scenario window: **{w['before_ms']} → {w['after_ms']} ms**"
-        if w["delta_ms"] is not None:
-            line += f"  ({w['delta_ms']:+.1f}"
-            if w["ratio"]:
-                line += f", ×{w['ratio']}"
-            line += ")"
-        out.append(line)
+        out.append(_moved_line("Scenario window", w))
+    if cmp.get("startup"):
+        out.append(_moved_line("Startup (platform)", cmp["startup"]))
 
     s = cmp["summary"]
     out.append(
@@ -1920,6 +2025,27 @@ def to_markdown(cmp: dict[str, Any]) -> str:
         out.append(_markers_table(marked))
         out.append("")
 
+    reasons = [r for r in (cmp.get("startup") or {}).get("reasons") or []
+               if r["change"] != STEADY]
+    if reasons:
+        out.append("## Startup by reason")
+        out.append("")
+        out.append(
+            "_the platform's startup split as Perfetto splits it, each reason "
+            "judged as a row is. The same time the detectors' rows count, so "
+            "not added to them._")
+        out.append("")
+        out.append(table.render(
+            [{"reason": f"`{r['reason']}`",
+              "before": "—" if r["before_ms"] is None else r["before_ms"],
+              "after": "—" if r["after_ms"] is None else r["after_ms"],
+              "delta": _delta(r),
+              "holds": _holds(r)} for r in reasons],
+            order=["reason", "before", "after", "delta", "holds"],
+            headers={"reason": "Reason", "before": "Before", "after": "After",
+                     "delta": "Δ", "holds": "Holds"}))
+        out.append("")
+
     out.extend(_names_lines(cmp.get("names"), NAMES_SHOWN))
 
     if s["state_changed"]:
@@ -1954,6 +2080,33 @@ def to_markdown(cmp: dict[str, Any]) -> str:
     if quiet:
         out.append(f"**Silent in both:** {', '.join(quiet)}")
     return "\n".join(out).rstrip() + "\n"
+
+
+def _moved_line(name: str, w: dict[str, Any]) -> str:
+    """The window's line, or the startup's: the two medians, the move, and
+    whether it holds, in the Holds column's words (#532).
+
+    A side whose report keeps no per-run values gets the move without a
+    verdict and says why; too few runs, or two reports that are not one
+    thing, leave the verdict out and the warnings above say why.
+    """
+    line = f"{name}: **{w['before_ms']} → {w['after_ms']} ms**"
+    kinds = w.get("type") or {}
+    if kinds.get("before") != kinds.get("after"):
+        line += f" ({kinds.get('before') or 'unknown'} → {kinds.get('after') or 'unknown'})"
+    if w["delta_ms"] is not None:
+        line += f"  ({w['delta_ms']:+.1f}"
+        if w["ratio"]:
+            line += f", ×{w['ratio']}"
+        line += ")"
+    if w.get("untested"):
+        sides = " and ".join(w["untested"])
+        line += (f" · untested: the {sides} report{'s' if len(w['untested']) > 1 else ''} "
+                 f"keep{'' if len(w['untested']) > 1 else 's'} no per-run values; "
+                 f"`analyze` the traces again to test the move")
+    elif w.get("shift"):
+        line += f" · holds: {_holds(w)}"
+    return line
 
 
 def _pct(ratio: float) -> str:

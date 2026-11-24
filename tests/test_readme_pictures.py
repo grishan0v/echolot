@@ -146,7 +146,7 @@ def test_each_table_says_its_words_in_its_alt_text():
 def test_the_detectors_table_is_every_detector_by_its_title():
     """The table's words are the detectors' own: the title its section has in
     the report, for every file in echolot/sql/detectors/."""
-    from echolot.main import DETECTOR_DIR
+    from echolot.analyze import DETECTOR_DIR
     from echolot.tp import load_detectors
 
     drawn = _render().pictures()["detectors-wide.svg"]

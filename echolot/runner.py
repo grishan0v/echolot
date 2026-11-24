@@ -194,8 +194,8 @@ DEVICE_TRACE = "/data/misc/perfetto-traces/echolot.pftrace"
 # they are the keys most likely to be copied in from a launch-mode config and
 # believed.
 # The keys of `runner:` read here, with the two `collect` in main.py reads
-# before it calls here, `iterations` and `device`. `stabilize.KEYS` and
-# `composenames.KEYS` are the rest; Config.load refuses any other key by name,
+# before it calls here, `iterations` and `device`. `stabilize.KEYS`,
+# `composenames.KEYS` and `power.KEYS` are the rest; Config.load refuses any other key by name,
 # so `iteratons: 3` is not five repeats without a word (#737).
 KEYS = ("mode", "iterations", "device", "activity", "command", "duration_ms",
         "reset_policy", "sampling", "atrace_categories", "buffer_kb", "environment",

@@ -62,7 +62,7 @@ CHECKS: list[tuple[str, object]] = []
 
 def _shipped() -> int:
     """How many detectors this package ships."""
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import load_detectors
     return len(load_detectors(DETECTOR_DIR))
 
@@ -370,7 +370,7 @@ def _(report):
     # fixture's size. What the report adds to a row after the query — the
     # place in the code, the samples, a merge's bookkeeping — is not the
     # query's, and not counted.
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .report import HIDDEN
     from .tp import load_detectors
 
@@ -456,7 +456,7 @@ def _(report):
     # its `@intervals` reads them rather than taking the steps again (#490).
     # Every shipped detector that does so reads its tables there; and the
     # three ways a table could go wrong are refused as the file is read.
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import Detector, load_detectors
     writers = [d for d in load_detectors(DETECTOR_DIR) if d.tables]
     assert writers, "no shipped detector writes its pieces down"
@@ -1588,7 +1588,7 @@ def _(report):
 
 @check("calibrate: the measuring pass opens thresholds and strips LIMIT")
 def _(report):
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import load_detectors
     d = next(x for x in load_detectors(DETECTOR_DIR)
              if x.id == "runnable_starvation")
@@ -1611,7 +1611,7 @@ def _(report):
 
 @check("calibrate: every directive points at a live param and column")
 def _(report):
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import load_detectors
     from .report import COLUMNS
     for d in load_detectors(DETECTOR_DIR):
@@ -2122,7 +2122,8 @@ def _(report):
 
 @check("thresholds: --set is typed and refuses what does not exist")
 def _(report):
-    from .main import DETECTOR_DIR, parse_set
+    from .analyze import DETECTOR_DIR
+    from .main import parse_set
     from .tp import load_detectors
     dets = load_detectors(DETECTOR_DIR)
     got = parse_set(["main_thread_block.min_slice_ms=16",
@@ -2141,7 +2142,7 @@ def _(report):
 
 @check("thresholds: the report says where each detector's numbers came from")
 def _(report):
-    from .main import plan_detectors
+    from .analyze import plan_detectors
     # every detector in the fixture run uses the shipped defaults
     assert all(d["params_source"] == "default" for d in report["detectors"]), \
         [(d["id"], d["params_source"]) for d in report["detectors"]]
@@ -2186,7 +2187,7 @@ def _(report):
     told is not the same as having chosen, so choosing is now something you
     write.
     """
-    from .main import DETECTOR_DIR, plan_detectors
+    from .analyze import DETECTOR_DIR, plan_detectors
     from .tp import load_detectors
 
     shipped = _shipped()
@@ -2248,7 +2249,7 @@ def _(report):
     written `false`, so the line says a decision rather than an oversight —
     and on a config that turns nothing off, there is no line at all.
     """
-    from .main import DETECTOR_DIR, plan_detectors
+    from .analyze import DETECTOR_DIR, plan_detectors
     from .report import to_markdown
     from .tp import load_detectors
 
@@ -2289,7 +2290,7 @@ def _(report):
     `@param` already says which kind each one is, by what its default is.
     Nothing was reading it.
     """
-    from .main import plan_detectors
+    from .analyze import plan_detectors
 
     for value in ("16 OR 1=1", "16ms", None, True, [16]):
         cfg = Config({**FIXTURE_CONFIG,
@@ -2662,7 +2663,7 @@ def _(report):
     Each report now names its echolot, and each detector the code it read the
     trace with, so a difference in either can be said."""
     from . import __version__
-    from .main import DETECTOR_DIR
+    from .analyze import DETECTOR_DIR
     from .tp import load_detectors
     got = report["toolchain"].get("echolot")
     assert got == __version__, (got, __version__)
@@ -4343,7 +4344,7 @@ def _(report):
 def _(report):
     import contextlib
     import io
-    from .main import _OTHERS_SHOWN, _resolve_process
+    from .analyze import _OTHERS_SHOWN, _resolve_process
 
     class _FakeTP:
         # 641 processes, as `*` gives on a real device: the chosen one plus
@@ -5054,7 +5055,7 @@ def _(report):
     whole window for every row.
     """
     import re as _re
-    from .main import SQL_DIR, _resolve_process, _setup_context
+    from .analyze import SQL_DIR, _resolve_process, _setup_context
     from .tp import TraceSession
 
     made: dict[str, str] = {}
@@ -5692,6 +5693,78 @@ def _(report):
                                                  after_path="b.json")["warnings"]
             if w["id"] == "drift"]
     assert len(said) == 1 and said[0].startswith("The runs before drift"), said
+
+
+def _windowed_runs(report, windows, plus=0.0, at=0):
+    """The fixture's report once per window, each run's startup as long as
+    its window plus the fixture's 60 ms before it and `bind_application`
+    taking what the run gained."""
+    import copy
+    runs = []
+    for i, ms in enumerate(windows):
+        one = copy.deepcopy(report)
+        one["trace"] = f"w_iter{at + i:03d}.perfetto-trace"
+        one["window"]["duration_ms"] = ms + plus
+        s = one["window"]["startup"]
+        s["dur_ms"] = ms + plus + 60.0
+        s["reasons"]["bind_application"] = round(98.0 + ms + plus - 1005.0, 2)
+        runs.append(one)
+    return runs
+
+
+# Eight cold starts of one build, as far apart as a quiet phone's are.
+_WINDOWS = (1005.0, 1062.0, 988.0, 1031.0, 1019.0, 975.0, 1050.0, 996.0)
+
+
+@check("merging repeats: each run's window and startup are kept, in the order of the traces")
+def _(report):
+    """The window's median, shortest and longest were all a merged report
+    kept of it, so `compare` could subtract two medians and no more (#532).
+    Each run's window now stays under `window.values`, and its startup and
+    the startup's reasons under `startup.values` and `reason_values`."""
+    from .report import aggregate
+    merged = aggregate(_windowed_runs(report, _WINDOWS))
+    w = merged["window"]
+    assert w["values"] == list(_WINDOWS), w["values"]
+    assert (w["duration_ms"], w["duration_ms_min"], w["duration_ms_max"]) == (1012.0, 975.0, 1062.0), w
+    s = w["startup"]
+    assert s["values"] == [ms + 60.0 for ms in _WINDOWS], s["values"]
+    assert s["reason_values"]["bind_application"] == [ms - 907.0 for ms in _WINDOWS], s["reason_values"]
+    assert s["reason_values"]["io"] == [60.0] * 8, s["reason_values"]
+    assert list(s["reason_values"]) == list(s["reasons"]), "the reasons in two orders"
+
+
+@check("compare: the window's move is tested as a row's — one build against itself "
+       "does not hold, a slower build does")
+def _(report):
+    """The window is the number echolot exists for, and `compare` gave it
+    two medians and their difference, whatever the runs' scatter (#532).
+    The eight runs of one build, four against four, are 1.5 ms apart by
+    their medians, and the range that move lies in, -75 to +74 ms, runs
+    through zero: it does not hold. The same four against four of a build
+    300 ms slower hold, +225 to +374 ms, and so does the platform's startup
+    beside it; its reasons are judged the same way, `bind_application`
+    holding the 300 ms and `io` steady."""
+    from . import compare as compare_mod
+    from .report import aggregate
+    before = aggregate(_windowed_runs(report, _WINDOWS[0::2]))
+    alike = aggregate(_windowed_runs(report, _WINDOWS[1::2], at=4))
+    slower = aggregate(_windowed_runs(report, _WINDOWS[1::2], plus=300.0, at=4))
+    same = compare_mod.build(before, alike, before_path="a.json", after_path="b.json")
+    w = same["window"]
+    assert w["shift"] is not None and w["holds"] is False, w
+    assert w["shift"]["low_ms"] < 0 < w["shift"]["high_ms"], w["shift"]
+    assert same["startup"]["holds"] is False, same["startup"]
+    moved = compare_mod.build(before, slower, before_path="a.json", after_path="b.json")
+    w = moved["window"]
+    assert w["holds"] is True and w["shift"]["low_ms"] > 200.0, w
+    assert moved["startup"]["holds"] is True, moved["startup"]
+    by = {r["reason"]: r for r in moved["startup"]["reasons"]}
+    assert by["bind_application"]["holds"] is True and by["io"]["change"] == "steady", by
+    page = compare_mod.to_markdown(moved)
+    assert ("Scenario window: **1012.0 → 1313.5 ms**  (+301.5, ×1.3) · holds: yes, "
+            "+225.0 … +374.0") in page, page
+    assert "Startup (platform): **1072.0 → 1373.5 ms**" in page, page
 
 
 @check("merging repeats: a single trace stays itself")
@@ -6836,7 +6909,7 @@ _binary: str | None = None
 def _analyze(trace, cfg: Config, **kwargs) -> dict:
     """`analyze_trace` on the binary this run is checking. Every trace a check
     opens goes through here."""
-    from .main import analyze_trace  # late import: main imports us
+    from .analyze import analyze_trace
     return analyze_trace(trace, cfg, _binary, **kwargs)
 
 
@@ -6846,7 +6919,7 @@ def build_report(tp_binary: str | None = None, sampling: str | None = None) -> d
     `sampling` is `fixture.build`'s: the same trace with a callstack sampler
     behind it, for the checks that are about one.
     """
-    from .main import analyze_trace  # late import: main imports us
+    from .analyze import analyze_trace
 
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
@@ -6877,7 +6950,7 @@ def pool_report() -> dict:
 
 @functools.lru_cache(maxsize=2)
 def _pooled(binary: str | None) -> dict:
-    from .main import analyze_trace  # late import: main imports us
+    from .analyze import analyze_trace
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "pool.perfetto-trace"
         trace.write_bytes(fixture.pool())

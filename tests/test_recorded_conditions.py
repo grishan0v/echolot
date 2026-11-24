@@ -32,7 +32,8 @@ from echolot import __version__, fixture, runner, selftest  # noqa: E402
 from echolot import recording as recording_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import DETECTOR_DIR, _report_text  # noqa: E402
+from echolot.analyze import DETECTOR_DIR  # noqa: E402
+from echolot.main import _report_text  # noqa: E402
 from echolot.tp import load_detectors  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_collect_fake_adb import PACKAGE, FakeAdb, kind  # noqa: E402

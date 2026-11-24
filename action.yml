@@ -126,6 +126,14 @@ outputs:
       How far the scenario's window moved, after minus before, in ms: the
       difference of the two medians. Empty without a comparison or a window.
     value: ${{ steps.compare.outputs.window-delta-ms }}
+  window-holds:
+    description: >-
+      `true` when that move holds as a row's does, its interval past what the
+      Holds column asks of a row; `false` when it does not. Empty without a
+      comparison, with too few runs a side, or when either report keeps no
+      per-run windows (an `analyze` older than the one that wrote
+      `window.values`).
+    value: ${{ steps.compare.outputs.window-holds }}
   comparable:
     description: >-
       `false` when the two reports are not of one thing: two processes, two

@@ -443,7 +443,7 @@ def report(changed: bool = False, tp_binary: str | None = None) -> dict:
     from . import place
     from . import report as report_mod
     from .config import Config
-    from .main import analyze_trace
+    from .analyze import analyze_trace
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

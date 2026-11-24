@@ -25,10 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.support import check  # noqa: E402
 
 from echolot import fixture, selftest  # noqa: E402
-from echolot import main as main_mod  # noqa: E402
+from echolot import analyze as analyze_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import DETECTOR_DIR, _in_rows  # noqa: E402
+from echolot.analyze import DETECTOR_DIR, _in_rows  # noqa: E402
 from echolot.report import metric_of  # noqa: E402
 from echolot.tp import _LIMIT_TAIL, Detector, load_detectors  # noqa: E402
 
@@ -159,17 +159,17 @@ def _analysed(monkeypatch, tmp_path: Path,
               overrides: dict | None = None) -> tuple[dict, dict]:
     """The fixture analysed, with each detector's stretches kept aside."""
     seen: dict[str, list[tuple[int, int]]] = {}
-    real = main_mod._spans_behind
+    real = analyze_mod._spans_behind
 
     def keep(tp, d, params, rows):
         out = real(tp, d, params, rows)
         seen[d.id] = out or []
         return out
 
-    monkeypatch.setattr(main_mod, "_spans_behind", keep)
+    monkeypatch.setattr(analyze_mod, "_spans_behind", keep)
     trace = tmp_path / "f.perfetto-trace"
     trace.write_bytes(fixture.build())
-    report = main_mod.analyze_trace(trace, Config(selftest.FIXTURE_CONFIG),
+    report = analyze_mod.analyze_trace(trace, Config(selftest.FIXTURE_CONFIG),
                                     cli_overrides=overrides)
     return report, seen
 
@@ -224,7 +224,7 @@ def test_anr_risk_stretches_are_its_rows(monkeypatch, tmp_path) -> None:
 def test_a_detector_that_cannot_say_is_named(monkeypatch, capsys,
                                             tmp_path) -> None:
     """Not counted is said, rather than counted as nothing."""
-    real = main_mod._spans_behind
+    real = analyze_mod._spans_behind
 
     def partly(tp, d, params, rows):
         if d.id == "io_wait":
@@ -233,10 +233,10 @@ def test_a_detector_that_cannot_say_is_named(monkeypatch, capsys,
             raise RuntimeError("no such column: nope")
         return real(tp, d, params, rows)
 
-    monkeypatch.setattr(main_mod, "_spans_behind", partly)
+    monkeypatch.setattr(analyze_mod, "_spans_behind", partly)
     trace = tmp_path / "f.perfetto-trace"
     trace.write_bytes(fixture.build())
-    report = main_mod.analyze_trace(trace, Config(selftest.FIXTURE_CONFIG))
+    report = analyze_mod.analyze_trace(trace, Config(selftest.FIXTURE_CONFIG))
     budget = report["window"]["main_thread"]
     check("both are named", budget["in_rows_uncounted"] == ["binder_txn", "io_wait"],
           str(budget))
