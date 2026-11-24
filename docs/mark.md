@@ -47,6 +47,12 @@ the Google samples — the self-check builds one tree with sensible names and
 the same tree with nonsense names and requires the same proposals, source
 for source.
 
+It reads the sources under each module's `src/` and leaves the test source
+sets out: `test`, `androidTest` and their per-variant forms (`testDebug`),
+`testFixtures`, and Kotlin Multiplatform's `commonTest` and the like. Code
+there does not run in the app being measured, so a `Room.databaseBuilder`
+in a test is not where the app opens its database.
+
 ## What it says when it cannot see
 
 - no `AndroidManifest.xml` with a launcher under `src/main` — "no launcher

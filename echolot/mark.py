@@ -66,7 +66,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .config import DEFAULT_PREFIX, ConfigError
-from .domains import files_ending, files_named, gradle_module
+from .domains import files_ending, files_named, gradle_module, in_test_set
 from .domains import source_files as domains_source_files
 
 TAG = "// echolot:mark"
@@ -423,12 +423,17 @@ def _rel(path: Path, root: Path) -> str:
 # --- discovery -----------------------------------------------------------------
 
 def source_files(root: Path) -> list[Path]:
-    """This module's half of the walk: only what sits under a `src/`.
+    """This module's half of the walk: what sits under a `src/`, tests left out.
 
     The walk itself is `domains.source_files`, which prunes as it goes
-    instead of reading the whole tree and discarding afterwards.
+    instead of reading the whole tree and discarding afterwards. A test
+    source set does not run in the app being measured: an `androidTest`
+    file that builds the Room database was proposed as where it opens, and
+    then listed outside `instrumentation.allowed` (#814). What looks for
+    markers already planted walks the whole tree, tests included.
     """
-    return domains_source_files(root, under_src=True)
+    return [p for p in domains_source_files(root, under_src=True)
+            if not in_test_set(p, root)]
 
 
 def manifests(root: Path) -> list[Path]:

@@ -204,17 +204,35 @@ _TRACING_CALLEE = re.compile(
 _NOT_A_NAME = re.compile(
     r'metric|attribute|counter|(?:^|\.)(?:put|set|get)\w*$', re.IGNORECASE)
 
-# Where a call cannot be the app's: tests read markers or fake them, and a
-# map that points a finding at `src/test` sends the reader to a file the
-# device never ran. The lines are still counted as source — they are — and
-# the calls in them are not sites.
-_TEST_SETS = {"test", "androidTest", "testFixtures"}
+def in_test_set(path: Path, root: Path) -> bool:
+    """Whether the file sits in a test source set: code the app never runs.
 
+    Tests read markers or fake them, and a map that points a finding at
+    `src/test` sends the reader to a file the device never ran; `mark`
+    proposed `Room.databaseBuilder` from an `androidTest` file and then told
+    the agent to mark a line it may not touch (#814).
 
-def _test_source(path: Path) -> bool:
-    parts = path.parts
-    return any(parts[i] == "src" and parts[i + 1] in _TEST_SETS
+    A test set is `test` and `androidTest` with their per-variant forms
+    (`testDebug`, `androidTestFreeRelease`), `testFixtures`, and Kotlin
+    Multiplatform's `commonTest`, `androidUnitTest`, `androidInstrumentedTest`.
+    AGP refuses a flavor or build type whose name starts with `test` or
+    `androidTest`, so no app source set is taken by the prefix. Only
+    `{"test", "androidTest", "testFixtures"}` were known, and `testDebug`
+    was read as the app's.
+
+    Relative to the root: a checkout inside a directory named `src/test`
+    made every file of it a test.
+    """
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        parts = path.parts
+    return any(parts[i] == "src" and _test_set(parts[i + 1])
                for i in range(len(parts) - 1))
+
+
+def _test_set(name: str) -> bool:
+    return name.startswith(("test", "androidTest")) or name.endswith("Test")
 
 
 # A call that closes a section names the one a begin already named:
@@ -378,7 +396,9 @@ def scan(root: Path) -> tuple[list[Site], dict[str, ModuleStat]]:
         stat.files += 1
         stat.lines += len(lines)
 
-        if _test_source(path):
+        # A test's lines are source and counted; the calls in them are not
+        # sites.
+        if in_test_set(path, root):
             continue
         bare_ok = bool(_BARE_IMPORT.search(text))
         kotlin = _kotlin(path)
