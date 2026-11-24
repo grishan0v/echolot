@@ -203,6 +203,49 @@ def _(report):
         f"AppStart opens at 100 and Screen.loaded closes at 1000: {w}")
 
 
+@check("an end anchor the trace lacks is said with the names it holds that read like it")
+def _(report):
+    """The warning sent the reader to `probe`, while the trace held the same
+    moment under the name the code writes today (#500): `list_shown` for a
+    `list_shown_mark` that no build wrote any more."""
+    from .config import Config
+    from .report import _window_warning_lines
+    cfg = {**FIXTURE_CONFIG,
+           "scenario": {**FIXTURE_CONFIG["scenario"], "end": {"name": "Screen.firstFrameMark"}}}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "renamed.perfetto-trace"
+        path.write_bytes(fixture.build())
+        w = _analyze(path, Config(cfg))["window"]
+    assert w["end_anchor"] == {"glob": "Screen.firstFrameMark", "matches": 0,
+                               "near": ["Screen.firstFrame"]}, w["end_anchor"]
+    said = " ".join(_window_warning_lines(w))
+    assert "The trace holds `Screen.firstFrame`, which reads like it." in said, said
+
+
+@check("an anchor no code writes is said before recording, and the platform's is not")
+def _(report):
+    """Read from the sources, before a phone is asked anything (#500). A
+    renamed marker names the one the code has; `bindApplication` is in no file
+    of a project and is the platform's; a name a string of the code puts
+    together at run time is the code's."""
+    from . import anchors
+    from .config import Config
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "app/src/main/java/Marks.kt"
+        src.parent.mkdir(parents=True)
+        src.write_text('object Marks { const val SHOWN = "list_shown"\n'
+                       '  val ready = "screen_${kind}_ready" }\n', encoding="utf-8")
+        raw = {"project": {"package": "com.example.app", "root": tmp},
+               "scenarios": {
+                   "renamed": {"start": "bindApplication", "end": "list_shown_mark"},
+                   "built": {"start": "activityStart", "end": "screen_home_ready"},
+               }}
+        notes = anchors.check(Config(raw, root / "echolot.yml"))
+    assert [(n.scenario, n.key, n.kind, n.near) for n in notes] == [
+        ("renamed", "end", "near", (("list_shown", "app/src/main/java/Marks.kt:1"),))], notes
+
+
 @check("async sections stay out of every detector")
 def _(report):
     # They have no thread to be counted under. A detector that shows one has

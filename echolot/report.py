@@ -2321,6 +2321,15 @@ def _drift_lines(report: dict[str, Any]) -> list[str]:
     return drift.lines(report.get("drift"))
 
 
+def _near_said(anchor: dict[str, Any]) -> str:
+    """The names the trace holds that read like an anchor it does not (#500)."""
+    near = [n for n in anchor.get("near") or [] if isinstance(n, str)]
+    if not near:
+        return ""
+    return ("The trace holds " + ", ".join(f"`{n}`" for n in near)
+            + ", which " + ("reads" if len(near) == 1 else "read") + " like it. ")
+
+
 def _window_warning_lines(w: dict[str, Any]) -> list[str]:
     """What makes the numbers below not about the scenario: an anchor that
     missed or never closed, a scenario with none, repeats of different
@@ -2356,7 +2365,7 @@ def _window_warning_lines(w: dict[str, Any]) -> list[str]:
         elif anchor and anchor.get("matches") == 0:
             out.append(
                 f"> ⚠️ {label} anchor `{anchor['glob']}` was not found in the "
-                f"trace — {FALLBACK[key]}. Check against "
+                f"trace — {FALLBACK[key]}. {_near_said(anchor)}Check against "
                 f"`probe`; the numbers below are not about your scenario."
             )
         elif anchor and anchor.get("unfinished"):

@@ -1989,6 +1989,20 @@ def _claim_names(tp, overrides: dict) -> None:
     )
 
 
+def _near_anchor(tp, glob: str) -> list[str]:
+    """The slices of the process an anchor that matched nothing may have meant.
+
+    From the set an anchor is matched against, threads' and async sections
+    alike, with each number that differs between recordings written as `*`,
+    as `probe` shows a name to write as an anchor.
+    """
+    from . import anchors
+    rows = tp.query("SELECT DISTINCT name FROM _anchor WHERE name IS NOT NULL")
+    folded = {report_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
+                                    str(r["name"])) for r in rows}
+    return anchors.nearest(glob, folded)
+
+
 def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None) -> dict:
     """Window bounds plus proof that the anchors matched anything at all.
 
@@ -2049,6 +2063,13 @@ def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None)
         window[f"{key}_anchor"] = {"glob": glob, "matches": matches}
         if n - matches:
             window[f"{key}_anchor"]["before_start"] = n - matches
+        elif not n:
+            # The names the trace does hold that read like it, so that the
+            # warning names `list_shown` for a `list_shown_mark` the code no
+            # longer writes, rather than sending the reader to `probe` (#500).
+            near = _near_anchor(tp, glob)
+            if near:
+                window[f"{key}_anchor"]["near"] = near
         # The end anchor the window closed on, still open when the recording
         # stopped: the window ran on to the end of the trace, and the
         # scenario never reached its end inside it.
@@ -3989,6 +4010,7 @@ def cmd_status(args) -> int:
             bits.append("local.yml applied")
         # The file given: `-c perf.yml` read as a project's echolot.yml (#719).
         lines.append(("config", f"{Path(cfg['path']).name} · " + " · ".join(bits)))
+        lines += [("anchor", f"! {said}") for said in _anchor_lines(loaded, st)]
     recap = state.next_kind(st) == "resume-or-new"
     lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"), st)))
     collecting = state.collect_line(st)
@@ -4068,6 +4090,44 @@ def cmd_status(args) -> int:
         for line in hunt_mod.recap(st.get("hunt"), st, root=project, quoted=False):
             print(line)
     return 0
+
+
+def _anchor_lines(cfg: Config | None, st: dict) -> list[str]:
+    """What `status` says of the scenarios' anchors the code may not write (#500).
+
+    Read here and not in `project_state`: it reads the sources, and
+    `status --next`, `init` and the start page decide nothing on it. A
+    scenario's last report vouches for an anchor its recordings held.
+    """
+    from . import anchors
+    if cfg is None:
+        return []
+    if st.get("scenarios"):
+        found = {sc["name"]: set((sc.get("report") or {}).get("anchors") or ())
+                 for sc in st["scenarios"]}
+    else:
+        found = {cfg.scenario_name: set((st.get("report") or {}).get("anchors") or ())}
+    notes = anchors.check(cfg, found) or []
+    many = len(cfg.scenarios) > 1
+    out = []
+    for note in notes:
+        said = note.text(named=many)
+        if note.sure and note.kind != "unpicked":
+            # `?` is `next`'s to settle: the step there is to pick it.
+            file = Path(cfg.path).name if cfg.path else "echolot.yml"
+            said += (f" — if that is the one, put it in {file}" if note.near else
+                     f" — put a name the code writes in {file}")
+        elif not note.sure:
+            try:
+                one = Config(cfg.raw, cfg.path, cfg.local_path).select(note.scenario)
+                mode = str(one.runner.get("mode", "launch")) if one.runner else None
+            except ConfigError:
+                mode = None
+            line = state.collect_line_for(note.scenario if many else None, mode,
+                                          shown=st.get("shown"), n=1)
+            said += f" `{line}`, then `echolot probe` on its trace, says which"
+        out.append(said)
+    return out
 
 
 def cmd_guide(args) -> int:
@@ -4218,10 +4278,47 @@ def cmd_domains(args) -> int:
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
 
+    cfg = None
+    if args.config:
+        try:
+            cfg = Config.load(args.config)
+        except ConfigError as e:
+            print(f"config error: {e}", file=sys.stderr)
+            return 2
     sites, stats = domains_mod.scan(root)
     for line in domains_mod.render(sites, stats, root, limit=args.top):
         print(line)
+    if cfg is not None:
+        for line in _domains_unwritten(cfg, root):
+            print(line)
     return 0
+
+
+def _domains_unwritten(cfg: Config, root: Path) -> list[str]:
+    """The config's own `domains:` entries no string of the code holds (#500).
+
+    A marker taken out of the code stays in the map, and `analyze` lists it
+    as absent from every window after it: said here, where the map is made.
+    """
+    from . import anchors
+    from .mark import DEFAULT_PREFIX
+    entries = [str(e["slice"]) for e in cfg.get("domains") or []
+               if isinstance(e, dict) and e.get("slice")]
+    prefix = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    missing = anchors.unwritten(root, entries, prefix)
+    if not missing:
+        return []
+    out = ["#", f"# In {Path(cfg.path).name if cfg.path else 'the config'}'s domains: and in no "
+                f"Kotlin or Java string here — a library's, or a marker the code no longer writes:"]
+    for glob, note in missing.items():
+        line = f"#   {glob}"
+        if note.near:
+            line += " — the code has " + ", ".join(
+                f"{name}" + (f" ({where})" if where else "") for name, where in note.near)
+        elif note.kind == "temporary":
+            line += " — a temporary marker"
+        out.append(line)
+    return out
 
 
 def cmd_mark(args) -> int:
@@ -4564,6 +4661,8 @@ def cmd_collect(args) -> int:
     planted = _planted(cfg, project) if mode in ("launch", "command") else None
 
     _note_local(cfg)
+    for said in _anchors_before(cfg, project):
+        print(f"[!] {said}", file=sys.stderr)
     if mode == "gradle" and (args.iterations is not None or "iterations" in section):
         # The count lives in the benchmark's own measureRepeated, and every
         # trace it writes is gathered. Said, because `-n 1` is the advice for
@@ -4737,10 +4836,13 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
         return (f"{window.get('process') or 'the app'} drew no frame in the scenario's "
                 f"window", None)
     if end and end.get("matches") == 0 and not end.get("before_start"):
+        near = end.get("near") or []
+        held = (f"; the trace holds {', '.join(f'`{n}`' for n in near)}, which "
+                f"{'reads' if len(near) == 1 else 'read'} like it" if near else "")
         return None, (f"the end anchor `{end['glob']}` did not occur in repeat 1: the "
                       f"scenario may not have reached its end, or the name in the "
                       f"config is not the one the app writes (`echolot probe` on this "
-                      f"trace says which)")
+                      f"trace says which){held}")
     return None, None
 
 
@@ -4761,6 +4863,32 @@ def _interrupted_line(state: dict, out_dir: Path, project: Path, aside: list[Pat
     before = (f"; the set that was there before is in {_shown_path(aside[0], project)}"
               if aside else "")
     return f"collect interrupted before the first of {total} repeats was recorded: no trace was kept{before}"
+
+
+def _anchors_before(cfg: Config, project: Path) -> list[str]:
+    """What `collect` says of the scenario's anchors before the first repeat (#500).
+
+    The same findings `status` makes, for the scenario being recorded. Said
+    and not stopped on: the round is the scenario's whatever its anchors are
+    called, `analyze` cuts the window when it reads the traces, and with `?`
+    a recording is how the end gets picked.
+    """
+    from . import anchors
+    notes = anchors.check(cfg, {cfg.scenario_name: state.anchors_held(project, cfg)},
+                          scenarios=[cfg.scenario_name]) or []
+    out = []
+    for note in notes:
+        said = note.text()
+        if note.kind == "unpicked":
+            said += (" — `echolot probe` on the first trace lists the slices to pick "
+                     "it from, and `analyze` cuts the window once it is in echolot.yml")
+        elif note.sure:
+            said += (" — the traces are the scenario's whatever it is called: put "
+                     "the name right in echolot.yml before `analyze`")
+        else:
+            said += " `echolot probe` on the first trace says which"
+        out.append(said)
+    return out
 
 
 def _planted(cfg: Config, root: Path):
@@ -6466,13 +6594,17 @@ def build_parser() -> argparse.ArgumentParser:
                       help="the same findings in the shape an agent walks")
     an_r.set_defaults(func=cmd_anr)
 
-    dom = add("domains", "agent", "[--root <repo>]", "slice-to-code map and instrumentation coverage",
+    dom = add("domains", "agent", "[--root <repo>] [-c <config>]",
+              "slice-to-code map and instrumentation coverage",
               description="Reads the repository's Kotlin and Java sources for the names "
                           "its trace sections are given, and prints which code each "
                           "name comes from and which modules have no sections at all. "
-                          "Reads no trace and no config; writes only its own line in "
-                          ".echolot/log/runs.jsonl.")
+                          "With -c, it also lists the config's own `domains:` entries "
+                          "that no string of the code holds. Reads no trace; writes "
+                          "only its own line in .echolot/log/runs.jsonl.")
     dom.add_argument("--root", default=".", help="repository root (default: the current directory)")
+    dom.add_argument("-c", "--config", default=None,
+                     help="an echolot.yml whose `domains:` to hold against the code")
     dom.add_argument("--top", type=int, default=12,
                      help="how many modules to list when there is none")
     dom.set_defaults(func=cmd_domains)
