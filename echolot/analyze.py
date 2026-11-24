@@ -1523,24 +1523,42 @@ def _drawn_info(tp, window: dict) -> dict | None:
     markers that were missing (#536). Read from atrace rather than from the
     frame timeline, which `collect` does not record. None when no process in
     the trace drew anything, which says the categories were not recorded.
+
+    None too for a window that closed before the app's first frame, in a
+    trace the process was born in (its `bindApplication` is there): nothing
+    was drawn yet, so none drawn says nothing of where the scenario got.
+    `bindApplication` to `activityStart`, the app's start up to its first
+    Activity, is such a window, and every repeat of it was said to have
+    drawn nothing, with `collect` stopping its round at the first (#849). A
+    process that was there before the trace began may have drawn before it,
+    and its window is counted as before.
     """
     lo, hi = window.get("ts_start"), window.get("ts_end")
     if lo is None or hi is None:
         return None
-    try:
-        rows = tp.query(f"""
-            SELECT (SELECT COUNT(*) FROM slice s WHERE {_DRAWN}) AS seen,
-                   (SELECT COUNT(*) FROM slice s
+    own = f"""FROM slice s
                     JOIN thread_track tt ON tt.id = s.track_id
                     JOIN thread t USING (utid)
                     JOIN _proc p ON p.upid = t.upid
-                    WHERE {_DRAWN} AND s.ts < {int(hi)} AND s.ts + s.dur > {int(lo)}) AS n
+                    WHERE {_DRAWN}"""
+    try:
+        rows = tp.query(f"""
+            SELECT (SELECT COUNT(*) FROM slice s WHERE {_DRAWN}) AS seen,
+                   (SELECT COUNT(*) {own}
+                      AND s.ts < {int(hi)} AND s.ts + s.dur > {int(lo)}) AS n,
+                   (SELECT MIN(s.ts) {own}) AS first,
+                   (SELECT MIN(ts) FROM _slice
+                    WHERE is_main_thread = 1 AND name = 'bindApplication') AS born
         """)
     except Exception:  # a trace without thread tracks
         return None
     if not rows or not rows[0]["seen"]:
         return None
-    return {"count": rows[0]["n"]}
+    row = rows[0]
+    first, born = row.get("first"), row.get("born")
+    if not row["n"] and born is not None and first is not None and first >= hi:
+        return None
+    return {"count": row["n"]}
 
 
 # The receivers the system runs in an app when it takes the app out of the

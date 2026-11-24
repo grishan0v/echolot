@@ -186,7 +186,8 @@ limit for a shorter stretch.
 The trace has to hold the launch, which it does when the app is started
 inside the recording: `launch` mode does that, and so does a startup
 macrobenchmark. `analyze` refuses a trace with no launch of the process, and
-names it. When the process was brought to the front more than once in one
+names it; when a permission dialog took the launch, it says so and names the
+`pm grant` command. When the process was brought to the front more than once in one
 trace, the window is its first launch.
 
 Two launch windows that closed differently are two measurements, and so are a

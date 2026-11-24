@@ -1418,6 +1418,7 @@ def collect(package: str, out_dir: Path, iterations: int,
     import time
 
     from . import composenames, power, screen, stabilize
+    from . import launch as launch_mod
 
     section = section or {}
     mode = str(MODE.read(section))
@@ -1635,6 +1636,9 @@ def collect(package: str, out_dir: Path, iterations: int,
     # The activity started, and the one the repeat before ended on (#909).
     asked = component(activity) if mode == "launch" else None
     ended_before: str | None = None
+    # The runtime permissions the app holds ungranted, once a permission
+    # dialog took a launch (#810); None until then.
+    withheld: list[str] | None = None
     # Composable names go on after the device is held still and off before
     # it is put back, so that the app is the last thing touched and the
     # first thing restored.
@@ -1777,8 +1781,18 @@ def collect(package: str, out_dir: Path, iterations: int,
             # there too: a splash that hands over to the app's main activity
             # does that in every repeat, and one line says it.
             ended = info.get("activity")
+            # The system's permission dialog is no activity the app went on
+            # to: it came up over the app before its first frame and took the
+            # launch (#810). What the app holds ungranted is read the first
+            # time, for the command that grants it, and kept with every
+            # repeat the dialog took.
+            if mode == "launch" and launch_mod.permission_dialog(ended):
+                if withheld is None:
+                    withheld = ungranted(dev, package)
+                info["ungranted"] = withheld
             if ended and asked and ended != asked and ended != ended_before:
-                notes.append(_elsewhere_line(ended, asked))
+                notes.append(_dialog_line(ended, package, withheld)
+                             if "ungranted" in info else _elsewhere_line(ended, asked))
             if mode == "launch" and not restarted:
                 ended_before = ended
             # The set's first trace, read before it takes its name: pulled
@@ -1821,6 +1835,9 @@ def collect(package: str, out_dir: Path, iterations: int,
                     # (#909).
                     "activity": info.get("activity"),
                     "asked": asked,
+                    # The runtime permissions the app held ungranted, read
+                    # when the launch ended on the permission dialog (#810).
+                    **({"ungranted": info["ungranted"]} if "ungranted" in info else {}),
                     "notes": notes,
                     # With nothing stopping the app, `am start -W` measured
                     # no start, and the trace holds no launch (#593): the
@@ -1993,6 +2010,59 @@ def _elsewhere_line(ended: str, asked: str) -> str:
             f"activity by itself")
 
 
+def _dialog_line(ended: str, package: str, withheld: list[str] | None,
+                 every: str = "the launch") -> str:
+    """What is said of launches the system's permission dialog took (#810):
+    under the first repeat it took, and at the end of the set."""
+    from . import launch as launch_mod
+    dialog = ended.split("/", 1)[0]
+    cls = (activity_class(ended) or "").rsplit(".", 1)[-1]
+    each = "it" if every == "the launch" else "each"
+    return (f"[!] a permission dialog took {every}: {each} ended on {dialog}'s {cls}, "
+            f"which came up over {package} before its first frame. Every launch "
+            f"ends there until the permission is granted, and `window: launch` "
+            f"finds no launch of the app in such a trace: "
+            f"{launch_mod.grant_said(package, withheld)}")
+
+
+# `dumpsys package <pkg>`: each user's runtime permissions under a header of
+# their own, one a line, `name: granted=false, flags=[ … ]`.
+_RUNTIME = "runtime permissions:"
+_WITHHELD = re.compile(r"^\s*([\w.]+): granted=false\b")
+
+
+def ungranted(device: str, package: str) -> list[str]:
+    """The runtime permissions `package` holds without a grant, as
+    `dumpsys package` lists them; empty when the device does not say.
+
+    Read when a launch ended on the permission dialog (#810): the dialog
+    asks for one of these, and `pm grant` of it before recording is what
+    gives the app its own launch back.
+    """
+    try:
+        out = _run(["adb", "-s", device, "shell", "dumpsys", "package", package],
+                   timeout=30)
+    except Exception:  # a sentence's worth of help is not worth the repeat
+        return []
+    return parse_ungranted(out)
+
+
+def parse_ungranted(out: str) -> list[str]:
+    """The names under `runtime permissions:` with `granted=false`, once
+    each, in the order listed."""
+    names: list[str] = []
+    inside = False
+    for line in out.splitlines():
+        text = line.strip()
+        if text.endswith(":"):  # the next section's header
+            inside = text == _RUNTIME
+            continue
+        m = _WITHHELD.match(line)
+        if inside and m and m.group(1) not in names:
+            names.append(m.group(1))
+    return names
+
+
 def activities_said(results: list[dict]) -> str | None:
     """What `collect` says at the end of a launch set whose repeats did not all
     end on the activity started (#909), or None.
@@ -2008,6 +2078,8 @@ def activities_said(results: list[dict]) -> str | None:
     activity fewer repeats ended on.
     """
     from collections import Counter
+
+    from . import launch as launch_mod
     ended = [(r.get("repeat"), r.get("activity")) for r in results if r.get("activity")]
     if not ended:
         return None
@@ -2018,6 +2090,11 @@ def activities_said(results: list[dict]) -> str | None:
         if not asked or only == asked:
             return None
         every = "the launch" if n == 1 else f"every launch of the {n}"
+        if launch_mod.permission_dialog(only):
+            # The dialog's line, whose `[!]` the caller puts in front itself.
+            withheld = next((r["ungranted"] for r in results if r.get("ungranted")), None)
+            return _dialog_line(only, asked.split("/", 1)[0], withheld,
+                                every=every).removeprefix("[!] ")
         return (f"{every} ended on {activity_class(only)}, not on the "
                 f"{activity_class(asked)} it started: the app went on to it by "
                 f"itself, and the window runs until it drew. A splash that hands "
@@ -2037,10 +2114,16 @@ def activities_said(results: list[dict]) -> str | None:
             "names the others" if led else
             "as many ended on each, so analyze reads them all and says the medians "
             "mix two journeys")
+    dialog = next((name for name in counts if launch_mod.permission_dialog(name)), None)
+    # A dialog answered in the middle of the set is the usual way to get here.
+    why = (f"{activity_class(dialog)} is the system's permission dialog, which came "
+           f"up over the app before its first frame and took those launches until "
+           f"the permission was granted" if dialog else
+           "the app went on to another screen by itself (a page read last, a login, "
+           "an onboarding)")
     return (f"the launches did not end on one activity: {'; '.join(parts)}, "
             f"{activity_class(most)} in the other {n_most}. A launch that ended on "
-            f"another activity measured another journey: the app went on to another "
-            f"screen by itself (a page read last, a login, an onboarding). {then}")
+            f"another activity measured another journey: {why}. {then}")
 
 
 def _aside_path(out: Path, state: str) -> Path:

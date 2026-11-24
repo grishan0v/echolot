@@ -383,7 +383,9 @@ to the end of the recording by their share, since its length cannot move.
 their `DrawFrame` and `Choreographer#doFrame` slices (`count`; merged, the
 median, with `none`, the repeats that drew nothing, out of `runs`). `null`
 when nothing in the trace drew a frame, which says the categories were not
-recorded. A repeat that drew none never reached its screen: the markdown says
+recorded, and when the window closed before the app's first frame in a trace
+the process was born in (`bindApplication` to `activityStart`): nothing was
+drawn yet, so the count says nothing. A repeat that drew none never reached its screen: the markdown says
 so first, and nothing else in that report is about the scenario. Look at the
 phone, not at the code. `collect` reads the same on its first repeat and stops
 the round there.

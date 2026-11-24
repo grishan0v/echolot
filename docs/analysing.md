@@ -1042,7 +1042,13 @@ two lower under the other for the same milliseconds.
 
 `analyze` refuses a trace that holds no launch of the process: the app has to
 be started inside the recording, as `launch` mode and a startup
-macrobenchmark do. The detectors read this window as they read any other.
+macrobenchmark do. A trace `collect` recorded in `launch` mode is not sent to
+that mode again: when the trace's launch is the permission controller's, the
+refusal says a permission dialog took it and names the command that grants
+the permission (see
+[A permission dialog over the launch](collecting.md#a-permission-dialog-over-the-launch)),
+and otherwise it says `collect` started the app and the platform recorded no
+launch of it. The detectors read this window as they read any other.
 Reports of two launch windows that closed differently are not compared; see
 [compare](compare.md#two-windows).
 
