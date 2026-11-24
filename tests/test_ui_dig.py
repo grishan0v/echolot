@@ -694,6 +694,27 @@ def test_a_press_against_a_report_that_changed(project):
 
 # --- what the server refuses --------------------------------------------------------------------------
 
+def test_a_reload_of_the_screen_before_it_starts_goes_back_to_the_report(project):
+    """The screen before an agent starts is drawn from a press: the checks
+    ticked on the report. Its address read again, by a reload or from the
+    history, carries none of them, and answered with a bare 405 it left the
+    person nowhere (#811). It sends the browser to the report instead, where
+    Dig deeper is pressed again, and starts nothing."""
+    site, _, echolot = serving(project)
+    consent = page(press(site, "dig/ask", ticked("main_thread_waits")))
+    check("the screen, drawn from the press", consent.all("button", id="dig-start"))
+    for path, home in (("dig/ask", "report"), ("dig/with/codex/ask", "report"), ("dig/ask/coldStart", "report/coldStart"),
+                       ("dig/with/codex/ask/coldStart", "report/coldStart"), ("dig/start", "report"),
+                       ("dig/start/coldStart", "report/coldStart"), ("dig/with/codex/start", "report")):
+        for method in ("GET", "HEAD"):
+            reply = get(site, path, method=method)
+            check(f"{method} {path}: sent to the report it came from", reply.status == 303
+                  and dict(reply.headers)["Location"] == f"/{site.token}/{home}", (reply.status, reply.headers))
+    report = page(get(site, "report"))
+    check("where Dig deeper is pressed again", report.all("form", id="ask-start-form"))
+    check("nothing ran, and no agent was started", not echolot.ran and job.read(project.root, dig.JOB) is None)
+
+
 @pytest.mark.parametrize("path", ["dig/ask", "dig/start", "dig/stop", "dig/unmark", "dig/close"])
 def test_the_new_requests_pass_the_checks_that_are_there(project, path):
     a_dig(project, end="stopped")
@@ -712,7 +733,12 @@ def test_the_new_requests_pass_the_checks_that_are_there(project, path):
     reply = ui.answer(site, "POST", f"/{site.token}/{path}", {"Host": site.host, "Origin": site.origin,
                                                                 "Content-Type": ui.FORM}, None)
     check(f"{path}: a body over the cap is not read", reply.status == 413)
-    check(f"{path}: a read of it is no request for it", get(site, path).status == 405)
+    reply = get(site, path)
+    # A reload of what a press drew sends the browser where that press is
+    # made, and starts nothing (#811).
+    home = f"/{site.token}/report" if path in ("dig/ask", "dig/start") else f"/{site.token}/hunt/1/answer"
+    check(f"{path}: a read of it is no request for it, and sends the browser where the press is made",
+          reply.status == 303 and dict(reply.headers)["Location"] == home, (reply.status, reply.headers))
     check(f"{path}: nothing ran", not echolot.ran, echolot.ran)
 
 

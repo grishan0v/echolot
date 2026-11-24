@@ -834,7 +834,8 @@ def test_a_body_that_is_no_form(project):
 def test_the_addresses_take_the_request_they_are_for_and_no_other(project):
     site, init = serving(project.app())
     reply = get(site, "setup")
-    check("a read of the address of a press starts nothing", reply.status == 405 and dict(reply.headers)["Allow"] == "POST")
+    check("a read of the address of a press starts nothing, and sends the browser to the start page (#811)",
+          reply.status == 303 and dict(reply.headers)["Location"] == f"/{site.token}/", (reply.status, reply.headers))
     check("how far a setup is can only be read", press(site, "setup/state").status == 405)
     check("nothing written", not init.ran and not (project.root / "echolot.yml").exists())
 

@@ -417,6 +417,33 @@ def test_what_is_not_a_read_needs_the_servers_own_origin_and_the_token(project, 
                 check("and it says what the address does take", got.get("Allow") == "GET", got)
 
 
+def test_a_read_of_a_press_s_address_sends_the_browser_where_the_press_is_made(project):
+    """A page a press drew, a refusal or the screen before an agent starts,
+    stays in the address bar under the press's address. A reload of it, or a
+    step back to it, reads that address. It used to answer a bare 405 with
+    no way back (#811); every such address now sends the browser on to a
+    page the server draws, and starts nothing."""
+    project.ready()
+    site = site_of(project)
+    names = {"scenario": "coldStart", "client": "codex", "n": "1", "k": "1"}
+    def files(root):
+        return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+    before = files(project.root)
+    presses = [r for r in ui.ROUTES if r.method != "GET"]
+    check("there are presses to read", len(presses) > 5, [r.name for r in presses])
+    for route in presses:
+        path = route.path.format(**names)
+        for method in ("GET", "HEAD"):
+            reply = get(site, path, method=method)
+            where = dict(reply.headers).get("Location", "")
+            check(f"{method} {path}: sent on, not refused", reply.status == 303
+                  and where.startswith(f"/{site.token}/") and not reply.body, (reply.status, reply.headers))
+        landed = get(site, where[len(f"/{site.token}/"):].split("#")[0])
+        check(f"{path}: to a page that is drawn, with a way on", landed.status in (200, 404)
+              and "<h1" in landed.body, (where, landed.status, landed.body[:200]))
+    check("nothing was written or started", files(project.root) == before)
+
+
 def test_a_request_that_changes_something_is_one_entry_and_is_guarded(project, monkeypatch):
     """What the next step adds: a route with another method. It is reached
     through the same checks and no other way."""
@@ -438,7 +465,8 @@ def test_a_request_that_changes_something_is_one_entry_and_is_guarded(project, m
                            Sec_Fetch_Site="same-origin")
         check("and runs for the server's own page", status == 200 and done == [{}], (status, done))
         status, got, _ = ask(server, f"/{site.token}/record")
-        check("a read of it is no request for it", status == 405 and got.get("Allow") == "POST" and len(done) == 1)
+        check("a read of it is no request for it: it sends the browser to the start page", status == 303
+              and got.get("Location") == f"/{site.token}/" and len(done) == 1, (status, got))
         check("and a form of a page is sent to it by that name", site.url("record") == f"/{site.token}/record")
 
 

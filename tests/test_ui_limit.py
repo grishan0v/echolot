@@ -530,8 +530,10 @@ def test_the_request_is_refused_as_every_other_press_is(project):
         check("and the server's own page is taken", status == 303 and headers["Location"] == f"/{site.token}/#{limit_page.ID}"
               and Config.load(path).scenario_budget_ms == 2000, (status, headers))
     site = site_of(project)
+    before = files(project.root)
     reply = get(site, "limit")
-    check("a read of its address changes nothing", reply.status == 405 and dict(reply.headers)["Allow"] == "POST")
+    check("a read of its address changes nothing, and sends the browser to the start page", reply.status == 303
+          and dict(reply.headers)["Location"] == f"/{site.token}/" and files(project.root) == before)
 
 
 # --- the report is the old one until the recordings are read again -----------------------------------

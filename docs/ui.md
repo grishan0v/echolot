@@ -587,6 +587,12 @@ the page it opened and by nothing else:
   alone.
 - It serves the pages it draws and no file. No address is turned into a path
   on disk.
+- An address a form is sent to is no page. Read, by a reload of what a press
+  drew or by a step back to it in the history, it starts nothing and sends
+  the browser where that press is made: the screen before an agent starts
+  goes back to its report, where **Dig deeper** is pressed again; **Stop**,
+  **Take the markers out** and **Close the investigation** to the agent's
+  answer; the rest to the start page.
 - A page fetches nothing from anywhere else: no font, no script, no image.
   The browser is told to hold it to that. A page the server serves may do two
   things a report written to disk may not: send a form to the server it came

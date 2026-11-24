@@ -54,6 +54,10 @@ What it will and will not answer:
   fetches anything from elsewhere: a served page may send a form to this
   server and ask it how far a run is (`kit.SERVED`), and the server sends
   that policy as a header too. A page written to disk keeps the strict one.
+- An address a form is sent to is no page. Read, by a reload of what a press
+  drew or from the history, it starts nothing and sends the browser to the
+  page that press is made on: the report for Dig deeper, the investigation's
+  page for what is done to an agent, the start page for the rest.
 """
 
 from __future__ import annotations
@@ -606,6 +610,15 @@ def _dig_back(visit: Visit) -> str | None:
     return visit.site.url("answer-of", n=n) if isinstance(n, int) else visit.site.url("start")
 
 
+def _dig_from(visit: Visit, params: dict[str, str]) -> str | None:
+    """Where Dig deeper is pressed: the report the address is about. The
+    screen before an agent starts is drawn from the checks a press ticked on
+    it, and a read of that screen's address carries none (#811)."""
+    if "scenario" in params:
+        return visit.site.url("report-of", scenario=unquote(params["scenario"]))
+    return visit.site.url("report")
+
+
 def _dig_stop(visit: Visit, params: dict[str, str]) -> Page:
     """Ask the agent to stop. With none running there is nothing to ask;
     either way its investigation's page says where things stand."""
@@ -666,6 +679,13 @@ class Route:
     method: str = "GET"
     step: str | None = None                     # its name in the top bar's path, when it is a step
     there: Callable[[Visit], bool] = _always    # whether it has something to show now
+    # Where a read of a press's address sends the browser: the page the press
+    # is made on. None is the start page.
+    home: Callable[[Visit, dict[str, str]], str | None] | None = None
+
+
+def _agent_home(visit: Visit, params: dict[str, str]) -> str | None:
+    return _dig_back(visit)
 
 
 ROUTES: list[Route] = [
@@ -683,18 +703,18 @@ ROUTES: list[Route] = [
     Route("setup", "setup", _set_up, method="POST"),
     Route("setup-state", "setup/state", _setup_progress),
     Route("limit", "limit", _set_limit, method="POST"),
-    Route("dig-ask", "dig/ask", _dig_ask, method="POST"),
-    Route("dig-ask-of", "dig/ask/{scenario}", _dig_ask, method="POST"),
-    Route("dig", "dig/start", _dig_start, method="POST"),
-    Route("dig-of", "dig/start/{scenario}", _dig_start, method="POST"),
-    Route("dig-stop", "dig/stop", _dig_stop, method="POST"),
-    Route("dig-unmark", "dig/unmark", _dig_unmark, method="POST"),
-    Route("dig-close", "dig/close", _dig_close, method="POST"),
+    Route("dig-ask", "dig/ask", _dig_ask, method="POST", home=_dig_from),
+    Route("dig-ask-of", "dig/ask/{scenario}", _dig_ask, method="POST", home=_dig_from),
+    Route("dig", "dig/start", _dig_start, method="POST", home=_dig_from),
+    Route("dig-of", "dig/start/{scenario}", _dig_start, method="POST", home=_dig_from),
+    Route("dig-stop", "dig/stop", _dig_stop, method="POST", home=_agent_home),
+    Route("dig-unmark", "dig/unmark", _dig_unmark, method="POST", home=_agent_home),
+    Route("dig-close", "dig/close", _dig_close, method="POST", home=_agent_home),
     Route("dig-state", "dig/state", _dig_progress),
-    Route("dig-ask-with", "dig/with/{client}/ask", _dig_ask, method="POST"),
-    Route("dig-ask-with-of", "dig/with/{client}/ask/{scenario}", _dig_ask, method="POST"),
-    Route("dig-with", "dig/with/{client}/start", _dig_start, method="POST"),
-    Route("dig-with-of", "dig/with/{client}/start/{scenario}", _dig_start, method="POST"),
+    Route("dig-ask-with", "dig/with/{client}/ask", _dig_ask, method="POST", home=_dig_from),
+    Route("dig-ask-with-of", "dig/with/{client}/ask/{scenario}", _dig_ask, method="POST", home=_dig_from),
+    Route("dig-with", "dig/with/{client}/start", _dig_start, method="POST", home=_dig_from),
+    Route("dig-with-of", "dig/with/{client}/start/{scenario}", _dig_start, method="POST", home=_dig_from),
 ]
 
 # A part of an address that names something. Numbers are digits; a name is
@@ -721,6 +741,16 @@ def find(method: str, path: str) -> tuple[Route | None, dict[str, str], bool]:
             return route, m.groupdict(), True
         known = True
     return None, {}, known
+
+
+def _home(visit: Visit, path: str) -> str | None:
+    """Where a read of a press's address sends the browser: the page that
+    press is made on, as its route names it, else the start page."""
+    for route in ROUTES:
+        m = _pattern(route.path).fullmatch(path)
+        if m is not None and route.method not in READS and route.home is not None:
+            return route.home(visit, m.groupdict()) or visit.site.url("start")
+    return visit.site.url("start")
 
 
 # ---------------------------------------------------------------------------
@@ -780,6 +810,13 @@ def answer(site: Site, method: str, target: str, headers: Mapping[str, str], bod
         return Reply(400, "echolot ui: refused. That is no form this server reads.\n", "text/plain; charset=utf-8")
     visit = Visit(site, fields)
     if route is None:
+        if known and method in READS:
+            # The address of a press, read: a reload of the page a press drew
+            # (the screen before an agent starts, a refusal), or a step back
+            # to it in the history. It starts nothing, and a bare 405 left the
+            # person with no way on (#811): the browser goes where the press
+            # is made.
+            return Reply(303, "", "text/plain; charset=utf-8", (("Location", _home(visit, rest) or "/"),))
         if known:
             allowed = sorted({r.method for r in ROUTES if _pattern(r.path).fullmatch(rest)})
             return Reply(405, "echolot ui: this address takes no such request.\n", "text/plain; charset=utf-8",

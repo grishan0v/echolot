@@ -1225,7 +1225,8 @@ def test_the_addresses_of_a_press_take_no_read_and_the_others_no_press(project):
     site, echolot = serving(project.ready())
     for path in ("check", "check/stop"):
         reply = get(site, path)
-        check(f"{path}: a read of it starts nothing", reply.status == 405 and dict(reply.headers)["Allow"] == "POST")
+        check(f"{path}: a read of it starts nothing, and sends the browser to the start page", reply.status == 303
+              and dict(reply.headers)["Location"] == f"/{site.token}/", (reply.status, reply.headers))
     check("how far a run is can only be read", press(site, "check/state").status == 405)
     check("nothing started", not echolot.ran and job.read(project.root, "check") is None)
 

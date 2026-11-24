@@ -7406,6 +7406,39 @@ def _(report):
         )
 
 
+# --- echolot ui ------------------------------------------------------------
+
+
+@check("ui: a reload of what a press drew sends the browser where that press is made, "
+       "and starts nothing")
+def _(report):
+    """A page a press drew stays in the address bar under the press's
+    address: the screen before an agent starts, a refusal. A reload, or a
+    step back to it in the history, reads that address, and the server
+    answered a bare 405 with no way back to anything (#811). The screen
+    before an agent starts goes back to the report it came from, where Dig
+    deeper is pressed; what is done to an agent, to its investigation's
+    page; the rest, to the start page. A read starts nothing and writes
+    nothing.
+    """
+    from . import ready, ui
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        site = ui.Site(project=root, config="echolot.yml", token="selftest", port=1,
+                       src=ready.Sources(scan=lambda here: None, pick_device=lambda serial: ""))
+        for path, home in (("dig/ask", "report"), ("dig/ask/coldStart", "report/coldStart"),
+                           ("dig/with/codex/ask", "report"), ("dig/start", "report"), ("dig/stop", ""),
+                           ("check", ""), ("check/stop", ""), ("setup", ""), ("limit", "")):
+            for method in ("GET", "HEAD"):
+                reply = ui.answer(site, method, f"/selftest/{path}", {"Host": site.host})
+                assert reply.status == 303 and dict(reply.headers).get("Location") == f"/selftest/{home}", \
+                    (method, path, reply.status, reply.headers)
+        # A press of a read-only address is still no request for it.
+        reply = ui.answer(site, "POST", "/selftest/report", {"Host": site.host, "Origin": site.origin}, b"")
+        assert reply.status == 405, reply.status
+        assert not any(root.iterdir()), sorted(p.name for p in root.iterdir())
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor
