@@ -49,7 +49,7 @@ from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
 from . import atomic
 from . import compare as compare_mod
 from . import hunt as hunt_mod
-from . import codex, layer, parallel, plugin, recorder, sandbox, state, table, when
+from . import codex, files, layer, parallel, plugin, recorder, sandbox, state, table, when
 from . import launch as launch_mod
 from . import moves as moves_mod
 from . import place as place_mod
@@ -1207,12 +1207,16 @@ def _load_report(path: Path) -> dict:
             f"written by `echolot analyze`.")
     if "detectors" not in data:
         raise ConfigError(f"{path}: not a Marker Report — no `detectors` section")
-    wrong = state.misshapen(data)
-    if wrong:
+    got = files.check_report(data)
+    if isinstance(got, files.Refusal) and got.stale:
         raise ConfigError(
-            f"{path}: does not read as a Marker Report — {wrong}. It was edited by "
+            f"{path}: does not read as a Marker Report — {got.why}: run `echolot analyze` "
+            f"again to write it anew.")
+    if isinstance(got, files.Refusal):
+        raise ConfigError(
+            f"{path}: does not read as a Marker Report — {got.why}. It was edited by "
             f"hand or written by another tool: run `echolot analyze` again to write it anew.")
-    return data
+    return dict(got)
 
 
 def _nearest_config(args) -> None:

@@ -621,11 +621,8 @@ def archived_reports(project: Path, hunt: dict[str, Any] | None) -> verdict_mod.
     for p in sorted((own / "reports").glob("*.json")):
         if not (p.stem.isascii() and p.stem.isdigit()):
             continue
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = None
-        out[int(p.stem)] = data if isinstance(data, dict) else None
+        data = files.read_report(p)
+        out[int(p.stem)] = None if isinstance(data, files.Refusal) else dict(data)
     return out
 
 

@@ -215,20 +215,27 @@ def _damaged(how: str) -> dict:
         data["detectors"][2]["rows"] = ["Sync Worker"]
     elif how == "markers":
         data["markers"] = {"rows": "x"}
+    elif how == "a newer schema":
+        data["schema"] = 2
+    elif how == "no schema number":
+        data["schema"] = "1"
     return data
 
 
 @pytest.mark.parametrize("how, said", [
     ("detectors", "`detectors` is text, not a list"),
-    ("a detector", "detector 1 is text, not an object"),
-    ("rows", "the rows of binder_txn are an object, not a list"),
-    ("a row", "a row of binder_txn is not an object"),
+    ("a detector", "`detectors[0]` is text, not an object"),
+    ("rows", "`detectors[2].rows` is an object, not a list"),
+    ("a row", "`detectors[2].rows[0]` is text, not an object"),
     ("markers", "`markers.rows` is text, not a list"),
+    ("a newer schema", "a newer echolot wrote it, in schema 2; this one reads schema 1"),
+    ("no schema number", "its schema number is text, not a whole number"),
 ])
 @pytest.mark.parametrize("argv", [["report"], ["report", "--html"], ["report", "--json"], ["compare"]])
 def test_a_report_with_a_part_analyze_never_writes_is_a_sentence(tmp_path, how, said, argv):
     """#555: a report whose detectors or rows are not lists ended `report`,
-    `report --html` and `compare` in a traceback."""
+    `report --html` and `compare` in a traceback. A schema this echolot does
+    not read is said the same way (#833)."""
     (tmp_path / "bad.json").write_text(json.dumps(_damaged(how)), encoding="utf-8")
     from tests.test_report_page import known
     (tmp_path / "good.json").write_text(json.dumps(known()), encoding="utf-8")

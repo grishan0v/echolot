@@ -54,7 +54,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import json
 import os
 import re
 import tempfile
@@ -63,7 +62,7 @@ from typing import Any
 
 import yaml
 
-from . import check, job, plain, project_setup
+from . import check, files, job, plain, project_setup
 from .config import Config, ConfigError
 
 CONFIG = project_setup.CONFIG
@@ -253,10 +252,8 @@ def last_report(st: dict[str, Any]) -> dict[str, Any] | None:
     rep = st.get("report")
     if not rep or rep.get("error"):
         return None
-    with contextlib.suppress(OSError, ValueError):
-        data = json.loads(Path(rep["path"]).read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else None
-    return None
+    data = files.read_report(Path(rep["path"]))
+    return None if isinstance(data, files.Refusal) else dict(data)
 
 
 def _again(project: Path, st: dict[str, Any], scenario: str | None) -> dict[str, Any]:

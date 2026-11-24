@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import contextlib
 import glob as glob_mod
-import json
 import re
 import shlex
 import shutil
@@ -625,11 +624,8 @@ def comparison(report_dir: Path) -> dict[str, Any] | None:
         return None
     if made + 1 < _newest([report_dir / "report.json"]):
         return None
-    try:
-        beside = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(beside, dict) or found["after"].get("generated_at") != beside.get("generated_at"):
+    beside = files_mod.read_report(report_dir / "report.json")
+    if isinstance(beside, files_mod.Refusal) or found["after"].get("generated_at") != beside.get("generated_at"):
         return None
     return found
 
