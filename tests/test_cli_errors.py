@@ -160,7 +160,8 @@ def test_a_mask_is_taken_as_typed(tmp_path, fixture_trace):
     done = cli(tmp_path, "analyze", str(fixture_trace),
                "--set", "gc_pressure.name_glob=*GC*")
     check("exit 0", done.returncode == 0, done.stderr[-800:])
-    report = json.loads((tmp_path / ".echolot" / "out" / "report.json").read_text(encoding="utf-8"))
+    # A run with --set is a look, beside the latest report (#922).
+    report = json.loads((tmp_path / ".echolot" / "out" / "look" / "report.json").read_text(encoding="utf-8"))
     gc = next(d for d in report["detectors"] if d["id"] == "gc_pressure")
     check("the mask reached the detector as typed",
           gc["params"]["name_glob"] == "*GC*" and gc["params_source"] == "cli", gc["params"])

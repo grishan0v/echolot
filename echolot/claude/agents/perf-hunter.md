@@ -60,7 +60,9 @@ calibrated on are the runs you are hunting in, the bar sits above the problem.
 Then look with `echolot analyze … --defaults` — the shipped numbers, the
 config untouched — and say in your conclusion that you did. Never write a
 config of your own: `--defaults` and `--set detector.param=value` exist so
-that you do not have to, and both leave a mark in the report.
+that you do not have to, and both leave a mark in the report. Both are
+looks: the report goes to `look/` beside the latest one, never over it, and
+the overview `analyze` prints names its path for `echolot report <path>`.
 
 **Which investigation this is was settled before you were called.** Do not run
 `echolot status` and do not ask the human whether to start over: you were

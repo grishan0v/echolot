@@ -1059,7 +1059,7 @@ def test_end_to_end(tmp_path: Path) -> None:
                                                   "DefaultDispatcher-worker-3")
     (tmp_path / "after.json").write_text(json.dumps(after), encoding="utf-8")
 
-    done = cli("compare", "before.json", "after.json", "-c", "echolot.yml")
+    done = cli("compare", "before.json", "after.json", "-c", "echolot.yml", "-o", ".echolot/out")
     check("compare exits 0", done.returncode == 0, done.stderr[-400:])
     check("and writes both files",
           (tmp_path / ".echolot/out/comparison.json").exists()
