@@ -105,6 +105,14 @@ _SECTIONS = ("project", "scenario", "scenarios", "runner", "detectors",
              "instrumentation", "domains", "loop", "threads", "toolchain", "tp_binary")
 
 
+# The keys of `project:`, read by the accessors below (`process`, `sources`,
+# `mapping`) and `package` by every command that looks for the app.
+PROJECT_KEYS = ("package", "process", "source_root", "root", "mapping")
+# The keys of `toolchain:`: `Config.tp_binary`.
+TOOLCHAIN_KEYS = ("tp_binary",)
+# The keys of `loop:`: `max_rounds` is read by `reflect` and the hunt,
+# `on_exhausted` by the agent, as its skill says.
+LOOP_KEYS = ("max_rounds", "on_exhausted")
 # The keys of `instrumentation:`. `allowed` is read by `mark`, `reflect` and
 # the page, through `Config.allowed`; `temp_prefix` by `mark`, `hunt` and
 # `reflect`; `cleanup` by the agent, as its skill says.
@@ -121,7 +129,7 @@ def _known_sections(raw: dict[str, Any], p: Path) -> None:
 
 
 def _section_keys(raw: dict[str, Any], p: Path, section: str,
-                  keys: tuple[str, ...]) -> None:
+                  keys: tuple[str, ...], where: str | None = None) -> None:
     """Refuse a key `section` does not have, by name, with the keys it has.
 
     A key nobody asks for was never looked at: `instrumentation.alowed` was
@@ -129,16 +137,41 @@ def _section_keys(raw: dict[str, Any], p: Path, section: str,
     Keys that start with `_` are setup's own notes.
     """
     node = raw.get(section)
-    if node is None:
+    where = where or section
+    if node is None or section in ("project", "runner") and not isinstance(node, dict):
+        # Refused where they are read, in their own words: a runner with the
+        # mode it most likely means (`Config.runner`), a project with the
+        # two names it holds (`_named_by_text`).
         return
     if not isinstance(node, dict):
-        raise ConfigError(f"{p}: {section} must be a mapping with "
+        raise ConfigError(f"{p}: {where} must be a mapping with "
                           f"{', '.join(keys)} under it, got {node!r}")
     unknown = [k for k in node if k not in keys and not str(k).startswith("_")]
     if unknown:
         raise ConfigError(
-            f"{p}: no key {', '.join(repr(k) for k in unknown)} under {section}. "
+            f"{p}: no key {', '.join(repr(k) for k in unknown)} under {where}. "
             f"It takes {', '.join(keys)}")
+
+
+def runner_keys() -> tuple[str, ...]:
+    """The keys of `runner:`, kept beside the code that reads each one."""
+    from . import composenames, runner, stabilize
+    return runner.KEYS + stabilize.KEYS + composenames.KEYS
+
+
+def _keys_of_sections(raw: dict[str, Any], p: Path) -> None:
+    """Refuse a key a section does not have, in every section that has a
+    list of its keys (#737). `detectors:` and the scenarios check their own,
+    and `runner:` is a mapping in a scenario under `scenarios:` too."""
+    for section, keys in (("project", PROJECT_KEYS), ("runner", runner_keys()),
+                          ("toolchain", TOOLCHAIN_KEYS), ("loop", LOOP_KEYS),
+                          ("instrumentation", INSTRUMENTATION_KEYS)):
+        _section_keys(raw, p, section, keys)
+    many = raw.get("scenarios")
+    if isinstance(many, dict):
+        for name, block in many.items():
+            if isinstance(block, dict) and isinstance(block.get("runner"), dict):
+                _section_keys(block, p, "runner", runner_keys(), where=f"scenarios.{name}.runner")
 
 
 def _named_by_text(raw: dict[str, Any], p: Path) -> None:
@@ -317,7 +350,7 @@ class Config:
         if not isinstance(raw, dict):
             raise ConfigError(f"{p}: expected a mapping at the top level")
         _known_sections(raw, p)
-        _section_keys(raw, p, "instrumentation", INSTRUMENTATION_KEYS)
+        _keys_of_sections(raw, p)
         _named_by_text(raw, p)
 
         local_path = Path(local) if local else p.parent / "local.yml"
@@ -329,7 +362,7 @@ class Config:
             if not isinstance(overlay, dict):
                 raise ConfigError(f"{local_path}: expected a mapping")
             _known_sections(overlay, local_path)
-            _section_keys(overlay, local_path, "instrumentation", INSTRUMENTATION_KEYS)
+            _keys_of_sections(overlay, local_path)
             _named_by_text(overlay, local_path)
             raw = merge(raw, overlay)
             used_local = local_path

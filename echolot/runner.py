@@ -193,6 +193,14 @@ DEVICE_TRACE = "/data/misc/perfetto-traces/echolot.pftrace"
 # macrobenchmark has already made it, so every one of these is inert — and
 # they are the keys most likely to be copied in from a launch-mode config and
 # believed.
+# The keys of `runner:` read here, with the two `collect` in main.py reads
+# before it calls here, `iterations` and `device`. `stabilize.KEYS` and
+# `composenames.KEYS` are the rest; Config.load refuses any other key by name,
+# so `iteratons: 3` is not five repeats without a word (#737).
+KEYS = ("mode", "iterations", "device", "activity", "command", "duration_ms",
+        "reset_policy", "sampling", "atrace_categories", "buffer_kb", "environment",
+        "gradle_task", "gradle", "gradle_args", "project_root", "timeout_s")
+
 RECORDING_KNOBS = ("environment", "atrace_categories", "buffer_kb",
                    "duration_ms", "reset_policy", "sampling", "compose_names")
 

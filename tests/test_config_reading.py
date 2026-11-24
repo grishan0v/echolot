@@ -182,6 +182,82 @@ def test_allowed_written_as_text_is_a_list_of_one(tmp_path: Path) -> None:
         check(f"{value!r}", cfg.allowed == want, cfg.allowed)
 
 
+@pytest.mark.parametrize("section, block, key, lists", [
+    ("runner", {"mode": "launch", "iteratons": 3}, "iteratons", "iterations"),
+    ("runner", {"duraton_ms": 30000}, "duraton_ms", "duration_ms"),
+    ("toolchain", {"tp_bniary": "x"}, "tp_bniary", "tp_binary"),
+    ("project", {**BASE["project"], "maping": "m.txt"}, "maping", "mapping"),
+    ("project", {"package": "com.example.app", "proces": "x"}, "proces", "process"),
+    ("loop", {"max_round": 3}, "max_round", "max_rounds"),
+])
+def test_a_misspelled_key_in_a_section_is_refused(tmp_path: Path, section: str, block: dict,
+                                                  key: str, lists: str) -> None:
+    """Below the top level, a key nobody asked for was never looked at:
+    `iteratons: 3` recorded five repeats, `tp_bniary` the bundled shell (#737)."""
+    said = _refused(_config(tmp_path, {**BASE, section: block}))
+    check("by name, with the keys the section has",
+          f"no key {key!r} under {section}" in said and lists in said, said)
+
+
+def test_a_misspelled_runner_key_in_a_named_scenario_is_refused(tmp_path: Path) -> None:
+    raw = {"project": BASE["project"], "scenarios": {"cold": {
+        "start": {"name": "AppStart"}, "end": {"name": "Screen.firstFrame"},
+        "runner": {"mode": "command", "comand": "adb shell input tap 1 1"}}}}
+    said = _refused(_config(tmp_path, raw))
+    check("where it is", "no key 'comand' under scenarios.cold.runner" in said
+          and "command" in said, said)
+
+
+def test_a_misspelled_key_in_local_yml_names_local_yml(tmp_path: Path) -> None:
+    path = _config(tmp_path, BASE)
+    (tmp_path / "local.yml").write_text("runner:\n  devise: R58\n", encoding="utf-8")
+    said = _refused(path)
+    check("local.yml named", "local.yml: no key 'devise' under runner" in said, said)
+
+
+def test_every_runner_key_and_setup_s_notes_still_load(tmp_path: Path) -> None:
+    from echolot.config import runner_keys
+    block = {k: None for k in runner_keys()} | {"_evidence": "x", "_source": "scan"}
+    cfg = Config.load(_config(tmp_path, {**BASE, "runner": block,
+                                         "project": {**BASE["project"], "_source": "derived"}}))
+    check("loads", set(cfg.runner) == set(block), cfg.runner)
+
+
+def test_the_example_and_what_scan_drafts_still_load(tmp_path: Path) -> None:
+    from echolot import scan
+    from tests.test_scan import repo
+    from tests.test_scan_benchmark_kinds import LAUNCH, project
+    Config.load(Path(__file__).resolve().parent.parent / "echolot.yml.example")
+    (tmp_path / "app").mkdir()
+    repo(tmp_path / "app")
+    for name, root in (("app", tmp_path / "app"),
+                       ("benchmark", project(tmp_path / "bench", StartupBenchmark=LAUNCH))):
+        draft = tmp_path / f"{name}.yml"
+        draft.write_text("\n".join(scan.skeleton(scan.describe(root, devices=False))) + "\n",
+                         encoding="utf-8")
+        check(f"the {name} draft loads", Config.load(draft).runner.get("mode") is not None)
+
+
+def test_each_runner_key_read_is_one_the_config_knows() -> None:
+    """The lists sit beside the code that reads each key. A key read and not
+    listed would be refused before it is ever read."""
+    import re as re_
+    from echolot.config import runner_keys
+    from echolot.runner import RECORDING_KNOBS
+    root = Path(__file__).resolve().parent.parent / "echolot"
+    read = set()
+    pattern = re_.compile(r'(?:section\.get\(|_positive\(section, |_listed\(section, )"(\w+)"')
+    for name in ("runner.py", "stabilize.py", "composenames.py", "main.py", "check.py",
+                 "ready.py"):
+        read |= set(pattern.findall((root / name).read_text(encoding="utf-8")))
+    read |= set(RECORDING_KNOBS)
+    check("every one listed", read <= set(runner_keys()), sorted(read - set(runner_keys())))
+    from echolot import stabilize
+    # `knobs_of` reads its two switches in a loop over their names.
+    check("and each listed is read", set(runner_keys()) <= read | set(stabilize.KEYS),
+          sorted(set(runner_keys()) - read))
+
+
 def test_an_unknown_section_is_refused_by_name(tmp_path: Path) -> None:
     raw = {**BASE, "detectros": {"main_thread_block": {"min_slice_ms": 50}}}
     said = _refused(_config(tmp_path, raw))

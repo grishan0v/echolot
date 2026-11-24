@@ -274,6 +274,18 @@ def _moved(project: Project, path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _moved_off(project: Project, path: Path) -> None:
+    """The page's line with no limit in it, a comment, moved under `runner:`.
+
+    A limit set there no longer loads (`runner:` refuses a key it does not
+    have, #737), so the page says the file is broken; the comment still
+    loads, and the page says where it went."""
+    text = path.read_text(encoding="utf-8")
+    line, off = project_setup.limit_line(2000), project_setup.limit_line(None)
+    text = text.replace(line + "\n", "", 1).replace("  mode: launch\n", f"  mode: launch\n{off}\n", 1)
+    path.write_text(text, encoding="utf-8")
+
+
 def _gone(project: Project, path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     path.write_text(text.replace(project_setup.limit_line(2000) + "\n", "", 1), encoding="utf-8")
@@ -309,7 +321,8 @@ DECLINES = {
     "the line twice": (_copied, "broken", "does not load"),
     "the line inside a quoted value, a limit set below it": (_in_a_string, "edited", "was changed by hand"),
     "the line removed": (_gone, "removed", "is no longer in echolot.yml"),
-    "the line moved to another block": (_moved, "moved", "is no longer under scenario:"),
+    "the line moved to another block": (_moved, "broken", "does not load"),
+    "the line with no limit moved to another block": (_moved_off, "moved", "is no longer under scenario:"),
     "another line sets the limit too": (_twice, "twice", "that one counts"),
     "the page's first lines removed": (_header_gone, "foreign", "The page did not write this echolot.yml"),
     "a config written by hand": (_by_hand, "foreign", "The page did not write this echolot.yml"),
