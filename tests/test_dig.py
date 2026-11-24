@@ -170,6 +170,45 @@ def test_no_allowed_folder_is_no_grant(tmp_path, allowed):
     with pytest.raises(Refusal) as refused:
         dig.allowed(config(tmp_path, allowed))
     check("the page hands an agent no edits anywhere", "names no folder" in refused.value.text)
+    check("and says where and how to name one", "to `echolot.yml` under `instrumentation:`, for example "
+          "`allowed: [\"app/src/main\", \"feature/*/src/main\"]`" in refused.value.text, refused.value.text)
+
+
+@pytest.mark.parametrize("allowed", ["[]", '["../elsewhere"]'])
+def test_a_folder_no_client_may_edit_is_why_every_client_would_start_nothing(tmp_path, monkeypatch, allowed):
+    """The reading before the press says what the press says: no screen offers
+    a client the press then refuses for want of a folder (#813), and every
+    client is refused alike, so none is offered in place of another (#863)."""
+    path = config(tmp_path, allowed).path
+    monkeypatch.setattr(dig, "layer_missing", lambda project: [])
+    st = {"config": {"path": str(path), "scenario": None}, "hunt": None, "collect": None}
+    monkeypatch.setattr(dig.state, "next_kind", lambda st: "hunt")
+    claude = dig.Client(program="/c", version="2.1.300")
+    with pytest.raises(Refusal) as refused:
+        dig.allowed(Config.load(path))
+    check("Claude Code is refused for the folder", dig.why_not(tmp_path, st, [], claude) == refused.value.text)
+    check("and the folder is read the same for every client", dig.unplaced(st) == refused.value.text)
+    path.write_text(path.read_text(encoding="utf-8").replace(f"allowed: {allowed}", 'allowed: ["app/src/main"]'),
+                    encoding="utf-8")
+    check("with a folder named, nothing of it stands in the way", dig.unplaced(st) is None
+          and dig.why_not(tmp_path, st, [], claude) is None)
+    check("a config that does not load is the start page's to say", dig.unplaced({}) is None
+          and dig.unplaced({"config": {"path": str(tmp_path / "gone.yml")}}) is None)
+
+
+def test_what_the_page_says_of_clients_it_cannot_start():
+    claude = dig.Client(program="/c", key="claude")
+    codex_ = dig.Client(program="/x", key="codex")
+    absent = dig.Client(key="codex", why="Codex is not installed on this computer: there is no `codex` command here.")
+    folder = "no folder"
+    check("#863: a reason both share, said once", dig.reasons([(claude, folder), (codex_, folder)]) == [folder])
+    check("a client that is not installed is no reason beside one that is",
+          dig.reasons([(claude, folder), (absent, absent.why)]) == [folder])
+    check("unless its own screen is the one that says it", dig.reasons([(claude, folder), (absent, absent.why)],
+                                                                      "codex") == [folder, absent.why])
+    check("and where none is installed, every one says so", dig.reasons([(dig.Client(why="no claude"), "no claude"),
+                                                                        (absent, absent.why)])
+          == ["no claude", absent.why])
 
 
 # --- the request ----------------------------------------------------------------------------------

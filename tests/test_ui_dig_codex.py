@@ -296,6 +296,39 @@ def test_a_codex_that_cannot_start_leaves_claude_code_alone(project):
           and not echolot.ran and codex_.argv is None)
 
 
+@pytest.mark.parametrize("clients", ["both", "codex not installed"])
+def test_with_no_folder_to_mark_no_client_is_offered_and_the_folder_is_said_once(project, clients):
+    """#813 and #863: with `instrumentation.allowed` naming no folder, the
+    dialog offered Start it from here, Claude Code's screen led to Codex's and
+    Codex's back, and a press of either was refused for the folder."""
+    from tests.test_ui import LAUNCH
+    project.config(LAUNCH)
+    absent = dig.Client(key="codex", why="Codex is not installed on this computer: there is no `codex` command here.")
+    site, codex_, echolot = serving(project, clients=(SIGNED_IN, CODEX_IN if clients == "both" else absent))
+    report = page(get(site, "report"))
+    dialog = report.one("dialog", "ask")
+    check("the dialog offers no Start", not report.all("button", id="ask-start") and "Start it from here"
+          not in dialog.text and "on this computer, does it" not in dialog.text, dialog.text)
+    check("it says the folder once, where to name it and how, and nothing else",
+          dialog.text.count("names no folder") == 1 and "so the page starts none until it names one" in dialog.text
+          and 'to echolot.yml under instrumentation:, for example allowed: ["app/src/main", "feature/*/src/main"]'
+          in dialog.text and not dialog.all("span", "dig-why1") and "not installed" not in dialog.text, dialog.text)
+    paths = ["dig/ask", "dig/with/claude/ask"] + (["dig/with/codex/ask"] if clients == "both" else [])
+    for path in paths:
+        consent = page(press(site, path, ticked("main_thread_waits")))
+        why = consent.one("div", id="dig-why").text
+        check(f"{path}: the folder, once", why.count("names no folder") == 1 and "not installed" not in why, why)
+        check(f"{path}: no Start, and no way to another client", not consent.all("button", id="dig-start")
+              and not consent.all("form", "dig-other") and not consent.all("p", "dig-aside"))
+        check(f"{path}: copying the request is the one next step",
+              consent.one("button", id="dig-copy").attrs["class"] == "btn primary needs-js")
+    for path in ["dig/start"] + (["dig/with/codex/start"] if clients == "both" else []):
+        reply = press(site, path, ticked("main_thread_waits"))
+        check(f"{path}: a press is refused for the folder", reply.status == 409 and "names no folder" in reply.body,
+              (reply.status, reply.body[:300]))
+    check("and nothing ran", not echolot.ran and codex_.argv is None)
+
+
 @pytest.mark.parametrize("path", ["dig/with/cursor/ask", "dig/with/cursor/start"])
 def test_an_address_that_names_a_client_the_page_does_not_start(project, path):
     site, _, echolot = serving(project)

@@ -490,11 +490,6 @@ def _clients(site: Site) -> list[dig.Client]:
     return [found] if isinstance(found, dig.Client) else list(found)
 
 
-def _whys(offered: list[tuple[dig.Client, str | None]]) -> list[str] | None:
-    """Why none of the clients can start, each reason once, in their order."""
-    return list(dict.fromkeys(why for _, why in offered if why)) or None
-
-
 def _dig_parts(visit: Visit, data: dict[str, Any], params: dict[str, str]) -> dict[str, Any] | None:
     """What a served report adds to start an agent from it, where the server
     takes that press: the way to the screen before it starts, or why there
@@ -505,7 +500,7 @@ def _dig_parts(visit: Visit, data: dict[str, Any], params: dict[str, str]) -> di
         return None
     offered = dig.offer(site.project, _clients(site), visit.st, [])
     can = [dig.adapter(c.key).name for c, why in offered if why is None]
-    return dig_page.report_parts(report_page.checks(data), action, bool(can), None if can else _whys(offered),
+    return dig_page.report_parts(report_page.checks(data), action, bool(can), None if can else dig.reasons(offered),
                                  who=can)
 
 
@@ -548,8 +543,10 @@ def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
                         "neither.")
     client, why = chosen
     if why and not any(w is None for _, w in offered):
-        # None can start: every reason, once each.
-        why = _whys(offered)
+        # None can start: every reason, once each. A folder none of them may
+        # edit is one reason, said once, and no screen leads to another
+        # client the press would refuse the same (#863).
+        why = dig.reasons(offered, client.key)
     agent = dig.adapter(client.key)
     paths = None
     known = visit.st.get("config") or {}

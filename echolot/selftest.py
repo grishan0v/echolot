@@ -7996,6 +7996,55 @@ def _(report):
         assert Config.load(path).scenario_budget_ms == 1500
 
 
+def _dig_project(root: Path, allowed: str | None) -> dict:
+    """A project both clients could start in but for what the config says:
+    Claude Code's commands, a git repository and Codex's rules. The state the
+    page reads, as much of it as the reading before a press looks at."""
+    from . import codex, dig
+    for rel in (*dig.LAYER, codex.RULE_PATH):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(codex.RULE_FILE if rel == codex.RULE_PATH else "the layer\n", encoding="utf-8")
+    (root / ".git").mkdir()
+    path = root / "echolot.yml"
+    path.write_text("project:\n  package: com.example.app\n  process: com.example.app\nscenario:\n  name: coldStart\n"
+                    "  window: launch\n" + (f"instrumentation:\n  allowed: {allowed}\n" if allowed is not None else ""),
+                    encoding="utf-8")
+    return {"project": str(root), "layer_verdict": "current", "last_doctor": None, "hunt": None, "collect": None,
+            "config": {"path": str(path), "scenario": None}}
+
+
+@check("ui: with no folder in instrumentation.allowed, Dig deeper offers no agent and says "
+       "so once, with where to name one and how")
+def _(report):
+    """`instrumentation.allowed` naming no folder was read at the press and
+    not before it. The dialog offered Start it from here (#813), and the
+    screen of each client led to the other's, refused alike, and back (#863).
+    The folder is now part of the reading before a press: every client is
+    refused for it, the reason is one and said once, and no screen offers a
+    client.
+    """
+    from . import dig
+    from .pages import dig_page
+    claude = dig.Client(program="/bin/claude", version="2.1.300", key="claude")
+    codex_ = dig.Client(program="/bin/codex", version="0.159.2", key="codex")
+    for allowed in (None, "[]"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            st = _dig_project(root, allowed)
+            offered = dig.offer(root, [claude, codex_], st, [])
+            whys = [why for _, why in offered]
+            assert whys[0] and whys[0] == whys[1] == dig.unplaced(st), whys
+            assert "names no folder" in whys[0] and "under `instrumentation:`" in whys[0] \
+                and "`allowed: [\"app/src/main\"" in whys[0], whys[0]
+            assert dig.reasons(offered) == [whys[0]], dig.reasons(offered)
+            ask = dig_page.report_parts([], "/t/dig/ask", False, dig.reasons(offered), who=[])["ask"]
+            assert "ask-start" not in ask and ask.count("names no folder") == 1, ask
+            (root / "echolot.yml").write_text((root / "echolot.yml").read_text(encoding="utf-8").replace(
+                "instrumentation:\n  allowed: []\n", "") + 'instrumentation:\n  allowed: ["app/src/main"]\n',
+                encoding="utf-8")
+            assert [why for _, why in dig.offer(root, [claude, codex_], st, [])] == [None, None]
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor
