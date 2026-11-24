@@ -159,8 +159,10 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
     package = str(cfg.value(PACKAGE) or "")
     # The build's R8 mapping, read before the trace is opened: a path that is
     # not there is the config's mistake, and is said before any work is done.
+    # The packet is kept in the config's project, `.echolot/cache/` (#558).
     mapping = cfg.mapping
-    extra = mapping_mod.packet_for(mapping, package) if mapping else None
+    extra = mapping_mod.packet_for(
+        mapping, Path(cfg.path).resolve().parent if cfg.path else None) if mapping else None
 
     with TraceSession(trace, tp_binary, extra=extra) as tp:
         procs = _resolve_process(tp, cfg.process, str(trace))
@@ -1307,7 +1309,11 @@ def _names_info(tp, package: str, mapped: bool) -> dict | None:
 
     The app's code is what the device installed under the package, and what
     the JIT compiled: every method of the app runs from one or the other.
-    None when the samples hold no method of the app's at all.
+    Under the package with a suffix too, `com.example.app.benchmark`, as a
+    benchmark build is often installed while `project.package` stays the
+    release's: its methods were left out of the count, and a minified build
+    went without its warning (#576). None when the samples hold no method of
+    the app's at all.
 
     Only the frames on this process's own stacks, in the window: every ART
     process has a JIT cache of its own, and another profileable one's
@@ -1315,7 +1321,8 @@ def _names_info(tp, package: str, mapped: bool) -> dict | None:
     """
     where = ["m.name GLOB '*jit-cache*'", "m.name GLOB '*jit-code-cache*'"]
     if package:
-        where.append(f"m.name GLOB '*/{sql_value(package)}-*'")
+        where += [f"m.name GLOB '*/{sql_value(package)}-*'",
+                  f"m.name GLOB '*/{sql_value(package)}.*-*'"]
     rows = tp.query(f"""
         WITH RECURSIVE chain(id) AS (
             SELECT DISTINCT callsite_id FROM _samples_win WHERE callsite_id IS NOT NULL

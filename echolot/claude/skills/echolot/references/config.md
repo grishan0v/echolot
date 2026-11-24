@@ -104,9 +104,11 @@ stderr and at the top of the report, `config.mapping.found` is false, and
 the report is made without it. Build the variant and analyze again; do not
 remove the key.
 
-It needs `project.package`, the package as installed on the device — for a
-benchmark build often the release's with a suffix — because the mapping
-names back that package's frames. The mapping has to be **this** build's: one
+It needs no `project.package`: the mapping names back the frames of
+whatever package the build was installed under, a benchmark build's suffix
+and all. `analyze` keeps the packet it makes of the file in
+`.echolot/cache/mapping/`, so the next run of the same build does not read
+the mapping again. The mapping has to be **this** build's: one
 from another build renames the frames it happens to match, wrongly, and leaves
 the rest. The report's header warns when a tenth or more of the app's sampled
 methods read as minified, with a mapping and without one; fewer than that is

@@ -1160,14 +1160,28 @@ report, and makes the report without it: R8's names stay as recorded.
 
 `analyze` reads the file into a deobfuscation packet and hands it to
 trace_processor after each trace, the way Perfetto's own tools attach one; the
-trace on disk is not touched. trace_processor matches the packet to the
-frames by the package in their file's path on the device, so the package has
-to be the one installed, suffix and all. A method R8 gave the same name as
+trace on disk is not touched. The packet names no package, so trace_processor
+names back the frames of whatever package the build was installed under: a
+benchmark build installed as `com.example.app.benchmark` comes back by its
+names while `project.package` says `com.example.app`, and the header counts
+its methods as the app's. Another app's frames are renamed too where their
+minified names are ones this mapping lists, and the report reads none of
+them: only the measured process's stacks. A packet without a package takes
+trace_processor v59.1 or newer, the one echolot pins; an older binary of your
+own (`toolchain.tp_binary`) leaves every frame as R8 wrote it, and `doctor`
+fails its R8 checks with it. A method R8 gave the same name as
 another — overloads usually share one — comes back as both,
 `Store.load | Store.save`, because a sample has no line to tell them apart.
 
-Reading a mapping costs seconds once per `analyze`: a synthetic one of 125 MB
-took 4.6 s to read, and each trace loaded 1.5 s slower with it.
+Reading a mapping costs seconds, and each trace loads more slowly with it.
+Wikipedia's Android app, built for a benchmark, wrote one of 158 MB; reading
+it took 1.3 to 6.5 s on an M3 Pro, by how busy the machine was. So the packet
+is kept in the project's `.echolot/cache/mapping/` under the mapping's
+contents, and the next `analyze` of the same build reads it back in 70 ms:
+`analyze` of one cold start with that mapping went from 3.8 s to 1.9 s. The
+four packets used last are kept, 2.2 MB each for that mapping. A rebuilt
+mapping is another packet, never the old one; deleting the folder costs the
+next `analyze` one read of the mapping.
 
 The runtime also writes frames as text, and trace_processor sees none of
 those: both sides of a lock in ART's contention slice, and every thread of an

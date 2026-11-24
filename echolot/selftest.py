@@ -1926,6 +1926,69 @@ def _(report):
     assert names == {"methods": 8, "minified": 0, "renamed": 8}, names
 
 
+@check("R8 mapping: a build installed under a suffix has its frames named back")
+def _(report):
+    """A benchmark build installed as `com.example.app.benchmark`, while
+    `project.package` is the release's `com.example.app` (#576).
+
+    The packet named the package, and trace_processor matched it to a frame
+    by the package in the frame's file: none of the suffixed build's frames
+    came back, and the header counted none of its methods as the app's, so
+    the build was not even told it was minified. The packet names none now,
+    and the report reads exactly as it does for the build installed under the
+    package itself.
+    """
+    named = minified_report(fixture.MAPPING, sampling="benchmark")
+    plain = minified_report(fixture.MAPPING)
+    for location in ("DefaultDispatcher-worker-#", "BlockingIO-#"):
+        got, want = (next(r for r in rows(rep, "uninstrumented_cpu")
+                          if r["location"] == location)["stacks"] for rep in (named, plain))
+        assert got == want, (location, got, want)
+    names = named["environment"]["sampling"]["names"]
+    assert names == {"methods": 8, "minified": 0, "renamed": 8}, names
+
+
+@check("R8 mapping: the packet is kept between runs, and is the one the mapping makes")
+def _(report):
+    """The packet a mapping makes is kept in the project's `.echolot/cache/`,
+    so that the next `analyze` does not read the whole mapping again (#558).
+
+    What comes back is what reading the mapping makes, byte for byte; a
+    mapping that changes is a packet of its own; a kept packet cut short is
+    built again; and a project without `.echolot/` has none made for it.
+    """
+    import zlib
+    from . import mapping as mapping_mod
+
+    def next_run(path: Path, project: Path) -> bytes:
+        # A new process: nothing of the mapping in memory.
+        mapping_mod._packet_for.cache_clear()
+        return mapping_mod.packet_for(path, project)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp)
+        path = project / "mapping.txt"
+        path.write_text(fixture.MAPPING, encoding="utf-8")
+        fresh = mapping_mod.packet(mapping_mod.read(path))
+        assert next_run(path, project) == fresh
+        assert not (project / ".echolot").exists(), "made an .echolot/ for the project"
+        (project / ".echolot").mkdir()
+        assert next_run(path, project) == fresh
+        kept = list((project / ".echolot" / mapping_mod.CACHE).glob("*.z"))
+        assert len(kept) == 1 and zlib.decompress(kept[0].read_bytes()) == fresh, kept
+        # The next run takes what is kept and does not read the mapping: what
+        # it is handed here is not what the mapping makes.
+        kept[0].write_bytes(zlib.compress(b"kept"))
+        assert next_run(path, project) == b"kept"
+        kept[0].write_bytes(zlib.compress(fresh)[:20])
+        assert next_run(path, project) == fresh, "a packet cut short was taken"
+        path.write_text(fixture.OTHER_MAPPING, encoding="utf-8")
+        other = next_run(path, project)
+        assert other == mapping_mod.packet(mapping_mod.read(path)) != fresh
+        assert len(list((project / ".echolot" / mapping_mod.CACHE).glob("*.z"))) == 2
+    mapping_mod._packet_for.cache_clear()
+
+
 @check("R8 mapping: one from another build is called out")
 def _(report):
     # Another build's mapping knows one of these minified names and renames
@@ -9182,11 +9245,14 @@ def _pooled(binary: str | None) -> dict:
         return analyze_trace(trace, Config(FIXTURE_CONFIG), binary)
 
 
-def minified_report(mapping: str) -> dict:
-    """The sampled fixture from a minified build, analysed with `mapping` as its mapping.txt."""
+def minified_report(mapping: str, sampling: str = "minified") -> dict:
+    """The sampled fixture from a minified build, analysed with `mapping` as its mapping.txt.
+
+    `sampling="benchmark"` is that build installed under a suffix (`fixture.BENCHMARK`).
+    """
     with tempfile.TemporaryDirectory() as tmp:
         trace = Path(tmp) / "fixture.perfetto-trace"
-        trace.write_bytes(fixture.build(sampling="minified"))
+        trace.write_bytes(fixture.build(sampling=sampling))
         path = Path(tmp) / "mapping.txt"
         path.write_text(mapping, encoding="utf-8")
         project = {**FIXTURE_CONFIG["project"], "mapping": str(path)}
