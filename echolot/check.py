@@ -279,13 +279,15 @@ def _stops_all(st: dict[str, Any], run: dict[str, Any] | None = None) -> str | N
 
 def _stops_recording(lines: list[dict[str, Any]]) -> str | None:
     """What keeps a recording from starting, and only a recording: the phone,
-    or an app that a recording would not show. The sentence is the ready
-    line's own first one; the line itself, marked red, says what to do."""
+    or an app that a recording would not show. The ready line whole, what to
+    do included: it is read beside a button that cannot be pressed, on the
+    start page under that line, and also where the line is not drawn at all,
+    on the screen before an agent starts, beside the answer's Check again and
+    on the page that refuses a press. Pointing at "the line marked red" there
+    pointed at nothing (#867)."""
     for line in lines[1:]:
         if line["tone"] == ready.RED:
-            said = f"{line['lead']} {line['text']}"
-            first = re.split(r"(?<=[.!?])\s", said, maxsplit=1)[0]
-            return first if first == said else f"{first} The line marked red says what to do."
+            return f"{line['lead']} {line['text']}"
     return None
 
 

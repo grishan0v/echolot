@@ -7439,6 +7439,36 @@ def _(report):
         assert not any(root.iterdir()), sorted(p.name for p in root.iterdir())
 
 
+@check("ui: the phone that keeps a recording from starting is said whole, what to do "
+       "included, on every page that says it, and no red line is named")
+def _(report):
+    """The reason a recording cannot start is said beside a button that
+    cannot be pressed: on the start page, under the ready lines, and also
+    where those lines are not drawn, on the screen before an agent starts,
+    beside the answer's Check again, on the page that refuses a press. It
+    was the ready line's first sentence and "The line marked red says what
+    to do.", which on those pages pointed at nothing (#867). It is the line
+    whole, the phone's own advice included: here, `collect`'s words for no
+    phone at all.
+    """
+    from . import check as check_mod
+    from . import ready, runner
+    saved = runner._run
+    runner._run = lambda argv, **kw: "List of devices attached\n\n"
+    try:
+        phone = ready.phone(None, None, {}, ready.Sources(scan=lambda here: None, pick_device=runner.pick_device))
+    finally:
+        runner._run = saved
+    computer = ready._line(ready.GREEN, "This computer", "is ready.", [])
+    app = ready._line(ready.GREEN, "The app", "can be measured.", [])
+    said = check_mod._stops_recording([computer, phone, app])
+    assert phone["tone"] == ready.RED and said == f"{phone['lead']} {phone['text']}", (phone, said)
+    assert said == ("The phone is not ready: adb sees no devices at all. Plug in a phone or start an "
+                    "emulator."), said
+    assert "marked red" not in said, said
+    assert check_mod._stops_recording([computer, {**phone, "tone": ready.GREEN}, app]) is None
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

@@ -755,9 +755,9 @@ def test_no_phone(project, adb):
         "in the way: The phone is not ready: adb sees no devices at all. Plug in a phone or start an emulator."), text)
     again = [a for a in page.all("a", "btn") if a.text == "Refresh"][0]
     check("Refresh is the one step of the screen", "primary" in again.attrs["class"])
-    check("and the button waits for the phone, with the reason beside it",
+    check("and the button waits for the phone, with the reason and what to do beside it",
           "disabled" in page.one("button", id="check-go").attrs and page.one("p", id="check-hint").text
-          == "The phone is not ready: adb sees no devices at all. The line marked red says what to do.",
+          == "The phone is not ready: adb sees no devices at all. Plug in a phone or start an emulator.",
           page.one("p", id="check-hint").text)
     check("what scan says of the devices is under All settings",
           "none attached" in setting(page, "The phone").text, setting(page, "The phone").text)

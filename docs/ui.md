@@ -179,7 +179,7 @@ the line says so.
 
 | what is in the way | the line says |
 |---|---|
-| no phone, several, or one that has not allowed debugging | the sentence `collect` stops with; the phone's line under **Ready**, marked red, says what to do |
+| no phone, several, or one that has not allowed debugging | the phone's line under **Ready** as it is: the sentence `collect` stops with, and what to do |
 | an app a recording would not show, or one with debuggable builds only | the same, from the app's line |
 | the project is not set up, the config does not load, or there is no `echolot.yml` and the page cannot [set one up](#setting-a-project-up) | that the step under **What to do next** comes first |
 | a setup is still under way | that echolot is checking this computer, and the button comes once it is done |

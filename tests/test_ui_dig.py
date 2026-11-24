@@ -715,6 +715,24 @@ def test_a_reload_of_the_screen_before_it_starts_goes_back_to_the_report(project
     check("nothing ran, and no agent was started", not echolot.ran and job.read(project.root, dig.JOB) is None)
 
 
+def test_with_no_phone_the_screen_before_it_starts_says_what_to_do(project, adb):
+    """The phone's sentence on a page that does not draw the start page's
+    ready lines: what is wrong and what to do, and no word of a red line
+    that is not there (#867)."""
+    adb.listing = ""
+    site, _, echolot = serving(project)
+    consent = page(press(site, "dig/ask", ticked("main_thread_waits")))
+    why = consent.one("div", id="dig-why").text
+    check("what is wrong and what to do, on this page", "The phone is not ready: adb sees no devices at all. Plug in "
+          "a phone or start an emulator." in why, why)
+    check("no word of a line marked red", "marked red" not in consent.text, why)
+    check("no Start", not consent.all("button", id="dig-start"))
+    reply = press(site, "dig/start", ticked("main_thread_waits"))
+    check("a press all the same is refused in the same words", reply.status == 409 and "Plug in a phone or start an "
+          "emulator." in read(reply.body).text and "marked red" not in reply.body, reply.body[:400])
+    check("nothing ran", not echolot.ran)
+
+
 @pytest.mark.parametrize("path", ["dig/ask", "dig/start", "dig/stop", "dig/unmark", "dig/close"])
 def test_the_new_requests_pass_the_checks_that_are_there(project, path):
     a_dig(project, end="stopped")
