@@ -1327,7 +1327,7 @@ def _(report):
 @check("uninstrumented_cpu: found the thread without a single slice")
 def _(report):
     got = [r for r in rows(report, "uninstrumented_cpu")
-           if r["location"] == "DefaultDispatcher-worker-1"]
+           if r["location"] == "DefaultDispatcher-worker-#"]
     assert len(got) == 1, rows(report, "uninstrumented_cpu")
     assert got[0]["total_ms"] == 300.0, f"Running inside the window: {got[0]}"
     assert got[0]["count"] == 0, got[0]
@@ -1345,7 +1345,7 @@ def _(report):
     # exactly that: 217% on the main thread. The row's time is the 100 ms
     # outside the slice, and with the 60 inside it adds up to the 160.
     got = [r for r in rows(report, "uninstrumented_cpu")
-           if r["location"] == "BlockingIO-1"]
+           if r["location"] == "BlockingIO-#"]
     assert len(got) == 1, (
         "a thread sleeping inside a slice must still count as blind: "
         f"{rows(report, 'uninstrumented_cpu')}"
@@ -1505,7 +1505,7 @@ def _(report):
     # thread's start and 8 were cut short in the framework. The two samples
     # that came without a stack are counted and name nothing.
     row = next(r for r in rows(sampled_report(), "uninstrumented_cpu")
-               if r["location"] == "DefaultDispatcher-worker-1")
+               if r["location"] == "DefaultDispatcher-worker-#")
     s = row["stacks"]
     assert (s["samples"], s["with_stack"]) == (30, 28), s
     assert [(e["frame"], e["samples"]) for e in s["leaf"]] == [
@@ -1519,7 +1519,7 @@ def _(report):
         " · ours: Store.save 36%, cut 29%"), row["detail"]
     # Without samples, the row says what it always said.
     plain = next(r for r in rows(report, "uninstrumented_cpu")
-                 if r["location"] == "DefaultDispatcher-worker-1")
+                 if r["location"] == "DefaultDispatcher-worker-#")
     assert "stacks" not in plain and " · " not in plain["detail"], plain
 
 
@@ -1530,7 +1530,7 @@ def _(report):
     # [600, 700], after the slice closed, sampled ten times on Disk.checksum.
     # Only the second stretch is a blind spot.
     row = next(r for r in rows(sampled_report(), "uninstrumented_cpu")
-               if r["location"] == "BlockingIO-1")
+               if r["location"] == "BlockingIO-#")
     s = row["stacks"]
     assert (s["samples"], s["with_stack"]) == (10, 10), s
     assert [e["frame"] for e in s["leaf"]] == ["com.example.app.Disk.checksum"], s
@@ -1544,11 +1544,11 @@ def _(report):
     # eight of the app's methods are named back.
     named = minified_report(fixture.MAPPING)
     worker = next(r for r in rows(named, "uninstrumented_cpu")
-                  if r["location"] == "DefaultDispatcher-worker-1")
+                  if r["location"] == "DefaultDispatcher-worker-#")
     plain = next(r for r in rows(sampled_report(), "uninstrumented_cpu")
-                 if r["location"] == "DefaultDispatcher-worker-1")
+                 if r["location"] == "DefaultDispatcher-worker-#")
     assert worker["stacks"] == plain["stacks"], (worker["stacks"], plain["stacks"])
-    disk = next(r for r in rows(named, "uninstrumented_cpu") if r["location"] == "BlockingIO-1")
+    disk = next(r for r in rows(named, "uninstrumented_cpu") if r["location"] == "BlockingIO-#")
     assert [e["frame"] for e in disk["stacks"]["leaf"]] == [
         "com.example.app.Disk.checksum | com.example.app.Disk.checksumLegacy"], disk["stacks"]
     names = named["environment"]["sampling"]["names"]

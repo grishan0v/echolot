@@ -51,6 +51,35 @@ def test_names_one_repeat_folds_together_add_their_threads() -> None:
           [(r["threads"], r["total_ms"]) for r in merged] == [(2, 30.0)], merged)
 
 
+def test_a_numbered_pool_is_one_row_of_all_its_threads(monkeypatch, tmp_path: Path) -> None:
+    """#845: one recording said `Threads 1` for a pool whose row added up many
+    workers, since the report folded the names after the query. The detector
+    groups by the fold now, so the row counts every worker, and one recording
+    says what a set of it says."""
+    from echolot import fixture, selftest
+    from echolot.analyze import analyze_trace
+    from echolot.config import Config
+    numbered = {tid: f"pool-1-thread-{n}" for n, tid in enumerate(fixture.POOL_TIDS, start=1)}
+    monkeypatch.setattr(fixture, "POOL_THREADS", {**fixture.POOL_THREADS, **numbered})
+    trace = tmp_path / "pool.perfetto-trace"
+    trace.write_bytes(fixture.pool())
+    analysed = analyze_trace(trace, Config(selftest.FIXTURE_CONFIG))
+    rows = next(d for d in analysed["detectors"] if d["id"] == "uninstrumented_cpu")["rows"]
+    pool = [r for r in rows if r["location"] == "pool-#-thread-#"]
+    check("the pool is one row, of its three workers",
+          len(pool) == 1 and pool[0]["threads"] == 3, rows)
+    import copy
+    one = report_mod.aggregate([copy.deepcopy(analysed)])
+    three = report_mod.aggregate([copy.deepcopy(analysed) for _ in range(3)])
+
+    def pool_of(rep: dict) -> dict:
+        det = next(d for d in rep["detectors"] if d["id"] == "uninstrumented_cpu")
+        return next(r for r in det["rows"] if r["location"] == "pool-#-thread-#")
+    check("one recording and a set say the same threads",
+          pool_of(one)["threads"] == pool_of(three)["threads"] == 3,
+          (pool_of(one), pool_of(three)))
+
+
 def test_a_row_from_before_the_column_merges_without_it() -> None:
     merged = report_mod.merge_rows([[pooled("DefaultDispatch", 60.0, None)]], ("location",), 1)
     check("no `threads` is invented for a report that did not count them",
