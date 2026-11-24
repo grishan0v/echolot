@@ -237,7 +237,11 @@ The commands you will reach for, so that `--help` is not a round trip:
 ```
 echolot doctor -q                                  three lines, four with Codex; the full run is about 10 KB
 echolot collect -c echolot.yml --hunt <n>          a round: the set before it moves aside,
-                                                   recorded under investigation <n>
+                                                   recorded under investigation <n>; a repeat
+                                                   that started warm is set aside, recorded again
+echolot status                                     its `starts` line: how each repeat of the set
+                                                   started, and what was set aside, read off disk.
+                                                   Never collect again to read that back
 echolot analyze <traces> -c echolot.yml --hunt <n> report → .echolot/out/ next to the config,
                                                    and a copy filed under <n> for compare
 echolot analyze … --hunt <n> -o <dir>              the same, elsewhere; it files a copy for

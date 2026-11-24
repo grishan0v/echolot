@@ -138,8 +138,10 @@ _FROM_COLLECT = tuple(c.key for c in CONDITIONS if c.source == "collect")
 # `compare`'s conditions, each read on its own (`kept`): `cooldown`, the
 # `runner.cooldown` the repeat waited for and the reading before it, or null
 # when it was off (#522); `markers_in_build`, the temporary markers `collect`
-# found in the build on the phone before it recorded (#536).
-_ALSO = ("cooldown", "markers_in_build")
+# found in the build on the phone before it recorded (#536); `launch`, how
+# the repeat started and what `collect` said under it (#619, see
+# `runner.launch_record`).
+_ALSO = ("cooldown", "markers_in_build", "launch")
 
 # What a detector's `@needs` source is fed by in the recording's config, so
 # that a difference there names the detectors that read it. Composable names

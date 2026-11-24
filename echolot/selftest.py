@@ -1451,6 +1451,109 @@ def _(report):
     assert not any("not a cold start" in s for s in said), said
 
 
+def _collect_starting(states: list[str], n: int, where: Path) -> tuple[list[dict], list[str]]:
+    """`runner.collect` of `n` repeats on a fake device whose launches find
+    the app as `states` says, one by one, the last for every launch after:
+    the recordings made, and what was said."""
+    from . import runner
+    package, serial = "com.example.app", "emulator-5554"
+    states = list(states)
+
+    def adb(args, stdin=None, timeout=120):
+        args = list(args)
+        text = " ".join(args[4:]) if args[3:4] == ["shell"] else " ".join(args)
+        if text == "adb devices":
+            return f"List of devices attached\n{serial}\tdevice\n\n"
+        if text.startswith("pm path"):
+            return f"package:/data/app/{package}/base.apk\n"
+        if text.startswith("dumpsys power"):
+            return ("  mWakefulness=Awake\n  mIsPowered=true\n  mStayOn=true\n"
+                    "    mShowingDream=false mDreamingLockscreen=false\n"
+                    "    isKeyguardShowing=false\n")
+        if text.startswith("am start -W"):
+            state = states.pop(0) if len(states) > 1 else states[0]
+            return f"Status: ok\nLaunchState: {state}\nTotalTime: 523\nComplete\n"
+        if args[3:4] == ["pull"]:
+            Path(args[-1]).write_bytes(b"a trace")
+        return ""
+
+    said: list[str] = []
+    real = runner._run
+    runner._run = adb
+    try:
+        made = runner.collect(package, where, n, name="run",
+                              section={"activity": f"{package}/.Main"}, log=said.append)
+    finally:
+        runner._run = real
+    return made, said
+
+
+@check("collect: a repeat that did not start cold is set aside and recorded again, "
+       "at most as many times more as the set has repeats")
+def _(report):
+    """The app was stopped, and the system had its process running again by
+    the launch: on an A51, 51 of 124 starts of a day came out WARM, each said
+    and none recorded again, and a block of five kept one to three cold
+    starts (#523). The warm trace went into the set, the next step's line
+    and the medians. It is kept apart now, under a name no glob of the set's
+    repeats takes, and the repeat is recorded again; a device that starts the
+    app after every stop ends the set short rather than recording forever.
+    """
+    from . import runner
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_starting(["COLD", "WARM", "COLD"], 2, Path(tmp))
+        names = [r["path"].name for r in made]
+        assert names == ["run_iter000.perfetto-trace", "run_iter001-warm.perfetto-trace",
+                         "run_iter001.perfetto-trace"], names
+        assert [bool(r.get("aside")) for r in made] == [False, True, False], made
+        assert not runner._ITERATION.match(names[1]), "a name the set's glob does not take"
+        assert any("repeat 2 is recorded again (1 of the 2 re-recordings" in s
+                   for s in said), said
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            _collect_starting(["COLD", "WARM"], 2, Path(tmp))
+            made = sorted(p.name for p in Path(tmp).glob("*.perfetto-trace"))
+        except runner.RunnerError as e:
+            raise AssertionError(f"a set with a cold start is not a failure: {e}") from e
+        assert made == ["run_iter000.perfetto-trace", "run_iter001-warm-2.perfetto-trace",
+                        "run_iter001-warm-3.perfetto-trace",
+                        "run_iter001-warm.perfetto-trace"], (
+            f"two repeats, two recordings more, and no more: {made}")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            _collect_starting(["WARM"], 1, Path(tmp))
+        except runner.RunnerError as e:
+            assert "none of the 2 recordings started cold" in str(e), e
+        else:
+            raise AssertionError("a set with no cold start at all ends in an error")
+
+
+@check("collect keeps how each repeat started beside its trace, and analyze leaves a "
+       "warm one out of a set of cold ones")
+def _(report):
+    """`collect` said per repeat whether it started cold, and said it only in
+    its output. An agent that had cut that output with `tail` recorded a whole
+    round of five again to read it back (#619). The launch state, the time,
+    the verdict and the lines said under the repeat are kept beside each
+    trace now, set aside or not, and go with it when its set is set aside;
+    `analyze`, given the warm trace among the cold ones, leaves it out by
+    what was kept rather than by a guess from the trace (#523).
+    """
+    from . import runner
+    from .main import _cold_only
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_starting(["COLD", "WARM", "COLD"], 2, Path(tmp))
+        kept = [runner.launch_record(r["path"]) for r in made]
+        assert [(k["repeat"], k["attempt"], k["state"], k["cold"]) for k in kept] == [
+            (1, 1, "COLD", True), (2, 1, "WARM", False), (2, 2, "COLD", True)], kept
+        under = [s.strip() for s in said if "not a cold start" in s]
+        assert kept[1]["notes"] == under and not kept[0]["notes"], (kept, said)
+        paths = [str(r["path"]) for r in made]
+        assert _cold_only(paths) == ([paths[0], paths[2]],
+                                     [{"trace": paths[1], "state": "WARM"}]), paths
+        assert _cold_only([paths[1]]) == ([paths[1]], []), "alone, it is read as given"
+
+
 @check("collect: a failed scenario command says the line that failed and what to do")
 def _(report):
     """Gradle's useful half is on stdout, and the message showed stderr.

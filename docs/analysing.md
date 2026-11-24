@@ -432,6 +432,14 @@ one recording; the first path is kept, a line on stderr and one under the
 report's Traces line name the others, and `same_recording` in `report.json`
 lists them. `Runs` is the number of distinct recordings.
 
+A trace `collect` set aside as not cold, given among cold ones, is left out
+the same way: `collect` stopped the app before it and found the process
+running again by the start, so it holds neither the process start nor
+`bindApplication`. `analyze` reads that from the account `collect` kept beside
+the trace, not from the trace, names it on stderr and under the Traces line,
+and lists it in `report.json` as `not_cold`. A set of such traces alone is
+read as given. See [launch mode](collecting.md#launch--we-drive-it).
+
 ### A set read side by side
 
 `analyze` reads the traces of a set at once, each in a trace_processor of its

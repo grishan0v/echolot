@@ -1028,6 +1028,19 @@ def same_recording_said(groups: list[list[str]]) -> str:
             f"{extra} fewer than the paths given.")
 
 
+def not_cold_said(left: list[dict[str, Any]], read: int) -> str:
+    """The sentence for the traces `analyze` left out as not cold (#523)."""
+    k = len(left)
+    named = ", ".join(f"`{Path(e['trace']).name}`" + (f" ({e['state']})" if e.get("state") else "")
+                      for e in left)
+    return (f"Left out: {named}. `collect` stopped the app before "
+            f"{'it' if k == 1 else 'each'} and found its process running again by "
+            f"the start, so {'it holds' if k == 1 else 'they hold'} neither the "
+            f"process start nor bindApplication. The numbers are over the other "
+            f"{read}. To read {'it' if k == 1 else 'them'}, analyze "
+            f"{'it' if k == 1 else 'them'} by name, alone.")
+
+
 def _traces_line(traces: list[str], limit: int = 8) -> str:
     """The files behind `Runs: N`, so a stranger among them is visible.
 
@@ -1762,6 +1775,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(f"Trace: `{report['trace']}`")
     if report.get("same_recording"):
         out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
+    if report.get("not_cold"):
+        out.append(f"> ⚠️ {not_cold_said(report['not_cold'], len(traces or [None]))}")
     if report.get("scenario"):
         out.append(f"Scenario: `{report['scenario']}`")
     if w.get("process"):
