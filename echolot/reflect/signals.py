@@ -396,18 +396,22 @@ def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
     clean = inst.get("cleanup_grep_clean")
     shell = inst.get("shell_edits", 0)
     # The tree outranks the transcript. What the agent typed, edited or
-    # restored with git is evidence of intent; whether the prefix is in the
-    # sources now is the fact, and it was read at report time.
+    # restored with git is evidence of intent; whether markers are in the
+    # sources now is the fact, and it was read at report time — counted the
+    # way `hunt` and `mark --remove` count them (`mark.Markers`), the prefix
+    # or the `echolot:mark` tag, in the whole tree (#749, #838).
     tree = inst.get("tree") or {}
     if tree.get("checked"):
         left = tree.get("files") or []
         if left:
+            outside = set(tree.get("outside") or [])
             return Signal("cleanup_balance", "warn",
-                          "the source tree still carries the prefix",
+                          "the source tree still carries temporary markers",
                           "Read off the checkout when this report was made, not "
                           "off the transcript: these files hold the temporary "
-                          "prefix now.",
-                          [{"file": p} for p in left],
+                          "prefix or a line tagged `echolot:mark` now.",
+                          [{"file": p, **({"outside_allowed": True} if p in outside else {})}
+                           for p in left],
                           f"Run: {_cleanup_grep(inst['prefix'])}; "
                           f"`echolot mark --remove` takes out what `mark --apply` wrote.")
         return Signal("cleanup_balance", "ok",
@@ -415,7 +419,7 @@ def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:
                       f"Read off the checkout when this report was made: "
                       f"{len(files)} file(s) were touched"
                       + (f", {shell} edit(s) through the shell" if shell else "")
-                      + ", and none holds the prefix now.")
+                      + ", and none holds a temporary marker now.")
     if rows:
         return Signal("cleanup_balance", "warn",
                       "temporary instrumentation may have been left behind",
