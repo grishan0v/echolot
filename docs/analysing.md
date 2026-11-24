@@ -197,6 +197,13 @@ is neither mapped nor counted, so that count is a floor: a wrapper of the
 project's own by any other name, called with a literal or a variable —
 `Traces.createTrace("OkHttp CALL $path")` is one.
 
+With `-c echolot.yml`, the map is followed by the config's own `domains:`
+entries that no Kotlin or Java string of the code holds, as comments, each
+with what the code has that reads like it. A marker taken out of the code
+stays in the map otherwise, and `analyze` lists it as absent from every
+window after it. The platform's sections are left out, as for the
+[anchors](collecting.md#anchors-the-code-no-longer-writes).
+
 ### When there is no instrumentation
 
 Then the output is not an empty section but a coverage report and the modules

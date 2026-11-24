@@ -138,6 +138,13 @@ run to run. Such an anchor needs a wildcard.
 **An anchor that did not match makes the report lie silently**, which is why
 the CLI puts `matches` into `window`. Check it before drawing conclusions.
 
+Before a round, `echolot` and `collect` hold each anchor against the code: a
+line marked `!` names one that no Kotlin or Java string holds, with what the
+code has that reads like it. Put that name in the config before `analyze` —
+ask the person first when it is `_source: confirmed_by_user`. One with
+nothing alike in the code is a question, a library's section or a marker
+gone: one recording and `echolot probe` on it answer it.
+
 ### `scenario.window`
 
 How the app opens is the one scenario whose window nobody has to name:

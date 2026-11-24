@@ -2144,13 +2144,15 @@ class Named:
     format's fixed start, a literal joined to more with `+`, the prefix on
     its own — and each one makes every name that starts with it. `files` is
     how many Kotlin and Java files there were: none means no code to hold
-    anything against.
+    anything against. `where` is the first place each of `exact` is written,
+    `path:line`, for a line that names a place to look (#500).
     """
 
     planted: dict[str, list[str]]
     exact: frozenset[str]
     heads: frozenset[str]
     files: int
+    where: dict[str, str] = field(default_factory=dict)
 
     def makes(self, name: str) -> bool:
         """Whether some string in the code can be this name."""
@@ -2176,6 +2178,7 @@ def named(root: Path, prefix: str = DEFAULT_PREFIX) -> Named:
     found: dict[str, list[str]] = {}
     exact: set[str] = set()
     heads: set[str] = set()
+    where: dict[str, str] = {}
     sources = domains_source_files(root)
     for p in sources:
         try:
@@ -2185,7 +2188,7 @@ def named(root: Path, prefix: str = DEFAULT_PREFIX) -> Named:
         if needle not in data:
             continue
         rel = _rel(p, root)
-        for line in data.decode("utf-8", errors="replace").split("\n"):
+        for number, line in enumerate(data.decode("utf-8", errors="replace").split("\n"), 1):
             tagged = TAG in line
             for m in literal.finditer(line):
                 text = m.group(1)
@@ -2200,7 +2203,8 @@ def named(root: Path, prefix: str = DEFAULT_PREFIX) -> Named:
                     heads.add(text)
                 else:
                     exact.add(text)
-    return Named(found, frozenset(exact), frozenset(heads), len(sources))
+                    where.setdefault(text, f"{rel}:{number}")
+    return Named(found, frozenset(exact), frozenset(heads), len(sources), where)
 
 
 # --- rendering -------------------------------------------------------------------

@@ -691,7 +691,40 @@ every repeat after it would record the same: the round stops there, with that
 reason and nothing kept. With `-n 1` the trace is kept and marked `[!]`. An
 end anchor that did not occur at all is marked and the round goes on, since a
 wrong name in the config reads the same; `echolot probe` on the trace says
-which.
+which, and the mark names the trace's slices that read like the anchor.
+
+### Anchors the code no longer writes
+
+Before the first repeat, in every mode, `collect` holds the scenario's
+anchors against the code, and `echolot` does the same for each scenario, on
+an `anchor` line marked `!`. A name the app writes is a string in its Kotlin
+or Java, so an anchor that no string there is, or can be put together into at
+run time, is said, with what the code has that reads like it:
+
+```text
+[!] end anchor `list_shown_mark` is in no Kotlin or Java string here; the code has
+`list_shown` (app/src/main/java/com/example/app/Marks.kt:4) — the traces are the
+scenario's whatever it is called: put the name right in echolot.yml before `analyze`
+```
+
+The platform's own sections are in no file of a project and are never said:
+`bindApplication`, an Activity's `activityStart` and `performCreate:…`,
+`Choreographer#doFrame*`, `reportFullyDrawn*`, RecyclerView's `RV …`,
+Compose's and `androidx.startup`'s. A name with the temporary markers' prefix
+that the code no longer has is said as one. Any other name the code does not
+hold, with nothing in it that reads like it, may be a library's: it is said
+as a question, with the command that answers it (one recording, then `echolot
+probe`), and no more once a report of the scenario has found it in its
+recordings. An end anchor that is still `scan`'s `?` is said whatever the
+code holds, and `next` says to pick it from one recording before recording
+five.
+
+None of this stops the round. The build on the phone is not the code, and a
+set recorded under a wrong name is still the scenario's: `analyze` cuts the
+window as it reads the traces, so the same set is read again once the name is
+right. When a report's recordings do not hold an anchor, its warning names
+their slices that read like it, `The trace holds list_shown, which reads like
+it`, where it used to send the reader to `probe`.
 
 Ctrl-C, or **Stop** in `echolot ui`, puts the phone back as a failure does
 and ends with one line, `collect interrupted after 2 of 5 repeats: their 2

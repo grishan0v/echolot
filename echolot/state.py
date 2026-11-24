@@ -21,6 +21,7 @@ from pathlib import Path, PurePath
 
 from . import codex, hosts, layer, plugin, recorder, runner
 from . import hunt as hunt_mod
+from .anchors import UNPICKED
 from .config import Config, ConfigError
 
 
@@ -95,6 +96,13 @@ def project_state(project: Path, config: str = "echolot.yml",
             # has a runner of its own (#501).
             st["config"]["runner"] = (str(cfg.runner.get("mode", "launch"))
                                       if cfg.runner else None)
+            # The anchors of that scenario `scan` left as a question: the
+            # step by hand is to record once and pick, not to record five
+            # times (#500).
+            st["config"]["unpicked"] = (
+                [] if cfg.scenario_window is not None else
+                [key for key, glob in (("start", cfg.scenario_start), ("end", cfg.scenario_end))
+                 if glob.strip() == UNPICKED])
             report_dir = cfg.report_dir
         except ConfigError as e:
             st["config"] = {"path": cfg_path, "error": str(e)}
@@ -221,7 +229,26 @@ def _report(rep: Path) -> dict | None:
         "echolot": _stamp(r.get("toolchain")),
         "window": window_warning(r.get("window")),
         "scenario": r.get("scenario") if isinstance(r.get("scenario"), str) else None,
+        # The anchors its recordings held: something writes those, the
+        # platform or a library, whatever the code says (#500).
+        "anchors": anchors_found(r.get("window")),
     }
+
+
+def anchors_held(project: Path, cfg: Config) -> set[str]:
+    """The anchors the selected scenario's last report found in its recordings."""
+    return set((_report(project / cfg.report_dir / "report.json") or {}).get("anchors") or ())
+
+
+def anchors_found(w: object) -> list[str]:
+    """The anchors a report's window found in its recordings, as written: a
+    list, as everything else `status` keeps of a report is plain data."""
+    if not isinstance(w, dict):
+        return []
+    return sorted({a["glob"] for a in (w.get("start_anchor"), w.get("end_anchor"))
+                   if isinstance(a, dict) and isinstance(a.get("glob"), str)
+                   and isinstance(a.get("matches"), int) and not isinstance(a["matches"], bool)
+                   and a["matches"] > 0})
 
 
 def _stamp(toolchain) -> str | None:
@@ -735,7 +762,30 @@ def _hunt_step(st: dict) -> str:
     if (st.get("collect") or {}).get("status") == "running":
         return (f"{_door(st)} hunt` — or by hand: wait for the running collect "
                 f"to finish (the collect line says how far it got)")
+    unpicked = (st.get("config") or {}).get("unpicked")
+    if unpicked:
+        return f"{_pick_step(st, unpicked)}; then {_door(st)} hunt`"
     return f"{_door(st)} hunt` — or by hand: {by_hand(st)[1]}"
+
+
+def _pick_step(st: dict, keys: list[str]) -> str:
+    """The step before any round, while an anchor is still `scan`'s `?`:
+    one recording, read with `probe` for the slice that ends the scenario.
+    Five recordings first, the line it replaced, were cut by no end (#500)."""
+    which = " and ".join(keys)
+    files = (st.get("traces") or {}).get("files")
+    shown = st.get("shown") or {}
+    base = shown.get("base") or ""
+    if files:
+        trace = (PurePath(base) / files[0]).as_posix() if base else files[0]
+        how = f"`echolot probe {shlex.quote(trace)}`"
+    else:
+        scenario = (st.get("config") or {}).get("scenario") if st.get("scenarios") else None
+        how = (f"`{collect_line_for(scenario, (st.get('config') or {}).get('runner'), shown=shown, n=1)}`, "
+               f"then `echolot probe` on its trace")
+    return (f"pick the {which} anchor first: {how}, and put the slice that "
+            f"{'opens and ends' if len(keys) > 1 else 'opens' if keys == ['start'] else 'ends'} "
+            f"the scenario in {_config_name(st)}")
 
 
 def refused_by_analyze(cfg: Config) -> None:
@@ -819,7 +869,8 @@ def _config_arg(shown: dict | None) -> str:
 
 
 def collect_line_for(scenario: str | None = None, runner: str | None = None,
-                     hunt: int | None = None, shown: dict | None = None) -> str:
+                     hunt: int | None = None, shown: dict | None = None,
+                     n: int = 5) -> str:
     """`echolot collect` for a scenario, named when the config has several.
 
     No `-n` for a macrobenchmark (`runner.mode: gradle`): its own
@@ -830,9 +881,9 @@ def collect_line_for(scenario: str | None = None, runner: str | None = None,
     run under it, and without it the run is outside any (#498).
 
     `shown` is how the config is named from where the line is run
-    (`shown_from`).
+    (`shown_from`). `n` is the repeats to ask for.
     """
-    count = "" if runner == "gradle" else " -n 5"
+    count = "" if runner == "gradle" else f" -n {n}"
     return f"echolot collect{_config_arg(shown)}{count}" + (
         f" --scenario {shlex.quote(scenario)}" if scenario else "") + _inside(hunt)
 
