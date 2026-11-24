@@ -12,9 +12,11 @@ over repeats; without them both are guessing.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 from dataclasses import dataclass
@@ -1183,8 +1185,10 @@ def launch_record(trace: Path) -> dict | None:
     `repeat` and `attempt` (2 and on: recorded again), `state` (`COLD`,
     `WARM`, `HOT`; None in command mode), `total_time_ms` from `am start -W`,
     `cold` (True: stopped, and the launch said COLD; False: stopped, and the
-    process was running again by the start; None: nothing to judge by), and
-    `notes`, the lines `collect` said under the repeat's own.
+    process was running again by the start; None: nothing to judge by),
+    `notes`, the lines `collect` said under the repeat's own, and
+    `no_launch`, True for a repeat that started nothing because nothing
+    stopped the app before it (#593, #856), absent otherwise.
 
     The output of a `collect` is cut by whoever reads it, and with the lines
     went the only record of which repeats were cold: an agent that had piped
@@ -1324,15 +1328,21 @@ def collect(package: str, out_dir: Path, iterations: int,
     note)`, a reason the round stops for, or a line worth saying. A round
     whose app drew no frame, or whose end never closed, used to be recorded
     whole and accepted, and only `analyze` said so, as a build too old for
-    its markers.
+    its markers. That trace is read before it takes the set's first name: it
+    waits in a folder of its own beside the set (`.<name>-first`), and the
+    set before moves once the check lets the trace in. Pulled under its name
+    with the set before moved for it, a round that then stopped had emptied
+    .echolot/traces of that set all the same, and filed it as a round the
+    investigation never got to follow (#857).
 
     Returned: every recording made, in order. In launch and command modes
     with a stop between repeats, one whose app was running again by its start
     carries `aside`: it was kept under a name of its own and its repeat
     recorded again (#523), and the caller leaves it out of the set. How each
     repeat started is kept beside its trace (`launch_record`, #619).
+    `progress` is told the names of those set aside as `not_cold`, so that
+    an interrupt can name them (#860).
     """
-    import contextlib
     import time
 
     from . import composenames, power, screen, stabilize
@@ -1556,7 +1566,11 @@ def collect(package: str, out_dir: Path, iterations: int,
     # first thing restored.
     switched = (composenames.Names(package, dev, run=_run, log=log) if names
                 else contextlib.nullcontext())
-    with stabilize.Settled(section, dev, run=_run, log=log, notify=tell) as settled, switched:
+    # Where the set's first trace waits for `check_first` (#857), swept away
+    # however the round ends: a stop, an error, Ctrl-C in the middle of it.
+    first = out_dir / f".{name}-first"
+    with stabilize.Settled(section, dev, run=_run, log=log, notify=tell) as settled, \
+            switched, _swept(first):
         cooling = settled.cooldown
         if settled.cooldown is not None and reset == "force-stop":
             log("  the app is stopped before each wait, and stopped again if it "
@@ -1564,11 +1578,17 @@ def collect(package: str, out_dir: Path, iterations: int,
         # Which recording of the repeat this is: 2 and on, recorded again.
         attempt = 0
         while kept + short < iterations:
-            # The set's names run on without a gap: a recording set aside
-            # leaves its name to the one that records the repeat again.
-            i = kept
+            # Which repeat of the set this is, counted over every one it had:
+            # a repeat the spent re-recordings left short is one of them, and
+            # counted with the kept alone, the next recording was taken for
+            # the same repeat again, a fifth recording of repeat 1 after the
+            # line that said none was left, and the last never came (#858).
+            i = kept + short
             attempt += 1
-            out = out_dir / f"{name}_iter{i:03d}.perfetto-trace"
+            # The set's names run on without a gap: a recording set aside
+            # leaves its name to the one that records the repeat again, and
+            # a repeat left short leaves it to the next.
+            out = out_dir / f"{name}_iter{kept:03d}.perfetto-trace"
             # HOME, the force-stop and a wait for the process to be gone (see
             # _stop), before the device cools and not after (#611). Cooled
             # with the app in front, a job it scheduled during the wait was
@@ -1687,15 +1707,23 @@ def collect(package: str, out_dir: Path, iterations: int,
                 notes.append(_elsewhere_line(ended, asked))
             if mode == "launch" and not restarted:
                 ended_before = ended
-            # A trace is recorded and about to take the first name: the moment
-            # the previous set has to make room, and not a moment earlier.
-            make_room()
+            # The set's first trace, read before it takes its name: pulled
+            # beside the set, and the set before stays until the check lets
+            # the trace in (#857).
+            checking = not restarted and not checked and check_first is not None
+            # Any other trace is recorded and about to take its name: the
+            # moment the previous set has to make room, and not a moment
+            # earlier. A recording set aside is the round's own, and left
+            # beside the set before it would be taken for one of that set's.
+            if not checking:
+                make_room()
             if restarted:
                 # Out of the set, under a name no glob of its repeats takes,
                 # and kept: it is what the system did to the app (#523).
                 info["aside"] = True
                 out = _aside_path(out, state)
-            info.update(_pull(dev, out))
+            pulled = first / out.name if checking else out
+            info.update(_pull(dev, pulled))
             facts = {
                 "runner": mode, "reset_policy": reset, "app_at_stop": was,
                 **device_settings,
@@ -1720,9 +1748,13 @@ def collect(package: str, out_dir: Path, iterations: int,
                     "activity": info.get("activity"),
                     "asked": asked,
                     "notes": notes,
+                    # With nothing stopping the app, `am start -W` measured
+                    # no start, and the trace holds no launch (#593): the
+                    # next step's line leaves it out (#856).
+                    **({"no_launch": True} if info.get("no_launch") else {}),
                 }}
             info["repeat"], info["asked"] = i + 1, asked
-            recording.write(out, facts)
+            recording.write(pulled, facts)
             results.append(info)
 
             extra = ""
@@ -1735,6 +1767,7 @@ def collect(package: str, out_dir: Path, iterations: int,
             for note in notes:
                 log("      " + note)
             if restarted:
+                tell(not_cold=[r["path"].name for r in results if r.get("aside")])
                 if again_used < spare:
                     again_used += 1
                     log(f"      set aside, out of the set: repeat {i + 1} is recorded "
@@ -1742,6 +1775,8 @@ def collect(package: str, out_dir: Path, iterations: int,
                         f"is given)")
                 else:
                     short += 1
+                    # The next recording is the next repeat's, its first.
+                    attempt = 0
                     log(f"      set aside, out of the set; the {spare} re-recordings "
                         f"the set is given are spent, so it ends one cold start short")
                 continue
@@ -1751,21 +1786,27 @@ def collect(package: str, out_dir: Path, iterations: int,
             # round in which the scenario never reached its screen stops here,
             # with the phone still in hand (#536). The first trace of the
             # set, not a recording set aside before it.
-            if not checked and check_first is not None:
+            if checking:
                 checked = True
-                stop, note = check_first(out)
+                stop, note = check_first(pulled)
                 if stop and iterations == 1:
                     # The one trace there is: kept, to look at.
                     note = (f"{stop}: the scenario did not get where it was going. "
                             f"Look at the phone before recording more")
                 elif stop:
-                    out.unlink(missing_ok=True)
-                    recording.sidecar(out).unlink(missing_ok=True)
+                    # The trace goes with its folder, and the set before was
+                    # never moved: .echolot/traces is as the round found it.
                     raise RunnerError(
-                        f"repeat 1 of {iterations}: {stop}. The scenario did not get "
-                        f"where it was going, and nothing more was recorded. Look at "
-                        f"the phone: an error screen, no network, a dialog in the way. "
-                        f"Once it shows the scenario's screen, collect again.")
+                        f"repeat {i + 1} of {iterations}: {stop}. The scenario did not "
+                        f"get where it was going, and nothing more was recorded. Look "
+                        f"at the phone: an error screen, no network, a dialog in the "
+                        f"way. Once it shows the scenario's screen, collect again.")
+                # Let in: the set before makes room, and the trace and its
+                # account take the set's first name.
+                make_room()
+                pulled.replace(out)
+                recording.sidecar(pulled).replace(recording.sidecar(out))
+                info["path"] = out
                 if note:
                     log(f"      [!] {note}")
                     notes.append(f"[!] {note}")
@@ -1995,6 +2036,15 @@ def _launch(device: str, activity: str) -> dict:
     if error:
         info["launch_error"] = error
     return info
+
+
+@contextlib.contextmanager
+def _swept(folder: Path):
+    """`folder` gone when the block ends, however it ends."""
+    try:
+        yield
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def _pull(device: str, out_path: Path) -> dict:

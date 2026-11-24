@@ -3336,15 +3336,18 @@ def cmd_collect(args) -> int:
              if isinstance(r.get("total_time_ms"), int)]
     times = [t for t in timed if t > 0]
     # Without a stop between repeats, the app was still in front and nothing
-    # started: the traces look recorded and hold no launch (#593).
+    # started: the traces look recorded and hold no launch (#593). The
+    # account beside each says so, and `next` leaves them out (#856).
     idle = [r for r in results if r.get("no_launch")]
     if idle:
         names = ", ".join(r["path"].name for r in idle)
+        one = len(idle) == 1
         print(f"\n[!] {len(idle)} of {len(results)} repeats started nothing: with "
               f"runner.reset_policy: none the app was still in front, and "
-              f"{'this trace holds' if len(idle) == 1 else 'these traces hold'} no "
-              f"launch ({names}). Leave {'it' if len(idle) == 1 else 'them'} out of "
-              f"analyze, or record cold starts with reset_policy: force-stop.",
+              f"{'this trace holds' if one else 'these traces hold'} no "
+              f"launch ({names}). Leave {'it' if one else 'them'} out of "
+              f"analyze{', as the `next` line of `echolot status` does' if len(idle) < len(results) else ''}, "
+              f"or record cold starts with reset_policy: force-stop.",
               file=sys.stderr)
     elif len(times) < len(timed):
         print(f"\nam start -W: {len(timed) - len(times)} of {len(timed)} "
@@ -3474,7 +3477,12 @@ def _boot_said(rows: list[dict] | None) -> str | None:
 
 def _interrupted_line(state: dict, out_dir: Path, project: Path, aside: list[Path]) -> str:
     """What `collect` says when it is interrupted: how far it got, and where
-    the traces are."""
+    the traces are.
+
+    The recordings set aside as not cold are named (`not_cold`, as the runner
+    told the progress): interrupted while repeat 1 was recorded again, the
+    line said no trace was kept, with the warm one in .echolot/traces (#860).
+    """
     where = _shown_path(out_dir, project)
     done, total = state.get("done") or 0, state.get("iterations")
     if not total:
@@ -3482,12 +3490,19 @@ def _interrupted_line(state: dict, out_dir: Path, project: Path, aside: list[Pat
         # are gathered only once it has finished.
         return ("collect interrupted while the macrobenchmark ran: no trace was "
                 "collected")
+    warm = [str(n) for n in state.get("not_cold") or []]
+    one = len(warm) == 1
+    named = (f"{'the recording' if one else f'the {len(warm)} recordings'} set aside as "
+             f"not cold {'is' if one else 'are'} kept")
     if done:
         return (f"collect interrupted after {done} of {total} repeats: "
                 f"{'its trace is' if done == 1 else f'their {done} traces are'} "
-                f"kept in {where}")
+                f"kept in {where}" + (f"; {named} there too: {', '.join(warm)}" if warm else ""))
     before = (f"; the set that was there before is in {_shown_path(aside[0], project)}"
               if aside else "")
+    if warm:
+        return (f"collect interrupted before the first of {total} repeats was kept: "
+                f"{named} in {where}: {', '.join(warm)}{before}")
     return f"collect interrupted before the first of {total} repeats was recorded: no trace was kept{before}"
 
 

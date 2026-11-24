@@ -124,7 +124,9 @@ def project_state(project: Path, config: str = "echolot.yml",
     sets: dict[str, float] = {}
     for d in (traces_dir.iterdir() if traces_dir.is_dir() else []):
         try:
-            if not d.is_dir() or d.is_symlink():
+            # `.<scenario>-first` is the first trace of a collect in flight,
+            # waiting for its check (#857), and no earlier round.
+            if not d.is_dir() or d.is_symlink() or d.name.startswith("."):
                 continue
             held = [f.stat().st_mtime for pat in ("*.perfetto-trace", "*.pftrace")
                     for f in d.glob(pat)]
@@ -136,16 +138,17 @@ def project_state(project: Path, config: str = "echolot.yml",
     # every scenario's set side by side, and the next step names this one's
     # alone.
     scenario = (st.get("config") or {}).get("scenario")
-    mine = sorted(f".echolot/traces/{p.name}" for p in stamps
-                  if (m := runner._ITERATION.match(p.name))
-                  and m.group("scenario") == scenario) if scenario else None
+    every = _repeats(stamps, scenario) if scenario else None
+    # Those that recorded a launch: a repeat that started nothing, with
+    # nothing stopping the app before it, is left out of the step (#856).
+    mine = launched(every, traces_dir) if every is not None else None
     st["traces"] = {"dir": traces_dir, "count": len(stamps),
                     "scenario": None if mine is None else len(mine),
                     "files": mine,
                     "newest": max(stamps.values(), default=None),
                     "sets": len(sets),
                     "last_set": max(sets, key=lambda k: sets[k]) if sets else None}
-    st["starts"] = starts(list(stamps), scenario, mine) if mine is not None else None
+    st["starts"] = starts(list(stamps), scenario, every, mine) if every is not None else None
     st["collect"] = collect_state(project)
 
     st["report"] = _report(project / report_dir / "report.json")
@@ -159,9 +162,7 @@ def project_state(project: Path, config: str = "echolot.yml",
         st["scenarios"] = []
         for name in loaded.scenarios:
             loaded.select(name)
-            files = sorted(f".echolot/traces/{p.name}" for p in stamps
-                           if (m := runner._ITERATION.match(p.name))
-                           and m.group("scenario") == name)
+            files = launched(_repeats(stamps, name), traces_dir)
             st["scenarios"].append({
                 "name": name, "focus": name == focus, "files": files,
                 "own_thresholds": bool(loaded.scenario_overrides),
@@ -299,11 +300,39 @@ def _holds(value: object, kind: type) -> bool:
     return isinstance(value, kind)
 
 
-def starts(traces: list[Path], scenario: str, files: list[str]) -> dict | None:
-    """How the repeats of the scenario's set started, and which recordings of
-    it were set aside as not cold, from what `collect` kept beside each
-    (#619); None when it kept nothing of the kind, as for a set it recorded
-    before it kept this, or a trace it did not record.
+def _repeats(stamps: dict[Path, float] | list[Path], scenario: str) -> list[str]:
+    """Every repeat `collect` wrote of `scenario` here, by name, in order."""
+    return sorted(f".echolot/traces/{p.name}" for p in stamps
+                  if (m := runner._ITERATION.match(p.name))
+                  and m.group("scenario") == scenario)
+
+
+def launched(files: list[str], traces_dir: Path) -> list[str]:
+    """The repeats among `files` to read: all but those `collect` kept as
+    having started nothing (`no_launch`, #593), from among others.
+
+    `reset_policy: none` stops nothing between repeats, so from the second
+    one on the app is still in front and `am start -W` starts nothing.
+    `collect` marked those repeats and said to leave them out of `analyze`,
+    and the `next` line named every one of them all the same, so an agent
+    that followed it read traces with no launch into the medians (#856). A
+    set that is all such repeats is offered as it is: there is no launch to
+    read instead, and the `starts` line says what they hold.
+    """
+    idle = {f for f in files
+            if (runner.launch_record(traces_dir / Path(f).name) or {}).get("no_launch") is True}
+    rest = [f for f in files if f not in idle]
+    return rest or list(files)
+
+
+def starts(traces: list[Path], scenario: str, files: list[str],
+           offered: list[str] | None = None) -> dict | None:
+    """How the repeats of the scenario's set started, which of them started
+    nothing, and which recordings of it were set aside as not cold, from what
+    `collect` kept beside each (#619); None when it kept nothing of the kind,
+    as for a set it recorded before it kept this, or a trace it did not
+    record. `offered` is the repeats the next step names (`launched`): those
+    of `files` not among them are said to be left out of it (#856).
 
     Read off the files, with no device: the round's output is gone by the
     time anyone asks, cut by `tail` or scrolled away, and recording the
@@ -311,10 +340,13 @@ def starts(traces: list[Path], scenario: str, files: list[str]) -> dict | None:
     """
     by_name = {p.name: p for p in traces}
     states: list[str | None] = []
+    idle = []
     for f in files:
         rec = runner.launch_record(by_name.get(Path(f).name, Path(f)))
         if rec is not None:
             states.append(rec.get("state") or None)
+            if rec.get("no_launch") is True:
+                idle.append({"name": Path(f).name, "state": rec.get("state")})
     aside = []
     for p in sorted(traces, key=lambda p: p.name):
         m = runner._ASIDE.match(p.name)
@@ -323,12 +355,19 @@ def starts(traces: list[Path], scenario: str, files: list[str]) -> dict | None:
             aside.append({"name": p.name, "state": rec.get("state")})
     if not aside and not any(states):
         return None
-    return {"scenario": scenario, "repeats": len(files), "states": states, "aside": aside}
+    return {"scenario": scenario, "repeats": len(files), "states": states, "aside": aside,
+            "no_launch": idle,
+            "left_out": offered is not None and len(offered) < len(files)}
 
 
 def starts_line(st: dict) -> str | None:
     """The `starts` line of `status`: the launch state of each repeat in the
-    scenario's set, counted, and the recordings set aside, named (#619)."""
+    scenario's set, counted, the repeats that started nothing, named, and the
+    recordings set aside, named (#619).
+
+    A round that kept no repeat, every recording set aside, says so: the
+    count was empty, and the line read `startup:  · set aside` (#860).
+    """
     s = st.get("starts")
     if not s:
         return None
@@ -337,14 +376,23 @@ def starts_line(st: dict) -> str | None:
     bits = [f"{n} {state or 'with no launch state'}" for state, n in counts.most_common()]
     if s["repeats"] > len(s["states"]):
         bits.append(f"{s['repeats'] - len(s['states'])} recorded before collect kept it")
-    line = f"{s['scenario']}: " + ", ".join(bits)
+    line = f"{s['scenario']}: " + (", ".join(bits) or "no repeat kept")
+    idle = s.get("no_launch") or []
+    if idle:
+        left = ", left out of `next`" if s.get("left_out") else ""
+        line += f" · started nothing{left}: {_named(idle)}"
     aside = s["aside"]
     if aside:
-        shown = [f"{a['name']}" + (f" ({a['state']})" if a.get("state") else "")
-                 for a in aside[:3]]
-        more = f" and {len(aside) - 3} more" if len(aside) > 3 else ""
-        line += f" · set aside, not cold: {', '.join(shown)}{more}"
+        line += f" · set aside, not cold: {_named(aside)}"
     return line
+
+
+def _named(recordings: list[dict], most: int = 3) -> str:
+    """The first `most` recordings by name, each with its launch state."""
+    shown = [f"{a['name']}" + (f" ({a['state']})" if a.get("state") else "")
+             for a in recordings[:most]]
+    more = f" and {len(recordings) - most} more" if len(recordings) > most else ""
+    return ", ".join(shown) + more
 
 
 def collect_state(project: Path) -> dict | None:

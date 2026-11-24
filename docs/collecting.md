@@ -34,7 +34,11 @@ did not.
 The set moves when the first new trace is about to take its place, and not
 before. A `collect` that stops earlier — no device, a typo in the mode, a
 gradle build that fails, a benchmark that writes nothing — leaves it where it
-was, so the traces line of `echolot` and the next `analyze` still see it.
+was, so the traces line of `echolot` and the next `analyze` still see it. In
+launch and command modes the first trace of the set is read before it takes
+its name ([While it runs, and when it fails](#while-it-runs-and-when-it-fails)):
+it waits beside the set in `.<scenario>-first/`, and a round that stops on it,
+or is interrupted before it is let in, leaves the set where it was too.
 Everything of this scenario moves, a probe capture saved beside the set
 included; another scenario's traces stay, and so do those of a scenario whose
 name merely begins with this one's: re-recording `startup` leaves
@@ -87,12 +91,15 @@ command mode) and `total_time_ms`, `cold` (`true` for a stopped app that
 started cold, `false` for one that did not, `null` where there is nothing to
 judge by), `activity` and `asked`, the activity the launch ended on as `am
 start -W` named it and the one it started (`null` in command mode; see
-[A launch that ended elsewhere](#a-launch-that-ended-elsewhere)), and `notes`,
-the lines `collect` printed under the repeat. Before,
+[A launch that ended elsewhere](#a-launch-that-ended-elsewhere)), `notes`,
+the lines `collect` printed under the repeat, and `no_launch: true` on a
+repeat that started nothing with `reset_policy: none`. Before,
 they were in its output alone, and an agent that had cut that output with
 `tail` recorded a whole round again to read them back. `echolot` reads them
 off the set with no device and prints a `starts` line:
 `startup: 5 COLD · set aside, not cold: startup_iter001-warm.perfetto-trace (WARM)`.
+A round that kept no repeat at all says `startup: no repeat kept · set aside,
+not cold: …`.
 
 ## Three modes
 
@@ -135,7 +142,10 @@ reset between repeats, and that is not a warm start: the app is still in front
 from the repeat before, so `am start -W` has nothing to start and only the
 first repeat can measure one. `collect` says so before it records more than
 one, marks each repeat that started nothing with `[!]`, and ends with a `[!]`
-line that names those traces: they hold no launch.
+line that names those traces: they hold no launch. Their accounts say so
+(`no_launch`), and `echolot`'s `next` line leaves them out of the `analyze`
+it offers, while a repeat that recorded a launch is there to read:
+``startup: 2 UNKNOWN (0), 1 COLD · started nothing, left out of `next`: …``.
 
 HOME comes first because the app is still on screen from the repeat before.
 Stopped there, an app whose activity is bound to a service in a second
@@ -180,7 +190,9 @@ it out, and it moves with its set when the set is set aside.
 A set is given as many recordings more as it has repeats, and no more: a
 device that starts the app again after every stop would otherwise be
 recorded forever. Past them, a repeat that is not cold leaves the set one
-cold start short. The line at the end names every recording set aside and
+cold start short, and the next recording is the next repeat's: `[2/5]` after
+the line that says they are spent, with `repeat: 2, attempt: 1` in its
+account. The line at the end names every recording set aside and
 says whether the set is whole: `Each was recorded again, and the set holds 5
 cold starts`, or `The set holds 3 cold starts of the 5 asked for`. A set with
 no cold start at all is an error, exit 2, that names the recordings set
@@ -737,7 +749,10 @@ it records the rest, with the window `analyze` would cut. When the app drew
 no frame in it, or the end anchor opened and never closed, the scenario did
 not reach its screen (no network, an error screen, a dialog in the way), and
 every repeat after it would record the same: the round stops there, with that
-reason and nothing kept. With `-n 1` the trace is kept and marked `[!]`. An
+reason and nothing kept. The trace waits for this reading beside the set, and
+the set from before moves only once it is let in: a round that stops here
+leaves `.echolot/traces` as it found it. With `-n 1` the trace is kept and
+marked `[!]`. An
 end anchor that did not occur at all is marked and the round goes on, since a
 wrong name in the config reads the same; `echolot probe` on the trace says
 which, and the mark names the trace's slices that read like the anchor.
@@ -779,6 +794,10 @@ Ctrl-C, or **Stop** in `echolot ui`, puts the phone back as a failure does
 and ends with one line, `collect interrupted after 2 of 5 repeats: their 2
 traces are kept in .echolot/traces`, and exit code 130. A trace whose copy
 from the phone was cut short is deleted, so the traces kept are whole ones.
+The recordings set aside as not cold are named on the same line, and when no
+repeat was kept yet they are what it names: `collect interrupted before the
+first of 5 repeats was kept: the recording set aside as not cold is kept in
+.echolot/traces: startup_iter000-warm.perfetto-trace`.
 
 The run log, `.echolot/log/runs.jsonl`, keeps the same cause and fix at the
 head of the run's `error`, followed by as much of the full message as fits in
