@@ -58,6 +58,10 @@ Codex и Cursor — это просто текст: четыре скилла, �
   разрешённых в `instrumentation.allowed`. Команда `echolot mark --remove`
   удаляет их.
 
+[`echolot uninit`](agent-layer.md#удаление-echolot-uninit) удаляет то, что
+записал `init`, и маркеры, а с `--data` — ещё конфиг и `.echolot/`; сначала
+показывает, что именно удалит.
+
 Вне проекта:
 
 - `~/.local/share/perfetto/prebuilts/`, где после скачивания хранится

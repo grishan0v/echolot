@@ -236,6 +236,87 @@ everything `init` wrote kept from git:
 
 Cursor, Copilot and Gemini CLI were not checked.
 
+### Taking it out: `echolot uninit`
+
+```bash
+echolot uninit              # the plan; on a terminal it asks before it removes anything
+echolot uninit --yes        # without asking — what an agent or a script runs
+echolot uninit --dry-run    # the plan alone
+```
+
+`init` writes into more places than anyone keeps in their head, and a missed
+one is a stale instruction an agent keeps following. `uninit` is `init` read
+backwards, with `init`'s rules. It takes out:
+
+- **The temporary markers** in the sources, the lines `mark --apply` wrote,
+  the way `mark --remove` takes them out. A line that carries the tag and
+  something else stays and is named with its file and line, as `mark
+  --remove` names it. A phone still runs the build with the markers until the
+  app is built and installed again, and `uninit` says so.
+- **The layer**: every file of `.claude/` that is what `init` wrote — the
+  template's bytes, or the hash the manifest recorded when `init` wrote it —
+  and the manifest. A file edited here stays and is named; `--all` takes it,
+  as `init --all` overwrites it. While one stays, the manifest stays with it.
+  The manifest's hashes are what let a layer a newer echolot wrote go cleanly:
+  `init` refuses that layer so as not to roll it back, but taking out what the
+  newer release wrote, as it wrote it, rolls nothing back.
+- **The permission** in `.claude/settings.json` and
+  `.claude/settings.local.json`: `Bash(echolot:*)` and nothing else. An
+  `allow` list or a `permissions` key that taking it out leaves empty goes
+  too; one that was empty before stays. The file goes when nothing else was in
+  it. When the last commit holds the same settings, its bytes go back, so the
+  layout `init` wrote the merged file in goes as well. A file that does not
+  parse is named and left alone, as `init` leaves it.
+- **The section between `<!-- echolot -->` and `<!-- /echolot -->`** in
+  `AGENTS.md`, `GEMINI.md` and `.github/copilot-instructions.md`, whichever
+  agents are chosen now. The file goes when the section was all of it;
+  otherwise the lines around it stay as they were, line endings included.
+  A section from before the end marker existed goes when the file is exactly
+  what that echolot wrote. Edited since, it stays: where it ends is not known.
+- **Cursor's rule** `.cursor/rules/echolot.mdc`. One whose frontmatter was
+  edited here stays whole until `--all`, rather than becoming a header with no
+  rule under it.
+- **Codex's rule** `.codex/rules/echolot.rules`, when it is what an echolot
+  wrote; an edited one stays until `--all`. Inside Codex's sandbox `.codex/` is
+  read-only, and `uninit` says to run it outside.
+- **The `.gitignore` lines** `init` appended, with their comment, and **the
+  block in git's exclude file** after `init --private`. Only this project's
+  lines leave the block. The block stays whole while another checkout of the
+  repository has a private install, since it keeps that install from git
+  too.
+- **The saved choice of agents**, `.echolot/hosts.json`, and the folders
+  `init` made, once they are empty.
+
+After `init --private`, `uninit` writes no file git tracks, as that install
+wrote none: a permission or a section there is the team's, and it is named.
+
+What stays unless asked:
+
+- **The record of the work.** `.echolot/` with traces, reports or an
+  investigation in it stays, with its run log, and so does the `.gitignore`
+  line that keeps it from git: taking that line away beside a folder of
+  traces is how they reach a commit. A `.echolot/` holding only the saved
+  choice and the run log goes with the rest.
+- **The config**, `echolot.yml`, and `local.yml`.
+
+`--data` takes all three, and the `.gitignore` lines with them.
+
+`uninit` refuses while a job of [`echolot ui`](ui.md) is running in the
+project, since it writes into what `uninit` takes apart. A run that took
+`.echolot/` out leaves no line in the run log, which would bring the folder
+back.
+
+`uninit` touches nothing outside the project. It ends with what echolot
+keeps elsewhere and how to remove it: the command itself (`pipx uninstall
+echolot`), trace_processor under `~/.local/share/perfetto/prebuilts/`,
+`~/.cache/echolot/`, and the plugin where an agent has it. It also names
+copies of echolot's skills that Codex's `/import` or a person made in another
+agent's folder, and leaves them: they are not echolot's to delete.
+
+`tests/test_uninit.py` holds the claim to one line of `git status`: after
+`init` with every agent chosen, or `init --private`, and then `uninit`, git
+shows nothing, and every file holds the bytes it held before.
+
 ## Why a CLI and not an MCP server
 
 - MCP tools sit in the context permanently, even when unused — a tax on every
@@ -466,6 +547,37 @@ refused, and crash with the index still locked, so the retry stops at
 `index.lock: File exists`. Ubuntu 22.04 ships git 2.34.1 and the git-scm.com
 installer for macOS 2.33.0; git from Xcode's command line tools or Homebrew is
 new enough. Codex installs the plugin with old git as well (#205).
+
+A linked git worktree is the natural place to try the plugin without
+touching the main checkout, and `--scope local` did not stay in one. This is
+Claude Code's behaviour, not echolot's, seen with its CLI on macOS installing
+echolot 0.17.0 (#597):
+
+```bash
+cd ~/work/app-worktree      # a linked worktree of ~/work/app
+claude plugin marketplace add <path to an echolot clone> --scope local
+claude plugin install echolot@echolot --scope local
+```
+
+Both commands said the plugin was declared in local settings. The
+declaration, `extraKnownMarketplaces.echolot` and
+`enabledPlugins["echolot@echolot"]`, went into the main checkout's
+`~/work/app/.claude/settings.local.json`, and the worktree got no
+`settings.local.json` at all. `~/.claude/plugins/installed_plugins.json`
+recorded the install with the worktree as its `projectPath`. So the plugin
+was on for every session in the main checkout, which had the `.claude/` layer
+from `echolot init`, and Claude Code listed the skills twice there:
+`/echolot` and `/echolot:echolot`.
+
+Claude Code's own page on plugin scopes says only that the local scope is
+one repository's `.claude/settings.local.json`, and nothing about worktrees.
+So, to try the plugin in one worktree alone, use a separate clone; after a
+local install from a worktree, look at the main checkout's
+`.claude/settings.local.json`. In the case above the two keys were taken out
+of it by hand. `echolot` reads the same places: it counts the plugin as
+installed for a project when `installed_plugins.json` names that project or
+its main checkout. `echolot uninit` leaves those keys alone, since they are
+Claude Code's and not `init`'s, and says where the plugin is on.
 
 An upgrade is `pipx upgrade echolot`, and then the plugin: `claude plugin
 marketplace update echolot` and `claude plugin update echolot@echolot`, which

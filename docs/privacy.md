@@ -57,6 +57,10 @@ In the project:
   that `instrumentation.allowed` permits. `echolot mark --remove` takes them
   out.
 
+[`echolot uninit`](agent-layer.md#taking-it-out-echolot-uninit) takes out
+what `init` wrote and the markers, and with `--data` the config and
+`.echolot/` as well; it shows what it will remove first.
+
 Outside the project:
 
 - `~/.local/share/perfetto/prebuilts/`, where trace_processor is kept once it
