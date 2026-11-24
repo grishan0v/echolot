@@ -1074,6 +1074,20 @@ twice per run instead of once is a finding even when no detector row moved.
 `summary.markers_moved` counts the ones that moved by time or calls; in
 `comparison.md` they are the **Markers** section.
 
+**`names`** is the slice names of the window that are in every run of one
+side and in no run of the other — `after` and `before`, each with its `runs`,
+the other side's `other` (`0/n`), `total_ms` a run, `max_ms` and `threads`.
+No detector reads them, so no row moves for them, and they are often the one
+sign of what a change did: a busy loop with no section of its own gave no row
+on either side, and the one name only the slow build had was the JIT
+compilation of the method the loop is in — `JIT compiling void
+com.example.app.feature.ListViewModel.prepare() …`, which is where to look.
+A new async section, binder call or thread shows up the same way. Numbers in
+names, and the APK's install directory, are folded; a name the other side ran
+for any time at all is not listed. Three runs a side at least, or `too_few`
+says nothing was looked for. `comparison.md` shows ten a side as **Names on
+one side only**; `echolot compare … --names` prints every one.
+
 **`matched_by`** is `exact` or `family`. Rows are paired by name first and by
 name family second — `arch_disk_io_0` and `arch_disk_io_3` are one pool.
 The family pass only fires when exactly one row on each side is unmatched;
