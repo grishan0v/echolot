@@ -324,3 +324,26 @@ def test_a_block_without_its_end_is_left_for_a_person(tmp_path: Path, capsys) ->
           and repo.exclude.read_text(encoding="utf-8") == mine, said)
     check("and --shared leaves it too", not exclude.remove(repo)
           and repo.exclude.read_text(encoding="utf-8") == mine)
+
+
+def test_an_exclude_file_that_is_not_utf8_keeps_its_bytes(tmp_path: Path, capsys) -> None:
+    """One Latin-1 `é` in a person's comment stopped `init --private`
+    halfway with a codec error that named no file: the layer written,
+    nothing kept from git, and `init --shared` stopped the same way (#739).
+    The file's bytes, and its line endings, now pass through as they are."""
+    project = _repo(tmp_path / "app")
+    repo = exclude.find(project)
+    theirs = repo.exclude.read_bytes() + b"# caf\xe9 notes\r\n*.swp\r\n"
+    repo.exclude.write_bytes(theirs)
+
+    _init(project, capsys, "--private", "--for", "claude")
+    check("git shows nothing", _status(project) == [], _status(project))
+    check("the person's bytes are where they were",
+          repo.exclude.read_bytes().startswith(theirs), repo.exclude.read_bytes())
+    check("and echolot's block follows them", exclude.read(repo), exclude.read(repo))
+    check("`echolot` says private", layer.PRIVATE_NOTE in layer.one_line(project)[1],
+          layer.one_line(project))
+
+    _init(project, capsys, "--shared")
+    check("--shared takes the block out, and leaves exactly the person's bytes",
+          repo.exclude.read_bytes() == theirs, repo.exclude.read_bytes())

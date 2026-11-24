@@ -200,10 +200,29 @@ def _broken(repo: Repo) -> str:
             f"again.")
 
 
+def _load(path: Path) -> str:
+    """The exclude file's text, byte for byte.
+
+    Git reads it as bytes, and a person's comment may be in any encoding:
+    one Latin-1 `é` stopped `init --private` halfway with a codec error
+    that named no file, the layer written and nothing kept from git, and
+    `init --shared` stopped the same way (#739). Bytes that are not UTF-8
+    are carried through as they are, and so are the file's line endings.
+    """
+    with path.open(encoding="utf-8", errors="surrogateescape", newline="") as f:
+        return f.read()
+
+
+def _save(path: Path, text: str) -> None:
+    """Write what `_load` read, with the same bytes outside echolot's block."""
+    with path.open("w", encoding="utf-8", errors="surrogateescape", newline="") as f:
+        f.write(text)
+
+
 def read(repo: Repo) -> list[str] | None:
     """The block's lines, or None when there is no block."""
     try:
-        text = repo.exclude.read_text(encoding="utf-8")
+        text = _load(repo.exclude)
         span = _span(text)
     except (OSError, BrokenBlock):
         return None
@@ -215,7 +234,7 @@ def read(repo: Repo) -> list[str] | None:
 def write(repo: Repo, patterns: list[str]) -> str:
     """Put the block in place, every pattern once; returns what `init` prints."""
     try:
-        text = repo.exclude.read_text(encoding="utf-8") if repo.exclude.exists() else ""
+        text = _load(repo.exclude) if repo.exclude.exists() else ""
     except OSError as e:
         return f"! {repo.show()} could not be read ({e.strerror}) — nothing was kept from git"
     kept = list(dict.fromkeys(patterns))
@@ -232,7 +251,7 @@ def write(repo: Repo, patterns: list[str]) -> str:
         return f"= {repo.show()} ({len(kept)} paths kept from git, current)"
     try:
         repo.exclude.parent.mkdir(parents=True, exist_ok=True)
-        repo.exclude.write_text(new, encoding="utf-8")
+        _save(repo.exclude, new)
     except OSError as e:
         return f"! {repo.show()} could not be written ({e.strerror}) — nothing was kept from git"
     return f"{'↑' if span else '+'} {repo.show()} ({len(kept)} paths kept from git)"
@@ -242,11 +261,11 @@ def remove(repo: Repo) -> bool:
     """Take echolot's block out of the exclude file. True when there was one;
     a block without its end line is left for a person, as `write` leaves it."""
     try:
-        text = repo.exclude.read_text(encoding="utf-8")
+        text = _load(repo.exclude)
         span = _span(text)
     except (OSError, BrokenBlock):
         return False
     if span is None:
         return False
-    repo.exclude.write_text(text[:span[0]] + text[span[1]:], encoding="utf-8")
+    _save(repo.exclude, text[:span[0]] + text[span[1]:])
     return True
