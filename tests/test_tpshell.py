@@ -79,8 +79,13 @@ def test_a_shell_that_never_answers_is_stopped_at_the_limit(tmp_path: Path) -> N
 
     shell = tpshell.Shell(_binary(tmp_path, "echo listening-nowhere >&2; exec sleep 60"))
     pid = shell.pid
+    # A script written a moment ago takes ~0.4 s to start on macOS: the
+    # limit runs from its first line, so it is the wait that is measured.
+    printed = time.monotonic() + 10
+    while os.fstat(shell._err.fileno()).st_size == 0 and time.monotonic() < printed:
+        time.sleep(0.01)
     with pytest.raises(TraceProcessorException) as e:
-        shell.wait(limit=0.3)
+        shell.wait(limit=time.monotonic() - shell._started + 0.3)
     assert "listening-nowhere" in str(e.value)
     assert shell.asked > 3, shell.asked
     assert not _running(pid), "the shell outlived the error"
