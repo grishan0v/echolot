@@ -160,3 +160,34 @@ def test_a_detector_only_one_report_has_is_not_a_detector_that_could_not_run() -
     cmp = compare(report([looked("io_wait", disk())]), report([]))
     check("it is as it was: a detector that ran once",
           "detectors" in warned(cmp) and cmp["summary"]["not_compared"] == [], cmp["warnings"])
+
+
+def test_a_detector_not_checked_on_both_sides_did_not_change_state() -> None:
+    """#716: "`composables` | not checked | not checked" in a report compared with itself."""
+    rep = report([blind("composables"), looked("io_wait", disk())])
+    cmp = compare(rep, rep)
+    check("not in the state table", cmp["summary"]["state_changed"] == [],
+          cmp["summary"]["state_changed"])
+    md = compare_mod.to_markdown(cmp)
+    check("so the section is not there", "Detectors that changed state" not in md, md)
+    check("the warning still names it", "not-checked-both" in warned(cmp), warned(cmp))
+    one = compare(report([blind("io_wait")]), report([looked("io_wait", disk())]))
+    check("one side not checked and rows on the other is a change",
+          one["summary"]["state_changed"] == [
+              {"id": "io_wait", "before": "not checked", "after": "1 row(s)"}],
+          one["summary"]["state_changed"])
+
+
+def test_a_detector_that_failed_on_both_sides_did_not_change_state() -> None:
+    failed = {**det("io_wait", []), "error": "boom", "checked": False,
+              "reason": "The check failed on this recording, so it says nothing about it; "
+                        "the error is in the report."}
+    cmp = compare(report([failed]), report([failed]))
+    check("not in the state table", cmp["summary"]["state_changed"] == [],
+          cmp["summary"]["state_changed"])
+    check("each side's failure is still a warning",
+          sum(1 for w in cmp["warnings"] if w["id"] == "detector-failed") == 2, cmp["warnings"])
+    one = compare(report([failed]), report([looked("io_wait", [])]))
+    check("failed on one side and silent on the other is a change",
+          one["summary"]["state_changed"] == [{"id": "io_wait", "before": "failed", "after": "silent"}],
+          one["summary"]["state_changed"])

@@ -348,6 +348,16 @@ def test_the_verdict_is_the_reports_first_sentence_and_the_rest():
     check("the scenario beside it", "coldStart" in pill.parent.text)
 
 
+def test_two_times_of_the_verdict_and_its_range_never_read_alike():
+    """#709: 478.51 ms against 460 ms read "takes 0.5 s, you allowed 0.5 s, 4% over", and the
+    range under it "from 0.5 to 0.5 s"."""
+    main_ = page_of(plain.annotate(make([entry("gc_pressure", [])], duration=478.51, budget=460.0))).one("main")
+    check("the window", main_.one("h1").text == "The launch takes 479 ms", main_.one("h1").text)
+    check("the limit and the range", main_.one("p", "lead").text
+          == "You allowed 460 ms, so it runs 4% over. Measured on 3 launches, from 459 to 539 ms.",
+          main_.one("p", "lead").text)
+
+
 def test_a_report_with_no_budget_is_grey_and_says_why():
     rep = plain.annotate(make([entry("gc_pressure", [])], duration=1136.0, budget=None, runs=5))
     main_ = page_of(rep).one("main")
@@ -624,6 +634,21 @@ def test_many_rows_are_all_drawn_and_four_go_to_the_agent():
         "- piece_02 · main_thread_block · 398 ms, 3/3 runs · evidence 2",
         "- piece_03 · main_thread_block · 397 ms, 3/3 runs · evidence 3",
         "- and 26 more of main_thread_block"], lines)
+
+
+def test_the_agent_gets_the_rows_every_recording_found_before_a_spike_found_once():
+    """The four rows the request carries are the report's first, and over
+    repeats a 500 ms spike in one recording of five counts for 100 ms: the
+    page used to sort by the median again and send the spike first (#495)."""
+    rows = [row("spike", 500.0, runs="1/5"), *(row(f"steady_{i}", 150.0 - i, runs="5/5")
+                                                for i in range(4))]
+    page = page_of(plain.annotate(make([entry("main_thread_block", rows)], runs=5)))
+    lines = rows_of(page)["main_thread_block"].one("input").attrs["data-req"].split("\n")
+    check("the four found every time go, the spike is the one more", [
+        line.split(" · ")[0] for line in lines] == [
+        "- steady_0", "- steady_1", "- steady_2", "- steady_3", "- and 1 more of main_thread_block"],
+        lines)
+    check("and every row is still drawn", len(panel_of(page, "main_thread_block").all("i", "bar")) == 5)
 
 
 def test_a_long_name_is_kept_whole_and_a_long_evidence_is_cut():

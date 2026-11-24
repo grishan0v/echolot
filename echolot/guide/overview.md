@@ -9,10 +9,13 @@ never be out of step with the version installed.
 **Never open the trace yourself.** No hand-rolled TraceProcessor, no ad-hoc
 SQL, no reading `.perfetto-trace`. A trace is tens of megabytes and hundreds of
 thousands of slices; everything you need arrives as a table of about twenty
-rows.
+rows, one per detector, and each detector's own rows are one command away.
 
-Live proportions: an 81 MB trace with 475k slices becomes a 14 KB
-`report.json` in about five seconds.
+Live proportions, measured on a large Kotlin app's cold start, five repeats,
+default thresholds: twelve detectors fired with 255 rows, and `report.json`
+holds every one of them in about 240 KB. What `analyze` prints to you is the
+overview, about 3.5 KB; `echolot report -d <id>` gives one detector's first
+five rows: a row found in every repeat before a longer one found once.
 
 If the report seems to be missing something, that is not a reason to open the
 trace. It is a reason to fix the config (anchors that did not match, the wrong

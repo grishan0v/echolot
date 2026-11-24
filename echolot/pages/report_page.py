@@ -103,7 +103,9 @@ def _checks(report: dict[str, Any]) -> list[dict[str, Any]]:
         words = det.get("plain") or {}
         level = det.get("attention")
         did = str(det.get("id") or "")
-        rows = sorted(det.get("rows") or [], key=lambda r: -_value(r))
+        # In the report's order, which a report this version did not write
+        # may not keep: a row in every repeat before a longer one seen once.
+        rows = sorted(det.get("rows") or [], key=report_mod.standing, reverse=True)
         said = words.get("found") or (words.get("clean") if level == plain.FINE else words.get("reason")) or ""
         kind = kit.tone(level)
         out.append({
@@ -257,8 +259,8 @@ def _measurements(c: dict[str, Any], ctx: Any, several: bool) -> str:
 
 
 def _request_lines(c: dict[str, Any]) -> str:
-    """What goes to the agent for one check: its largest rows, each as the
-    report names it, one to a line."""
+    """What goes to the agent for one check: its first rows in the report's
+    order, each as the report names it, one to a line."""
     out = []
     for row in c["rows"][:REQUEST_ROWS]:
         figure = f"{_number(row.get(report_mod.metric_of(row)))} ms"
@@ -340,7 +342,7 @@ def _measured(report: dict[str, Any], ctx: Any) -> str:
     low, high = w.get("duration_ms_min"), w.get("duration_ms_max")
     if not _is_number(low) or not _is_number(high):
         return f"Measured on {n} {ctx.plural}."
-    a, b = plain.hum(low), plain.hum(high)
+    a, b = plain.hum_apart(low, high)
     # "from 1.9 to 2.0 s": the unit is said once when both have the same one.
     for unit in (" ms", " s"):
         if a.endswith(unit) and b.endswith(unit):

@@ -7,7 +7,7 @@ description: The door to echolot, for Android performance regressions — from a
 
 echolot turns a Perfetto trace into about twenty rows of facts. **Never open
 the trace yourself**: no TraceProcessor, no SQL, no reading `.perfetto-trace`.
-The report is what you read.
+`echolot report` is what you read.
 
 ## The tool comes first
 

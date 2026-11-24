@@ -678,8 +678,11 @@ further: the config reference sends its reader to the naming one for why
 thread masks are masks — `comm` is cut to fifteen characters. Nothing in the
 layer sits more than three hops from `/echolot`. Two references are opened
 from below as well, by the topic `guide` prints them under, so the same line
-works with the layer and without it: `perf-hunter` reads `echolot guide report`
-instead of working the schema out by hand, and setup reads
+works with the layer and without it: `perf-hunter` looks a field up in
+`echolot guide report` rather than working the schema out by hand — one
+field a `--json` view showed it, never the whole reference on its first
+step, which reads the overview and `echolot report -d` (#493) — and setup
+reads
 `echolot guide collect` to capture the probe trace while there is still no
 config.
 
@@ -1154,8 +1157,9 @@ carries it.
 ## Three things this layer closes
 
 **The agent never looks at the trace.** The rule is the first item in the
-skill, with the proportion attached: 81 MB and 475k slices against a 14 KB
-report. Without it stated plainly, an agent will open the trace itself and
+skill, with the proportion attached: on a large app's cold start, 255 rows
+and about 240 KB of `report.json`, read through an overview of about 3.5 KB.
+Without it stated plainly, an agent will open the trace itself and
 everything built here is wasted in one go.
 
 **The loop is isolated.** See above.

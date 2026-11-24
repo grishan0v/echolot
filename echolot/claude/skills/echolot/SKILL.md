@@ -12,10 +12,14 @@ A deterministic layer between the Perfetto trace and you.
 **Never open the trace yourself.** No hand-rolled TraceProcessor, no ad-hoc
 SQL, no reading `.perfetto-trace`. A trace is tens of megabytes and hundreds of
 thousands of slices; everything you need, `echolot` hands you as a table of
-about twenty rows.
+about twenty rows, one per detector, and each detector's own rows are one
+command away.
 
-Live proportions: an 81 MB trace with 475k slices compresses into a 14 KB
-`report.json`. Six thousand times smaller, and it takes five seconds.
+Live proportions, measured on a large Kotlin app's cold start, five repeats,
+default thresholds: twelve detectors fired with 255 rows, and `report.json`
+holds every one of them in about 240 KB. What `analyze` prints to you is the
+overview, about 3.5 KB; `echolot report -d <id>` gives one detector's first
+five rows: a row found in every repeat before a longer one found once.
 
 If the report seems to be missing data, that is not a reason to open the trace.
 It is a reason to fix the config (anchors that did not match, the wrong
@@ -152,12 +156,13 @@ echolot analyze <trace> -c echolot.yml
 ```
 
 `analyze` writes `.echolot/out/report.json` (for you) and `report.md` (for
-humans), next to the config. Read the **json** — it has a stable schema.
-What it prints to you is the overview `echolot report` prints — the window,
-every warning that the numbers are not about the scenario, a line per
-detector — not `report.md`, which is a terminal's; `echolot report -d <id>`
-is one detector's rows. `--full` prints the whole report and is never the
-way in.
+humans), next to the config. Read the **json** — it has a stable schema —
+through `echolot report`, never whole. What `analyze` prints to you is the
+overview `echolot report` prints — the window, every warning that the
+numbers are not about the scenario, a line per detector — not `report.md`,
+which is a terminal's; `echolot report -d <id>` is one detector's rows, a
+row found in every repeat before a longer one found once. `--full` prints the whole report and
+is never the way in.
 
 No config? That is `next: setup`. No idea what is in the trace?
 `echolot probe <trace> --process '<package>*'`.

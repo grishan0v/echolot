@@ -38,7 +38,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 208 checks passed — the pipeline computes correctly.
+All 209 checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` — тот же прогон в три строки (окружение, статус слоя, итог
@@ -51,7 +51,7 @@ echolot наружу. Это режим для субагента перед с�
 ```
 echolot 0.17.0 · trace_processor v59.1 · perfetto 0.59.1 · python 3.14.7
 layer: current (10 files)
-self-check: 208 of 208 passed
+self-check: 209 of 209 passed
 ```
 
 Коды возврата: 0/1, а также 2 при первом запуске, когда не удалось скачать
@@ -174,7 +174,7 @@ echolot analyze demo/coldStart_iter00*.perfetto-trace -c demo/echolot.yml
 
 ## На чём проверялись детекторы
 
-Детекторы валидировались на синтетическом трейсе — 208 проверок внутри
+Детекторы валидировались на синтетическом трейсе — 209 проверок внутри
 `doctor`, по одной на утверждение, и на этом прогоне отчёт по фикстуре должен
 показать ровно 15 находок — а также на живых трейсах Android 14 (эмулятор) и
 Android 13 (Galaxy A51). Маски имён для GC, блокировок и binder были уточнены

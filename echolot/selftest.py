@@ -4963,6 +4963,52 @@ def _(report):
     assert rows["collection_mapping"]["runs"] == "2/2", rows["collection_mapping"]
 
 
+@check("merging repeats: a row in every repeat ranks above a longer one seen "
+       "once, and a cut says how many of the rows it left out one repeat found")
+def _(report):
+    """The first rows of a detector are what an agent reads: `report -d` shows
+    five and the overview one. Ranked by the median of the repeats that found
+    a row, 500 ms in one repeat of five came before 180 ms in all five, and on
+    a large app's cold start a third of a detector's 38 rows were found once
+    (#495). The cut changes what is read, not what is kept: report.md, which a
+    person and the GitHub Action read, and report.json hold every row."""
+    import copy
+
+    from . import report as report_mod
+    runs = [copy.deepcopy(report) for _ in range(5)]
+    for i, run in enumerate(runs):
+        run["trace"] = f"run{i}"
+    block = next(d for d in runs[3]["detectors"] if d["id"] == "main_thread_block")
+    for name, ms in (("spike_once", 500.0), ("spike_twice", 450.0)):
+        block["rows"].append({"location": name, "count": 1, "self_ms": ms,
+                              "total_ms": ms, "detail": "—"})
+    merged = report_mod.aggregate(runs)
+    rows = next(d for d in merged["detectors"] if d["id"] == "main_thread_block")["rows"]
+    order = [r["location"] for r in rows]
+    # 500 ms × 1/5 is 100: below the 180, 120, 115 and 104 found every time,
+    # above the 64 that was. One trace orders by the median, as before.
+    assert order[:4] == ["waitWhileAllocatingLocked", "collection_mapping",
+                         "AppStart", "Steady_heavy"], order
+    assert order[4:6] == ["spike_once", "spike_twice"], order
+    single = next(d for d in report["detectors"] if d["id"] == "main_thread_block")["rows"]
+    assert [r["self_ms"] for r in single] == sorted(
+        (r["self_ms"] for r in single), reverse=True), single
+
+    view = report_mod.detector_view(merged, "main_thread_block", top=3)
+    shown = [loc for loc in order if f"| {loc}" in view]
+    assert shown == order[:3], (shown, view)
+    assert (f"_Showing 3 of {len(order)}; of the {len(order) - 3} left, 2 were "
+            f"found in one run of 5. `--top {len(order)}` for all._") in view, view
+    # Every row found in every repeat: the cut says no more than it did.
+    whole = report_mod.detector_view(report_mod.aggregate(runs[:3]), "main_thread_block", top=3)
+    assert f"_Showing 3 of {len(single)}; `--top {len(single)}` for all._" in whole, whole
+
+    assert "| waitWhileAllocatingLocked" in report_mod.overview(merged), "the overview's top row"
+    md, js = report_mod.to_markdown(merged), report_mod.to_json(merged)
+    assert all(f"| {loc}" in md for loc in order), "report.md keeps every row"
+    assert all(f'"location": "{loc}"' in js for loc in order), "report.json keeps every row"
+
+
 @check("merging repeats: rows a detector kept apart stay apart")
 def _(report):
     """Two rows, one location, one run — and the merge used to eat one.

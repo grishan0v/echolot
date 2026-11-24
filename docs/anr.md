@@ -248,6 +248,11 @@ declares until the build's mapping names it back, as the next section says.
 > function counts towards that only when the build's mapping did not have to
 > name the frames back: R8 moves lines on the build that froze too. A
 > Kotlin `inline fun` does it on any build, so one such frame proves nothing.
+> It also numbers the inlined body past the end of the calling file. A line
+> past the end, in a file that declares the function the frame names, is
+> placed at that declaration with "line 35 is past the end of the file:
+> inlined code, placed at `fill`" (`--json`: `at` and `inlined`), `mark
+> --from-anr` proposes that function, and neither counts it as another build.
 
 ### A minified build
 
