@@ -307,7 +307,7 @@ def test_compare_takes_the_values_under_the_bar_and_no_zeros() -> None:
 def test_analyze_keeps_the_rows_below_the_bar_for_the_merge(tmp_path) -> None:
     from echolot import fixture, selftest
     from echolot.config import Config
-    from echolot.main import analyze_trace
+    from echolot.analyze import analyze_trace
 
     trace = tmp_path / "f.perfetto-trace"
     trace.write_bytes(fixture.build())
@@ -334,7 +334,7 @@ def test_analyze_keeps_what_it_found_under_the_bar_in_no_repeat(tmp_path) -> Non
     for `compare` to look a row the other side reports up in."""
     from echolot import fixture, selftest
     from echolot.config import Config
-    from echolot.main import analyze_trace
+    from echolot.analyze import analyze_trace
 
     trace = tmp_path / "f.perfetto-trace"
     trace.write_bytes(fixture.build())
@@ -408,7 +408,7 @@ def test_a_marker_cut_short_in_one_repeat_holds_the_median_down() -> None:
 def test_a_bar_that_is_not_calibrated_still_opens_for_the_merge(tmp_path) -> None:
     """#666 took `@calibrate` off `main_thread_block`, and its bar stopped
     opening: a row under 16 ms in one repeat read as absent again (#505)."""
-    from echolot.main import DETECTOR_DIR
+    from echolot.analyze import DETECTOR_DIR
     from echolot.tp import Detector
     det = Detector.from_file(DETECTOR_DIR / "main_thread_block.sql")
     check("min_slice_ms is a bar and not a calibration",

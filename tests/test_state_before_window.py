@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, report, selftest  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import analyze_trace  # noqa: E402
+from echolot.analyze import analyze_trace  # noqa: E402
 from tests.support import check  # noqa: E402
 
 
@@ -77,7 +77,7 @@ def _rows(tp, sql: str) -> list[tuple]:
 
 def test_the_views_keep_their_rows_without_a_query_per_sample(
         tmp_path: Path, monkeypatch) -> None:
-    from echolot.main import SQL_DIR, _resolve_process, _setup_context
+    from echolot.analyze import SQL_DIR, _resolve_process, _setup_context
     from echolot.tp import TraceSession
 
     # Samples before, at, inside and after the window [100, 1105], on two

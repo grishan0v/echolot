@@ -227,7 +227,7 @@ def test_names_lists_async_sections_and_says_what_reads_them(trace):
 def test_explain_lists_every_shipped_detector_a_line_each(tmp_path, monkeypatch):
     """The agent's way to ask what can fire, without opening any .sql. One
     line a detector; its parameters are `explain <detector>`'s, below."""
-    from echolot.main import DETECTOR_DIR
+    from echolot.analyze import DETECTOR_DIR
     from echolot.tp import load_detectors
 
     monkeypatch.chdir(tmp_path)
@@ -243,7 +243,7 @@ def test_explain_lists_every_shipped_detector_a_line_each(tmp_path, monkeypatch)
 
 def test_explain_one_detector_names_every_parameter(tmp_path, monkeypatch):
     """What the list left out, for one detector at a time."""
-    from echolot.main import DETECTOR_DIR
+    from echolot.analyze import DETECTOR_DIR
     from echolot.tp import load_detectors
 
     monkeypatch.chdir(tmp_path)

@@ -37,7 +37,7 @@ echolot doctor
   ok    the right process is picked, the foreign one is dropped
   ...
 
-All 230 checks passed — the pipeline computes correctly.
+All N checks passed — the pipeline computes correctly.
 ```
 
 `doctor -q` is the same run in three lines — environment, layer verdict,
@@ -51,8 +51,11 @@ again.
 ```
 echolot 0.18.0 · trace_processor v59.1 · perfetto 0.59.1 · python 3.14.7
 layer: current (10 files)
-self-check: 230 of 230 passed
+self-check: N of N passed
 ```
+
+`N` is how many checks the installed version runs. Almost every release adds
+some, so these docs do not state the number; `doctor` prints it.
 
 Exit code 0/1, and 2 on a first run that could not download trace_processor
 (below). No device needed. It takes about fifteen seconds on a laptop,
@@ -192,8 +195,8 @@ fixture only.
 
 ## What the detectors were checked against
 
-The detectors were validated against a synthetic trace — 230 checks inside
-`doctor`, one per claim — and against live traces from Android 14 (emulator) and Android 13
+The detectors were validated against a synthetic trace — one check inside
+`doctor` per claim — and against live traces from Android 14 (emulator) and Android 13
 (Galaxy A51). The naming masks for GC, locks and binder were narrowed against
 those real traces, and every narrowing is pinned by a check.
 

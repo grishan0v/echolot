@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, selftest  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.main import (  # noqa: E402
+from echolot.analyze import (  # noqa: E402
     DETECTOR_DIR,
     _resolve_process,
     _setup_context,

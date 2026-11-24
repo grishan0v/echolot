@@ -184,3 +184,26 @@ def test_importing_the_cli_pulls_in_two_distributions() -> None:
         f"is deliberate, add it here; if it is only needed by one command, "
         f"import it inside that command instead"
     )
+
+
+def test_the_engine_loads_without_the_command_line() -> None:
+    """`analyze` is the engine: a trace and a config in, a report out (#530).
+
+    Importing it must not bring the command line along. When it did, every
+    caller that only wanted a report (the self-check, `ui`, the demo) loaded
+    argparse and every `cmd_*`, and the line between the engine, which
+    prints no output of its own, and the commands, which do, was not visible
+    anywhere.
+    """
+    probe = (
+        "import sys\n"
+        "import echolot.analyze\n"
+        "print(' '.join(sorted(m for m in ('argparse', 'rich_argparse', 'echolot.main')\n"
+        "                      if m in sys.modules)))\n"
+    )
+    run = subprocess.run([sys.executable, "-c", probe], cwd=ROOT,
+                         capture_output=True, text=True)
+    assert run.returncode == 0, f"importing the engine failed:\n{run.stderr}"
+    assert not run.stdout.split(), (
+        f"importing echolot.analyze now loads {run.stdout.split()}: the engine "
+        f"reaches back into the command line")

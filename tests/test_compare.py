@@ -1097,7 +1097,7 @@ def test_a_trace_without_the_sources_compares_as_unmeasured(
     from echolot import fixture, selftest
     from echolot import report as report_mod
     from echolot.config import Config
-    from echolot.main import analyze_trace
+    from echolot.analyze import analyze_trace
 
     trace = tmp_path / "bare.perfetto-trace"
     trace.write_bytes(fixture.build(environment=False))

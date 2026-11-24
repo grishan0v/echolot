@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from . import analyze
 from . import hunt as hunt_mod
 from . import layer, plain, runner, state, when
 from . import main as cli
@@ -445,7 +446,7 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
 
     # The thresholds, and where each comes from.
     try:
-        plan = cli.plan_detectors(cfg)
+        plan = analyze.plan_detectors(cfg)
         off = sorted(cfg.disabled_detectors)
     except ConfigError as e:
         row("Thresholds", _sentence(str(e)), status_config)

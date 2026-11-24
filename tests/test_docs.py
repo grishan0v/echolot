@@ -13,9 +13,15 @@ notices, and the same argument the workflow makes about the Python range
 applies here: claiming a number without running it is how the claim goes stale.
 
 So the counts are read out of the documents and compared against the things
-they describe. `selftest.CHECKS` is what `doctor` counts; the detector files
-are what the pipeline runs. A claim in a shape none of these patterns match is
-not checked, which is why a failure prints the pattern that found nothing.
+they describe. The detector files are what the pipeline runs. A claim in a
+shape none of these patterns match is not checked, which is why a failure
+prints the pattern that found nothing.
+
+The self-check tally is the exception: no document states it (#827). It grew
+on almost every pull request, so two branches that each added a check passed
+on their own and broke main once both were merged (#696, #797). The number
+lives in `selftest.CHECKS` alone; the docs print `N` in its place, and the
+tests here hold the shape of `doctor`'s lines and that no number came back.
 """
 
 from __future__ import annotations
@@ -58,12 +64,21 @@ def _numbers(document: str, pattern: str) -> list[int]:
 
 NUMBER = r"(\d+|" + "|".join(WORDS) + r")"
 
-# Every place a document states how many checks `doctor` runs. The last is the
-# sample output in determinism.md, which prints the tally twice on one line.
+# The ways a document could state how many checks `doctor` runs. None may
+# match anywhere: the count changes with almost every pull request, and a copy
+# of it kept by hand in prose is what broke main when two of them met (#827).
 CHECK_TALLIES = [
-    ("docs/determinism.md", NUMBER + r" checks inside"),
-    ("docs/determinism.md", r"All " + NUMBER + r" checks passed"),
-    ("docs/determinism.md", r"self-check: " + NUMBER + r" of " + NUMBER + r" passed"),
+    NUMBER + r" checks inside",
+    r"All " + NUMBER + r" checks passed",
+    r"self-check: " + NUMBER + r" of " + NUMBER + r" passed",
+    r"\d+ провер\w* внутри",
+]
+
+# The lines of `doctor` output that determinism.md, in both languages, shows
+# with `N` where the count goes.
+CHECK_SAMPLE_LINES = [
+    "All N checks passed — the pipeline computes correctly.",
+    "self-check: N of N passed",
 ]
 
 # Every place a document states how many detectors there are: the sentence at
@@ -87,14 +102,43 @@ DETECTOR_TALLIES = [
 ]
 
 
-@pytest.mark.parametrize("document,pattern", CHECK_TALLIES, ids=lambda v: v[:34])
-def test_documented_check_count_is_current(document, pattern):
-    stated = _numbers(document, pattern)
-    assert stated, f"{document}: nothing matched /{pattern}/ — the claim moved or went away"
-    assert set(stated) == {len(selftest.CHECKS)}, (
-        f"{document} says {sorted(set(stated))} checks, doctor runs "
-        f"{len(selftest.CHECKS)}"
+def _markdown() -> list[Path]:
+    """Every Markdown file the project ships or shows: docs, READMEs, skills."""
+    found = set(ROOT.glob("*.md"))
+    for folder in ("docs", "echolot", "plugins", ".github"):
+        found.update((ROOT / folder).rglob("*.md"))
+    return sorted(found)
+
+
+def test_no_document_states_the_check_count():
+    """A pull request that adds a self-check has no number in the docs to change."""
+    stated = [
+        f"{path.relative_to(ROOT)}: {match.group(0)}"
+        for path in _markdown()
+        for pattern in CHECK_TALLIES
+        for match in re.finditer(pattern, path.read_text(encoding="utf-8"))
+    ]
+    assert not stated, (
+        "these state how many checks doctor runs; write N, or leave the number out "
+        "(#827):\n" + "\n".join(stated)
     )
+
+
+@pytest.mark.parametrize("document", ["docs/determinism.md", "docs/ru/determinism.md"])
+def test_sample_doctor_output_has_the_form_doctor_prints(document):
+    """The sample keeps `doctor`'s lines, with `N` for the count.
+
+    The form is read from the f-strings in main.py, each `{...}` read as `N`, so
+    a change to what `doctor` prints fails here rather than leaving the sample
+    showing a line no version prints.
+    """
+    source = (ROOT / "echolot/main.py").read_text(encoding="utf-8")
+    printed = {re.sub(r"\{[^{}]*\}", "N", line)
+               for line in re.findall(r'f"([^"\n]*)"', source)}
+    text = (ROOT / document).read_text(encoding="utf-8")
+    for line in CHECK_SAMPLE_LINES:
+        assert line in printed, f"doctor no longer prints {line!r}"
+        assert line in text, f"{document} lost the sample line {line!r}"
 
 
 def test_the_documentation_index_counts_the_documents_it_lists():
@@ -175,8 +219,6 @@ def test_russian_docs_keep_counts_and_compare_columns_current():
     from echolot.compare import MOVED_COLUMNS, MOVED_HEADERS
 
     shipped = len(list((ROOT / "echolot/sql/detectors").glob("*.sql")))
-    checks = len(selftest.CHECKS)
-
     ru_readme = (ROOT / "README.ru.md").read_text(encoding="utf-8")
     m_det = re.search(r"(\d+)\s+SQL-детектор", ru_readme)
     assert m_det and int(m_det.group(1)) == shipped, m_det
@@ -185,9 +227,6 @@ def test_russian_docs_keep_counts_and_compare_columns_current():
     )
 
     ru_det = (ROOT / "docs/ru/determinism.md").read_text(encoding="utf-8")
-    assert f"{checks} провер" in ru_det
-    assert f"All {checks} checks passed" in ru_det
-    assert f"self-check: {checks} of {checks} passed" in ru_det
     assert f"{shipped - len(selftest.SILENT_ON_FIXTURE)} находок" in ru_det
 
     want = [MOVED_HEADERS[c] for c in MOVED_COLUMNS]
