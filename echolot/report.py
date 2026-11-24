@@ -7,7 +7,10 @@ Two formats from one set of data:
 
 from __future__ import annotations
 
+import base64
 import fnmatch
+import gzip
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -137,6 +140,42 @@ def runtime_name(name: str, keep: str | None = None,
     for pattern, to in _RUNTIME:
         name = pattern.sub(to, name)
     return name
+
+
+# Where an installed APK lives: `/data/app/~~<random>==/<package>-<random>==/`
+# since Android 11, `/data/app/<package>-<random>==/` before it. Picked anew at
+# every install, so the two builds of a comparison name every JIT compilation
+# of the app's own code differently: `JIT compiling void Foo.bar() (kind=
+# Baseline) from /data/app/~~…`. A package name holds no `-`, so the first one
+# ends it.
+_INSTALL = re.compile(r"/data/app/(~~[^/]+/)?([^/]+?)-[^/]+/")
+# `family`'s numbers, and an address `runtime_name` already wrote as `0x#`:
+# folded by `family`'s pattern, its `0` made it `#x#`.
+_DIGITS = re.compile(r"0x(?:[0-9a-fA-F]+|#)|\d+")
+
+
+def slice_family(name: str, keep: str | None = None,
+                 names: frozenset[str] | set[str] = frozenset()) -> str:
+    """A slice's name as two builds' traces can share it (#610).
+
+    Every number folded, as `family` folds them, and the APK's install
+    directory as well. `runtime_name` folds only the numbers the runtime
+    picks anew in every run, which is right for one row across repeats of
+    one build and leaves too much for a name across two: a fence number
+    (`waiting for HWC release 313`) is not among them, and on a real cold
+    start it made five names of one set that the other set had under
+    other numbers. A line number in a lock note is one place in the code,
+    and a build that moved the code by two lines would show it gone and new.
+
+    `keep` and `names` are the project's own markers, kept as written: see
+    `family`. Applied to a name `runtime_name` folded, it gives what it gives
+    for the raw one.
+    """
+    if name in names or (keep and name.startswith(keep)):
+        return name
+    name = _INSTALL.sub(lambda m: f"/data/app/{'~~#/' if m.group(1) else ''}{m.group(2)}-#/",
+                        name)
+    return _DIGITS.sub(lambda m: "0x#" if m.group(0).startswith("0x") else "#", name)
 
 
 def metric_of(row: dict[str, Any]) -> str:
@@ -849,6 +888,116 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
     return merged
 
 
+# The slice names of the window, for `compare` to set against another set's
+# (#610). `analyze_trace` hands the merge every name of each repeat under
+# NAMES_ALL; the merge keeps SLICE_NAMES and takes the rest out.
+NAMES_ALL = "names_all"
+SLICE_NAMES = "slice_names"
+# The least a name takes a run, the median over the runs it is in, to be
+# kept with its numbers. A JIT compilation of one method takes a few ms, and
+# it is there or not whatever it took.
+NAMES_FLOOR_MS = 1.0
+# How a name is held in `seen`: the first four bytes of its SHA-1.
+NAMES_HASH = "sha1:4"
+
+
+def name_digest(name: str) -> bytes:
+    """A name as `seen` holds it, see `_merge_names`."""
+    return hashlib.sha1(name.encode("utf-8")).digest()[:4]
+
+
+def names_seen(section: dict[str, Any]) -> set[bytes] | None:
+    """Every name a `slice_names` section saw, as `name_digest` gives it;
+    None for a section that holds them some other way."""
+    if section.get("hash") != NAMES_HASH:
+        return None
+    raw = base64.b64decode(section.get("seen") or "")
+    return {raw[i:i + 4] for i in range(0, len(raw), 4)}
+
+
+def names_rows(section: dict[str, Any]) -> list[dict[str, Any]]:
+    """The names a `slice_names` section kept with their numbers."""
+    packed = section.get("rows_gz")
+    if not packed:
+        return []
+    return json.loads(gzip.decompress(base64.b64decode(packed)))
+
+
+def _merge_names(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The slice names of the window across the repeats, for `compare` (#610).
+
+    A slice no detector reads never reaches a comparison, however clearly it
+    tells the two builds apart, and a name that is in every run of one side
+    and in no run of the other is that: a method JIT-compiled only after it
+    became hot, a section, a binder call or a thread that only one build
+    has. Two sets of `echolot names` set against each other by hand in a
+    script found such a method behind a busy loop no row showed.
+
+    Two things are kept, and both are needed: `compare` reads one side's
+    names against the other's runs.
+
+      rows_gz  the names in all runs but one or more of this set, at least
+               NAMES_FLOOR_MS a run by the median of the runs it is in: what
+               the comparison can list, with its numbers (`names_rows`).
+               All but one, not all: how many runs `compare` asks for is its
+               own rule.
+      seen     every name any run held, whatever it took, as the first four
+               bytes of its SHA-1, sorted (`names_seen`): what the other
+               side's names are looked up in. With a floor here, a name both
+               sides have would read as one side's wherever the other ran it
+               under the floor. A name not in `seen` was in no run; two
+               names share four bytes about once in four billion, and then
+               a name is missed, never made up.
+
+    Both packed in base64, the rows as gzipped JSON. Ten cold starts of a
+    busy app held 17,753 names in the window and kept 946 of them, and as
+    JSON those rows alone were 228 KB beside the 285 KB of the rest of a
+    report that exists to stay small. Packed, rows and `seen` are 133 KB,
+    and `compare` is their reader; what one trace holds is what `echolot
+    names` prints.
+
+    Names are folded by `slice_family`. None when a repeat has no names: a
+    report written before the section existed, or one whose query failed.
+    The other side then cannot be read against it, which is not "none".
+    """
+    found_by_run = [r.pop(NAMES_ALL, None) for r in reports]
+    if not found_by_run or any(f is None for f in found_by_run):
+        return None
+    total = len(found_by_run)
+    least = max(1, total - 1)
+    union: set[str] = set().union(*found_by_run)
+    rows = []
+    for name in union:
+        found = [run[name] for run in found_by_run if name in run]
+        if len(found) < least:
+            continue
+        ms = round(median(f["total_ms"] for f in found), 2)
+        if ms < NAMES_FLOOR_MS:
+            continue
+        threads = sorted({t for f in found for t in f["threads"]})
+        rows.append({
+            "name": name,
+            "runs": f"{len(found)}/{total}",
+            "total_ms": ms,
+            "max_ms": max(f["max_ms"] for f in found),
+            "threads": ", ".join(threads[:3]) + (
+                f" +{len(threads) - 3}" if len(threads) > 3 else ""),
+        })
+    rows.sort(key=lambda r: (-r["total_ms"], r["name"]))
+    # No time in the gzip header: the same names make the same report.
+    packed = gzip.compress(json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+                           .encode("utf-8"), compresslevel=9, mtime=0)
+    return {
+        "runs": total,
+        "floor_ms": NAMES_FLOOR_MS,
+        "names": len(union),
+        "kept": len(rows),
+        "rows_gz": base64.b64encode(packed).decode("ascii"),
+        "hash": NAMES_HASH,
+        "seen": base64.b64encode(b"".join(sorted(name_digest(n) for n in union))).decode("ascii"),
+    }
+
+
 def _merge_drawn(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The frames the app drew, across the repeats: the median, and in how many
     of the repeats that could tell it drew none (#536)."""
@@ -944,15 +1093,23 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     "1/3" means you happened to catch it once, and those are different news even
     when the milliseconds match.
     """
+    names = _merge_names(reports)
     if len(reports) == 1:
         for det in reports[0].get("detectors") or []:
             det.pop(OPEN_ROWS, None)
+        if names is not None:
+            reports[0][SLICE_NAMES] = names
         return reports[0]
 
     total = len(reports)
     merged = dict(reports[0])
     merged["traces"] = [r["trace"] for r in reports]
     merged["runs"] = total
+    # A repeat's own section, when the repeats are reports read back, is of
+    # one run and not of the set.
+    merged.pop(SLICE_NAMES, None)
+    if names is not None:
+        merged[SLICE_NAMES] = names
 
     windows = [r["window"].get("duration_ms") for r in reports
                if r["window"].get("duration_ms") is not None]
