@@ -1677,6 +1677,58 @@ def _(report):
     assert not any(p.get("retraced") for p in row["places"]), row["places"]
 
 
+@check("R8 mapping: one lock frame the build's own mapping misses is not another build's")
+def _(report):
+    """The build's own mapping can miss a line: R8 merges lambdas into one
+    synthetic class and writes no range for a line the runtime prints. In a
+    field test that was one of a lock's two frames, half of them, and the
+    header told the reader to check that the mapping was the build's (#913).
+    One such frame is said, not warned about, and so are any number of them
+    when the frames are named after the mapping itself; two of two, with no
+    id to go by, are still a warning, in the Marker Report and in `anr`.
+    """
+    import copy
+    from . import anr, place
+    from . import report as report_mod
+    map_id = "5e1fa7c0" * 8
+    mapping_text = ("# compiler: R8\n"
+                    f"# pg_map_id: {map_id}\n"
+                    "com.example.Store -> a.a:\n"
+                    '# {"id":"sourceFile","fileName":"Store.java"}\n'
+                    "    1:5:void put(java.lang.String):39:43 -> b\n"
+                    "com.example.Store$$ExternalSyntheticLambda0 -> a.b:\n"
+                    '# {"id":"sourceFile","fileName":"R8$$SyntheticClass"}\n'
+                    "    1:3:void com.example.Store.lambda$put$0():50:52 -> run\n")
+    got = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        mapping = Path(tmp) / "mapping.txt"
+        mapping.write_text(mapping_text, encoding="utf-8")
+        for file in ("SourceFile", f"r8-map-id-{map_id}"):
+            rep = copy.deepcopy(report)
+            # The owner at line 3 of `put`; the waiter at line 9 of the
+            # lambda's `run`, which has lines 1 to 3.
+            one_row(rep, "monitor_contention", "LockWaiter")["detail"] = (
+                f"monitor contention with owner Thread-3 (4455) at void "
+                f"a.a.b(java.lang.String)({file}:3) waiters=0 blocking from "
+                f"void a.b.run()({file}:9)")
+            place.annotate(rep, Path(tmp), mapping)
+            got[file] = rep.get("retrace")
+    plain, named = got["SourceFile"], got[f"r8-map-id-{map_id}"]
+    assert plain == {"frames": 2, "outside": 1}, plain
+    assert named == {"frames": 2, "outside": 1, "matched_map_id": map_id}, named
+    for retrace, why in ((plain, "says nothing about the build"),
+                         (named, "`5e1fa7c05e1f…`, so it is this build's")):
+        for lines in (report_mod._retrace_lines(retrace), anr._retrace_note(retrace)):
+            assert len(lines) == 1 and not lines[0].startswith(">") \
+                and "1 had no place in it" in lines[0] and why in lines[0], lines
+    both = {"frames": 2, "outside": 2}
+    for lines in (report_mod._retrace_lines(both), anr._retrace_note(both)):
+        assert lines[0].startswith("> ⚠️ 2 of the 2 frames"), lines
+    for lines in (report_mod._retrace_lines({**both, "matched_map_id": map_id}),
+                  anr._retrace_note({**both, "matched_map_id": map_id})):
+        assert not lines[0].startswith(">"), lines
+
+
 @check("uninstrumented_cpu: coverage counts nested slices only once")
 def _(report):
     """main: 835 ms of Running inside the window, with the AppStart slice

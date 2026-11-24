@@ -1154,10 +1154,13 @@ place is the method the runtime stood in, inlined into another or not, at the
 line it came from, and it carries `retraced: true`. The evidence keeps the
 frame as it was recorded, and one line in the header says so. A frame the
 mapping has no place for, with its line in no range of its method, gets its
-class back and keeps R8's method name, and from a tenth of them up the header
-warns that the mapping is probably another build's. Frames that name their
-files after a mapping, `r8-map-id-<id>`, are named back only by that mapping,
-and a frame of a class R8 kept only in a build something shows is minified
+class back and keeps R8's method name. From two such frames and a tenth of
+them up the header warns that the mapping is probably another build's; one
+alone it only counts, since the right mapping can miss a line of a synthetic
+class R8 merged. Frames that name their files after a mapping,
+`r8-map-id-<id>`, are named back only by that mapping, and then no frame it
+misses makes it another build's; a frame of a class R8 kept is named back
+only in a build something shows is minified
 ([A minified build](collecting.md#a-minified-build)).
 
 The line is the runtime's when the build kept line numbers and the

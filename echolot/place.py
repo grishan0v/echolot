@@ -402,7 +402,8 @@ def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) ->
     wrote are retraced first, and the report says how many there were and
     how many the mapping had no place for, in `retrace`: the sign of a
     mapping from another build (see `report._retrace_lines`). A map id the
-    frames carry that is not the mapping's goes there too, and then nothing
+    frames carry goes there too: the mapping's own, `matched_map_id`, says
+    it is the build's; another, `map_id`, that it is not, and then nothing
     is retraced.
     """
     idx: dict[str, list[Path]] | None = None
@@ -425,6 +426,8 @@ def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) ->
                 placed += 1
     if batch is not None and (traced or batch.foreign):
         report["retrace"] = {"frames": len(traced), "outside": batch.outside}
+        if batch.matched:
+            report["retrace"]["matched_map_id"] = batch.matched
         if batch.foreign:
             report["retrace"]["map_id"] = {"frames": batch.foreign[0],
                                            "mapping": batch.foreign[1]}

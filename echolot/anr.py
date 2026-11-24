@@ -1129,6 +1129,8 @@ def retrace(report: Report, mapping: Path) -> None:
             thread.lock.cls = batch.retracer.real(thread.lock.cls) or thread.lock.cls
     report._chains = None
     report.retraced = {"frames": len(named), "outside": batch.outside}
+    if batch.matched:
+        report.retraced["matched_map_id"] = batch.matched
 
 
 def _as_lines(traced: mapping_mod.Retraced, file: str | None) -> list[str]:
@@ -2557,15 +2559,14 @@ def render(report: Report, code: tuple[list[Located], list[str]] | None = None) 
     return "\n".join(out).rstrip() + "\n"
 
 
-# A mapping from another build is told by the frames it has no place for, and
-# the right one leaves none. From a tenth of the frames it was asked about,
-# the line is a warning, as the Marker Report's is for the sampled methods a
-# mapping named (`report.MINIFIED_SHARE`).
-_OUTSIDE_SHARE = 0.10
-
-
 def _retrace_note(retraced: dict[str, Any] | None) -> list[str]:
-    """What the build's mapping made of the frames R8 wrote, under the header."""
+    """What the build's mapping made of the frames R8 wrote, under the header.
+
+    A mapping from another build is told by the frames it has no place for,
+    and the right one leaves a few: from two of them and a tenth of the
+    frames, unless the frames carry the mapping's own id, the line is a
+    warning (`mapping.another_build`).
+    """
     if retraced is None:
         return []
     if retraced.get("map_id"):
@@ -2578,7 +2579,8 @@ def _retrace_note(retraced: dict[str, Any] | None) -> list[str]:
     total, outside = retraced["frames"], retraced["outside"]
     if not total:
         return ["The build's mapping was read, and no frame here was R8's."]
-    if outside / total >= _OUTSIDE_SHARE:
+    matched = retraced.get("matched_map_id")
+    if mapping_mod.another_build(total, outside, matched):
         return [f"> ⚠️ {outside} of the {total} frames R8 wrote have no place in "
                 f"the mapping: no range of their method holds their line. A "
                 f"mapping from another build names the frames it happens to "
@@ -2586,7 +2588,7 @@ def _retrace_note(retraced: dict[str, Any] | None) -> list[str]:
                 f"is this build's."]
     line = f"The build's mapping named back the {total} frames R8 wrote."
     if outside:
-        line += f" {outside} had no place in it and keep R8's method name."
+        line += " " + mapping_mod.no_place(outside, matched)
     return [line]
 
 
