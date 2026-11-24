@@ -1,11 +1,13 @@
 """`echolot ui`: a local page that shows whether the setup is ready, checks
 the app at the press of a button and opens the reports.
 
-A server from the standard library on 127.0.0.1. It keeps no state: every
-page is drawn when it is asked for, from the files under `.echolot/` and from
-the functions that stand behind `status`, `doctor`, `scan` and `hunt --list`
-(`echolot/ready.py`). It is a face for a person over the same commands and
-files; the agent's path stays the CLI.
+A server from the standard library on 127.0.0.1. It keeps one thing between
+two pages: what `scan` read of the repository, while nothing it read has
+changed (`echolot/scan_cache.py`, #931). Everything else is drawn when it is
+asked for, from the files under `.echolot/` and from the functions that stand
+behind `status`, `doctor`, `scan` and `hunt --list` (`echolot/ready.py`).
+Refresh forgets the kept reading too. It is a face for a person over the same
+commands and files; the agent's path stays the CLI.
 
 A page that is only read writes nothing. Two requests do more, and both are
 a form a page of this server sends: one starts a check (`echolot/check.py`:
@@ -20,6 +22,9 @@ it runs `echolot init` the same way, as a process of its own. A fourth sets
 or changes the time limit afterwards (`echolot/time_limit.py`): it rewrites
 the one line of `echolot.yml` that holds the limit, or adds that one line,
 whoever wrote the file, and nothing else in it. The
+next ones read recordings made elsewhere (`echolot/elsewhere.py`): one
+looks in a folder a person names and says what it holds, the other runs
+`analyze` over the recordings chosen into a report of their own. The
 last ones dig deeper from a report (`echolot/dig.py`): they open an
 investigation with the report's question and start the person's own Claude
 Code or Codex in it, as a process of its own, with a command line and a grant
@@ -40,7 +45,12 @@ What it will and will not answer:
   token is in the address bar and the history, where it stops meaning anything
   when the server stops.
 - Anything other than GET also has to come from the server's own origin,
-  and its body is a form of at most `BODY_CAP` bytes. Nothing in a form is
+  and its body is a form of at most `BODY_CAP` bytes. One field of one form
+  is a path: the folder Analyse trace files looks in (`echolot/elsewhere.py`).
+  It is listed one level deep, by the names, sizes and times of the
+  recordings in it, nothing in it is opened or served, and the recordings
+  chosen go to `analyze` by their paths, which writes its report under
+  `.echolot/`, never in that folder. Nothing else in a form is
   used as a path or as a command: a scenario is one the config names, a
   number of launches is a small whole number, an investigation is one the
   project has, what to set up is one of the names the page offered, a time
@@ -78,7 +88,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, quote, unquote
 
-from . import check, job, ready, recorder, state
+from . import check, elsewhere, job, ready, recorder, state
 from . import project_setup
 from . import time_limit
 from . import hunt as hunt_mod
@@ -90,6 +100,7 @@ from .pages import setup_page
 from .pages import limit_page
 from . import dig
 from .pages import dig_page
+from .pages import elsewhere_page
 
 HOST = "127.0.0.1"
 READS = ("GET", "HEAD")
@@ -231,8 +242,25 @@ def _start(visit: Visit, params: dict[str, str]) -> Page:
              limit_page.setting(time_limit.view(site.project, site.config, visit.st), site.url))
     digging = (dig_page.on_start(dig.view(site.project, visit.st, procs=site.procs, count=False), site.url)
                if site.url("dig") else "")
+    # Recordings made elsewhere (#479): the folder to look in, under the
+    # button and while it is there, and the report they made.
+    look = site.url("look")
+    far = (elsewhere_page.on_start(look, frozen=bool(found["run"]) and found["run"]["status"] == job.RUNNING)
+           if look and found is not None and found["offer"]["choices"] else "")
     return Page(start_page.render(view, site.url, visit.steps("start"), check=found, setup=setup, limit=limit,
-                                  dig_html=digging))
+                                  dig_html=digging, far_html=far,
+                                  far_card=elsewhere_page.card(elsewhere.latest(site.project), site.url)))
+
+
+def _anew(visit: Visit, params: dict[str, str]) -> Page:
+    """Refresh: forget what `scan` read of the repository, and send the
+    browser to the start page, which reads it anew with everything else. A
+    read that changes nothing on disk: the next page would take the same
+    reading the moment a file it read changed."""
+    kept = visit.site.src.kept
+    if kept is not None:
+        kept.forget()
+    return Page("", 303, visit.site.url("start"))
 
 
 def _nothing(visit: Visit, title: str, text: str, status: int = 404) -> Page:
@@ -431,6 +459,76 @@ def _setup_progress(visit: Visit, params: dict[str, str]) -> Page:
     """How far a setup is, for the page that shows one and redraws its rows
     in place. Read from the job's file alone."""
     return Page(setup_page.progress(project_setup.progress(visit.site.project)))
+
+
+def _look(visit: Visit, params: dict[str, str]) -> Page:
+    """What a folder named on the start page holds (`echolot/elsewhere.py`):
+    its recordings by what their names say, how many and how large, and the
+    press that reads them; or why there is nothing to read. The folder is
+    listed and nothing in it is opened."""
+    site = visit.site
+    try:
+        path = elsewhere.asked(site.project, visit.form)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    typed = (visit.form.get("folder") or "").strip()
+    scenarios, focus = elsewhere.scenarios_of(visit.st)
+    view: dict[str, Any] = {"typed": typed, "look": site.url("look"), "scenarios": scenarios, "groups": []}
+    if path is None:
+        view["summary"] = ("Name the folder the recordings are in: a path on this computer, from your home folder "
+                           "(`~/Downloads/…`) or whole.")
+        return Page(elsewhere_page.look(view, site.url, visit.steps(None)), 400)
+    found = elsewhere.look(site.project, path)
+    view.update(summary=elsewhere.summary(found), path=str(found.path), typed=typed or found.shown,
+                inside=[(name, str(sub), f"{n} recording{'' if n == 1 else 's'}") for name, sub, n in found.inside])
+    if found.state != "found":
+        return Page(elsewhere_page.look(view, site.url, visit.steps(None)))
+    group = elsewhere.chosen_group(found, scenarios)
+    scenario = elsewhere.chosen_scenario(scenarios, focus, group)
+    run = job.read(site.project, check.JOB)
+    why = (check.running_words(run, visit.st.get("collect")) + " One thing runs at a time."
+           if run is not None and run["status"] == job.RUNNING else check._stops_all(visit.st, run))
+    if not scenarios:
+        why = why or "Not yet: echolot does not know this app. The start page says what to do next."
+    step = (elsewhere.command(site.project, _config_path(visit), found, group, scenario, len(scenarios) > 1)
+            if group else None)
+    each_s = check.read_s(site.project, scenario)
+    view.update(
+        action=site.url("far"), group=group.key if group else "", scenario=scenario, why=why,
+        groups=[{"key": g.key, "title": elsewhere.group_title(g), "text": elsewhere.group_text(g, scenarios, each_s)}
+                for g in found.groups],
+        hint="The phone is not needed, nothing in your code changes, and nothing in the folder is written.",
+        whose=(f"They become a report of their own, in `{elsewhere.OUT.as_posix()}`: the reports of your scenarios, "
+               "and what Check again compares with, stay as they were. The next folder read takes its place."),
+        command=step["shown"] if step else "")
+    return Page(elsewhere_page.look(view, site.url, visit.steps(None)))
+
+
+def _read_far(visit: Visit, params: dict[str, str]) -> Page:
+    """Read the recordings a look offered (`elsewhere.start`): `analyze` over
+    them, as a run of the button's job. Refused, it answers with a page that
+    says why; started, it sends the browser to the start page, where the run
+    is."""
+    site = visit.site
+    try:
+        elsewhere.start(site.project, site.config, visit.st, visit.form, spawn=site.spawn)
+    except check.Refusal as e:
+        return _nothing(visit, e.title, e.text, e.status)
+    return Page("", 303, site.url("start"))
+
+
+def _far_report(visit: Visit, params: dict[str, str]) -> Page:
+    """The report of recordings from elsewhere, drawn from its report.json now."""
+    path = elsewhere.report_path(visit.site.project)
+    if not path.is_file():
+        return _nothing(visit, "No such report yet", "It appears here once recordings from a folder are read: "
+                        "Analyse trace files, under the button on the start page.")
+    try:
+        data = cli._load_report(path)
+    except ConfigError as e:
+        return _nothing(visit, "The report does not read", f"{e}. Read the folder again to write it anew.")
+    return Page(report_page.render(data, where=cli._shown_path(path, visit.site.project), last=False,
+                                   steps=visit.steps(None), crumb="recordings from elsewhere", policy=kit.SERVED))
 
 
 def _set_limit(visit: Visit, params: dict[str, str]) -> Page:
@@ -698,6 +796,7 @@ def _agent_home(visit: Visit, params: dict[str, str]) -> str | None:
 
 ROUTES: list[Route] = [
     Route("start", "", _start, step="Start"),
+    Route("anew", "anew", _anew),
     Route("report", "report", _report, step="Report", there=_has_report),
     Route("report-of", "report/{scenario}", _report),
     Route("hunt-report", "hunt/{n}/report/{k}", _hunt_report),
@@ -711,6 +810,9 @@ ROUTES: list[Route] = [
     Route("setup", "setup", _set_up, method="POST"),
     Route("setup-state", "setup/state", _setup_progress),
     Route("limit", "limit", _set_limit, method="POST"),
+    Route("look", "elsewhere/look", _look, method="POST"),
+    Route("far", "elsewhere/read", _read_far, method="POST"),
+    Route("elsewhere-report", "elsewhere", _far_report),
     Route("dig-ask", "dig/ask", _dig_ask, method="POST", home=_dig_from),
     Route("dig-ask-of", "dig/ask/{scenario}", _dig_ask, method="POST", home=_dig_from),
     Route("dig", "dig/start", _dig_start, method="POST", home=_dig_from),

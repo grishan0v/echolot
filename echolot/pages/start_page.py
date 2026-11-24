@@ -41,7 +41,9 @@ _ROW_ICON = {"done": "green", "failed": "red", "stopped": "grey", "cut": "grey"}
 def _ready(view: dict[str, Any], again: str, lead: bool = True) -> str:
     """The three sentences, each after its icon, and Refresh. The link is the
     screen's one next step while something is in the way, unless the page
-    has another (`lead` is off): a project is set up with no phone at hand."""
+    has another (`lead` is off): a project is set up with no phone at hand.
+    It reads the repository anew as well, where the server keeps what `scan`
+    read of it (#931)."""
     lines = view["ready"]
     items = "".join(
         f'<li>{kit.icon(line["tone"])}<span><span class="vh">{e(line["state"])}: </span>'
@@ -207,9 +209,10 @@ def _form(offer: dict[str, Any], run: dict[str, Any] | None, link: Link, report:
             f'{anew}<p class="small sub go-hint" id="check-hint"{status}>{kit.prose(said)}</p></form>')
 
 
-def _check(found: dict[str, Any], step: dict[str, Any], link: Link) -> str:
+def _check(found: dict[str, Any], step: dict[str, Any], link: Link, far_html: str = "") -> str:
     """The part of the page that checks the app: the choice of a scenario
-    when there are several, a run when one is on show, and the button."""
+    when there are several, a run when one is on show, and the button; then
+    the fold that reads recordings from elsewhere (`far_html`)."""
     offer, run = found["offer"], found["run"]
     going = bool(run) and run["status"] == "running"
     parts = []
@@ -223,7 +226,11 @@ def _check(found: dict[str, Any], step: dict[str, Any], link: Link) -> str:
         scenario = (run or {}).get("scenario")
         several = len(offer["choices"]) > 1
         report = (link("report-of", scenario=scenario) if several and scenario else link("report")) if run else None
+        if run and run.get("do") == "elsewhere":
+            # Recordings from a folder made a report of their own (#479).
+            report = link("elsewhere-report")
         parts.append(_form(offer, run, link, report))
+    parts.append(far_html)
     return f'<section class="stack gap-5" id="check" aria-label="Check the app">{"".join(parts)}</section>'
 
 
@@ -262,9 +269,10 @@ def _commands(offer: dict[str, Any]) -> tuple[str, str] | None:
         f"type in a terminal, so the report is the same one.</p>{lines}")
 
 
-def _reports(view: dict[str, Any], link: Link) -> str:
-    """The last report of each scenario, then every investigation with the
-    reports it filed. A report opens; what does not read is said, not linked."""
+def _reports(view: dict[str, Any], link: Link, far_card: str = "") -> str:
+    """The last report of each scenario, the report of recordings from
+    elsewhere (`far_card`), then every investigation with the reports it
+    filed. A report opens; what does not read is said, not linked."""
     several = len(view["latest"]) > 1
     cards = []
     for rep in view["latest"]:
@@ -287,6 +295,7 @@ def _reports(view: dict[str, Any], link: Link) -> str:
             f'<p class="measure">{e(verdict.get("text") or "")}</p>'
             f'<p class="small sub measure">{kit.prose(rep["plain"])}</p>'
             f'<div class="rowf"><a class="btn primary" href="{e(href)}">See the report</a></div></li>')
+    cards.append(far_card)
     past = "".join(_investigation(inv, link) for inv in view["investigations"])
     damaged = view.get("hunt_unreadable")
     lost = f'<p class="small measure">{kit.prose(damaged)}.</p>' if damaged else ""
@@ -329,6 +338,13 @@ def _behind(pairs: Sequence[tuple[str, str]]) -> str:
     return "".join(f'<p class="says"><span class="who">{e(who)}</span> {kit.prose(said)}</p>' for who, said in pairs)
 
 
+def _repo_read(view: dict[str, Any]) -> str:
+    """When `scan` read the repository, where the server keeps that reading
+    between pages (#931), as `ready.read` says it."""
+    said = view.get("repo_read")
+    return f" {kit.prose(said)}" if said else ""
+
+
 def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = (),
               limit: dict[str, Any] | None = None) -> str:
     """The fold: the one number the button takes and the commands it runs
@@ -360,7 +376,7 @@ def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = (),
     intro = ('<p class="small sub measure">What this page reads, and what <code>echolot</code> and '
              f'<code>echolot scan</code> say behind each line. Nothing here is changed from the page{one}: '
              'the values live in <code>echolot.yml</code>.</p>')
-    folder = f'<p class="small sub">Read from <code>{e(view["project"])}</code>.</p>'
+    folder = f'<p class="small sub">Read from <code>{e(view["project"])}</code>.{_repo_read(view)}</p>'
     return ('<div class="start-set"><details class="tg big" id="settings"><summary>' + kit.TW
             + f'<span>All settings</span></summary><div class="tg-b">{intro}{kit.pairs(rows, "props settings")}'
             f'{folder}</div></details></div>')
@@ -368,7 +384,7 @@ def _settings(view: dict[str, Any], launches: Sequence[tuple[str, str]] = (),
 
 def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str, Any] | None = None,
            setup: dict[str, Any] | None = None, limit: dict[str, Any] | None = None,
-           dig_html: str = "") -> str:
+           dig_html: str = "", far_html: str = "", far_card: str = "") -> str:
     """The start page for one reading of the project (`ready.read`).
 
     `check` is the button and the last run (`check.view`), for a server that
@@ -386,6 +402,10 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
     investigation open (`dig_page.on_start`): it stands first, above the
     button, and in place of the next step, which would be about that
     investigation too.
+
+    `far_html` is the fold that reads recordings from a folder elsewhere
+    (`elsewhere_page.on_start`), under the button, and `far_card` the report
+    they made, last in the list of reports (#479).
     """
     name = view.get("name")
     step = view["next"]
@@ -400,7 +420,8 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
         # The button takes the step a person would take by hand, so that
         # step is not said twice. A step that is not the button's (set the
         # project up, write a config) keeps its place, after the button.
-        body = _check(check, step, link) + ("" if "what" in step or dig_html else _next(step, red=False))
+        body = (_check(check, step, link, far_html)
+                + ("" if "what" in step or dig_html else _next(step, red=False)))
     else:
         body = _next(step)
     css, js, lead = CSS, JS, True
@@ -413,8 +434,10 @@ def render(view: dict[str, Any], link: Link, steps: Steps = (), check: dict[str,
     if limit:
         css += tuple(limit.get("css") or ())
         js += tuple(limit.get("js") or ())
-    body = f'<div class="start-body stack gap-6">{dig_html}{body}{_reports(view, link)}</div>'
-    main = (f'<main><div class="wide start">{head}{_ready(view, link("start") or "", lead)}{body}'
+    if far_html or far_card:
+        css += ("elsewhere.css",)
+    body = f'<div class="start-body stack gap-6">{dig_html}{body}{_reports(view, link, far_card)}</div>'
+    main = (f'<main><div class="wide start">{head}{_ready(view, link("anew") or link("start") or "", lead)}{body}'
             f'{_settings(view, launches, limit)}</div></main>')
     page = f'<div class="page no-dock">{kit.topbar([name, view.get("scenario")], steps)}{main}</div>'
     return kit.document("echolot" + (f": {name}" if name else ""), page, css=css, js=js, policy=kit.SERVED,

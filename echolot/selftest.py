@@ -9503,6 +9503,157 @@ def _(report):
         dig._shell, dig.own_bin = saved_shell, saved_bin
 
 
+@check("ui: what scan read of the repository is kept between pages, and read again when a file it "
+       "reads changes or a source comes or goes, not when a source is edited")
+def _(report):
+    """The start page ran `scan` at every view and once more for every
+    press: on a repository of about a million lines that was 9.6 s of CPU
+    idle and 88 s under load, and a page took up to two and a half minutes
+    (#931). The reading is kept with a stamp of the tree and taken again when
+    a build script, a manifest or the build code changes, or a source comes
+    or goes. A source edited in an ordinary module does not change what
+    `scan` says, and is the moment the page is opened again. Each page gets
+    the facts as they were read, not as the page before left them.
+    """
+    import os
+    from . import scan as scan_mod
+    from . import scan_cache
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        main = root / "app" / "src" / "main"
+        (main / "java").mkdir(parents=True)
+        (main / "AndroidManifest.xml").write_text("<manifest/>", encoding="utf-8")
+        (root / "app" / "build.gradle.kts").write_text("android {}\n", encoding="utf-8")
+        screen = main / "java" / "Screen.kt"
+        screen.write_text("class Screen\n", encoding="utf-8")
+        read: list[Path] = []
+
+        def describe(here: Path) -> scan_mod.Facts:
+            read.append(here)
+            return scan_mod.Facts(root=str(here), notes=["read"])
+        kept = scan_cache.Kept(describe=describe, ask_devices=lambda facts: None)
+
+        def later(path: Path) -> None:
+            st = path.stat()
+            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        first = kept(root)
+        first.notes.append("a page's own")
+        assert kept(root).notes == ["read"] and len(read) == 1, (kept(root).notes, len(read))
+        later(screen)
+        kept(root)
+        assert len(read) == 1, "a source edited read the repository again"
+        later(root / "app" / "build.gradle.kts")
+        kept(root)
+        assert len(read) == 2, "a build script changed and the reading was kept"
+        (main / "java" / "Feed.kt").write_text("class Feed\n", encoding="utf-8")
+        kept(root)
+        assert len(read) == 3, "a source came and the reading was kept"
+        later(main / "AndroidManifest.xml")
+        kept(root)
+        assert len(read) == 4, "a manifest changed and the reading was kept"
+
+
+@check("ui: Refresh forgets what scan read of the repository and sends the browser to the start page")
+def _(report):
+    """Refresh says it reads everything anew. With the repository's reading
+    kept between pages (#931) it has to forget that reading too, or a change
+    the stamp does not see, a constant a benchmark names from another file,
+    would stay unsaid until the server stops. A read that writes nothing."""
+    from . import ready, scan_cache, ui
+    from . import scan as scan_mod
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        kept = scan_cache.Kept(describe=lambda here: scan_mod.Facts(root=str(here)), ask_devices=lambda facts: None)
+        site = ui.Site(project=root, config="echolot.yml", token="selftest", port=1,
+                       src=ready.Sources(scan=kept, pick_device=lambda serial: "", kept=kept))
+        kept(root)
+        assert kept.reads == 1 and kept.read_at is not None
+        reply = ui.answer(site, "GET", "/selftest/anew", {"Host": site.host})
+        assert reply.status == 303 and dict(reply.headers).get("Location") == "/selftest/", (reply.status,
+                                                                                            reply.headers)
+        assert kept.read_at is None, "the reading was kept after Refresh"
+        kept(root)
+        assert kept.reads == 2, kept.reads
+        assert not any(root.iterdir()), sorted(p.name for p in root.iterdir())
+
+
+@check("ui: a folder named on the start page is listed by the names of its recordings, and nothing in it "
+       "is opened")
+def _(report):
+    """Recordings made elsewhere had no way in from the page (#479). A look
+    lists the folder one level deep and takes in only files whose names end
+    in a recording's suffix: `collect`'s names say the scenario, a
+    macrobenchmark's the test, and an iteration there twice is two sittings.
+    A file nobody may read is listed all the same: its name and size are
+    all a look takes. What a form names is held to a path."""
+    from . import check as check_mod
+    from . import elsewhere
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        folder = root / "ci"
+        folder.mkdir()
+        for name in ("coldStart_iter000.perfetto-trace", "coldStart_iter001.perfetto-trace",
+                     "Startup_cold_iter000_2026-11-20-140212.trace", "Startup_cold_iter000_2026-11-08-093001.trace",
+                     "sent.pftrace", "notes.txt"):
+            (folder / name).write_bytes(b"x")
+        (folder / "coldStart_iter000.perfetto-trace").chmod(0)
+        try:
+            found = elsewhere.look(root, folder)
+        finally:
+            (folder / "coldStart_iter000.perfetto-trace").chmod(0o644)
+        assert found.state == "found" and found.count == 5, (found.state, found.count)
+        by = {g.key: g for g in found.groups}
+        assert set(by) == {"coldStart", "Startup_cold", ""}, sorted(by)
+        assert len(by["coldStart"].files) == 2 and not by["coldStart"].test
+        assert by["Startup_cold"].test and by["Startup_cold"].repeats == [0], by["Startup_cold"]
+        assert found.groups[-1].name is None, "names that say nothing come last"
+        assert elsewhere.look(root, root / "missing").state == "missing"
+        assert elsewhere.look(root, folder / "notes.txt").state == "file"
+        assert elsewhere.asked(root, {"folder": "ci"}) == folder
+        assert elsewhere.asked(root, {"folder": "  "}) is None
+        for text in ("ci\nx", "ci\x00", "/" + "a" * elsewhere.PATH_CAP):
+            try:
+                elsewhere.asked(root, {"folder": text})
+            except check_mod.Refusal as e:
+                assert e.status == 400, e.status
+            else:
+                raise AssertionError(f"{text[:20]!r} was taken for a path")
+
+
+@check("ui: recordings read from a folder become a report of their own, by `analyze` alone, and the "
+       "scenario's report is not touched")
+def _(report):
+    """Someone else's recordings read as the report of this project's
+    scenario would stand beside this phone's runs in the next comparison
+    (#479). Read them runs the one command a person would, `analyze` over
+    the recordings chosen with `-o .echolot/out/elsewhere`: no `collect`, no
+    `compare`, and the scenario's window by `--scenario` only where the
+    config names several."""
+    from . import elsewhere
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        folder = root.parent / (root.name + "-ci")
+        folder.mkdir()
+        try:
+            for i in range(3):
+                (folder / f"coldStart_iter{i:03d}.perfetto-trace").write_bytes(b"x")
+            found = elsewhere.look(root, folder)
+            group = found.groups[0]
+            one = elsewhere.command(root, "echolot.yml", found, group, "coldStart", False)
+            argv = one["argv"]
+            assert argv[3] == "analyze" and argv[-3:] == ["--html", "-o", str(root / elsewhere.OUT)], argv
+            assert argv[4:7] == [str(folder / f"coldStart_iter{i:03d}.perfetto-trace") for i in range(3)], argv
+            assert "--scenario" not in argv and "collect" not in argv and "compare" not in argv, argv
+            assert one["shown"].endswith("-c echolot.yml --html -o .echolot/out/elsewhere"), one["shown"]
+            several = elsewhere.command(root, "echolot.yml", found, group, "feedScroll", True)["argv"]
+            assert several[several.index("--scenario") + 1] == "feedScroll", several
+            assert elsewhere.report_path(root) == root / ".echolot" / "out" / "elsewhere" / "report.json"
+        finally:
+            for f in folder.iterdir():
+                f.unlink()
+            folder.rmdir()
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

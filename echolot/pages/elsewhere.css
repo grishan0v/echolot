@@ -1,0 +1,13 @@
+/* Recordings made elsewhere: the fold on the start page that asks for a
+   folder, and the screen that says what the folder holds. */
+
+.far-form { display: grid; gap: var(--s2); max-width: var(--col); }
+.far-label { font-weight: 600; }
+.far-row { gap: var(--s2) var(--s3); }
+.far-row input { flex: 1 1 18rem; min-width: 0; height: 40px; padding: 0 12px; border: 0; border-radius: var(--r2);
+  background: var(--bg); box-shadow: inset 0 0 0 1px var(--control); font: 400 var(--t-sm)/1.4 var(--mono); }
+.far-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.far-row input:disabled { opacity: .45; }
+@media (pointer: coarse) { .far-row input { height: 44px; } }
+.far-inside { display: grid; }
+.far-inside .btn { font-family: var(--mono); font-size: var(--t-sm); }

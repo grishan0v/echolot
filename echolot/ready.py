@@ -6,7 +6,9 @@ is asked of the function the CLI stands on:
 
     where the project is     state.project_state, state.next_kind, state.by_hand
     the words of `echolot`   cmd_status itself, its printed lines read by name
-    the repository           scan.describe, and scan.render for its words
+    the repository           scan.describe, kept between pages while what it
+                             read is as it was (scan_cache), and scan.render
+                             for its words
     the phone                runner.pick_device, the one `collect` records on
     the thresholds           plan_detectors
     the investigations       hunt.history, hunt.archived_reports
@@ -15,7 +17,7 @@ The page puts a plain sentence in front and shows the CLI's own words behind
 it, so that it never says what the CLI would not say.
 
 Reading only. No file is written and no command is started; the phone is asked
-for nothing but the list `adb devices` prints.
+for nothing but the list `adb devices` prints, at every page.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from . import hunt as hunt_mod
 from . import layer, plain, runner, state, when
 from . import main as cli
 from . import scan as scan_mod
+from . import scan_cache
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
 from .config import PACKAGE
 from .pages import report_page
@@ -47,14 +50,19 @@ STATE = {GREEN: "ready", RED: "in the way", GREY: "not checked"}
 class Sources:
     """What is read from outside the project's files: the repository with the
     devices adb lists, and the phone `collect` would pick. The real ones are
-    the functions behind `scan` and `collect`; a test hands in doubles."""
+    the functions behind `scan` and `collect`; a test hands in doubles.
+
+    `kept` is the reading of the repository kept between two pages
+    (`echolot/scan_cache.py`, #931), where there is one: `scan` is then that
+    reading, the start page says when it was taken, and Refresh forgets it."""
     scan: Callable[[Path], scan_mod.Facts]
     pick_device: Callable[[str | None], str]
+    kept: scan_cache.Kept | None = None
 
 
 def real_sources() -> Sources:
-    return Sources(scan=lambda root: scan_mod.describe(root, devices=True),
-                   pick_device=runner.pick_device)
+    kept = scan_cache.Kept()
+    return Sources(scan=kept, pick_device=runner.pick_device, kept=kept)
 
 
 # ---------------------------------------------------------------------------
@@ -723,6 +731,20 @@ def archived(project: Path, n: int, k: int) -> tuple[dict[str, Any], Path] | Non
 # everything the start page shows
 
 
+def repo_read(src: Sources) -> str | None:
+    """When `scan` read the repository, where `src` keeps that reading between
+    pages (#931), and what reads it again. None where every page reads it."""
+    if src.kept is None or src.kept.read_at is None:
+        return None
+    ago = _ago(src.kept.read_at)
+    if ago is None:
+        return None
+    if re.match(r"\d+ seconds? ago", ago):
+        ago = "moments ago" if int(ago.split(" ", 1)[0]) < 10 else ago
+    return (f"echolot read the repository {ago}. It reads it again when a build script, a manifest or the build "
+            "code changes, when a source file comes or goes, and at Refresh.")
+
+
 def lines(project: Path, config: str, src: Sources, st: dict | None = None,
           tp_binary: str | None = None) -> list[dict[str, Any]]:
     """The three ready lines alone (this computer, the phone, the app), for
@@ -732,8 +754,10 @@ def lines(project: Path, config: str, src: Sources, st: dict | None = None,
 
 def read(project: Path, config: str, src: Sources, tp_binary: str | None = None,
          st: dict | None = None) -> dict[str, Any]:
-    """The start page's whole reading, taken anew every time it is asked for.
-    `st` is the project's state when the caller has just read it."""
+    """The start page's whole reading, taken anew every time it is asked for,
+    but for the repository where `src` keeps what `scan` read of it while
+    nothing it read has changed (#931). `st` is the project's state when the
+    caller has just read it."""
     st = st if st is not None else state.project_state(project, config)
     head, says = status_says(config, tp_binary)
     known = st.get("config")
@@ -770,6 +794,8 @@ def read(project: Path, config: str, src: Sources, tp_binary: str | None = None,
         # A hunt.json that is there and does not load: said where the open
         # investigation would be, not left out as though there were none (#580).
         "hunt_unreadable": st.get("hunt_unreadable"),
-        # What `scan` read, for whoever draws from it beside this reading.
+        # What `scan` read, for whoever draws from it beside this reading,
+        # and when it read the repository, where that reading is kept.
         "facts": facts,
+        "repo_read": repo_read(src) if facts is not None else None,
     }
