@@ -84,7 +84,7 @@ def kind(args: list[str]) -> str:
     The build read (#393) is first: its script lists the APKs with `pm path`.
     """
     text = " ".join(args)
-    for name, needle in (("build", "unzip -p"), ("settings", "settings get global"),
+    for name, needle in (("build", "unzip -p"), ("settings", "animator_duration_scale"),
                          ("devices", "adb devices"), ("resolve", "resolve-activity"),
                          ("force-stop", "am force-stop"), ("rm", "rm -f"),
                          ("perfetto", "perfetto -c"), ("start", "am start -W"),
