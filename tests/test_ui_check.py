@@ -819,7 +819,7 @@ def test_a_comparison_that_fails_leaves_the_report(project):
     page = page_of(site)
     check("the report is ready all the same", page.one("p", id="run-end").text == (
         "The new report is ready. The comparison was not made. The report stands as it is; only the comparison with "
-        "the one before it is missing."))
+        "the report before it is missing."))
     check("compare's own words", page.one("pre", "printed").raw() == "error: these reports measured two scenarios")
     check("the report is offered", page.one("form", id="check-form").one("a", "btn").text == "See the report"
           and page.one("ul", "counts").all("li"))
@@ -1048,6 +1048,39 @@ def test_the_answers_page_has_the_button_in_its_place(project, demo_report):
         "collect", "-c", config], echolot.ran[0])
     check("and compare against the first report the investigation filed", echolot.ran[2] == ["compare", str(first), "-c", config, "--html"])
     check("no copy of a report was needed", not (project.root / ".echolot" / "out" / "before.json").exists())
+
+
+def test_check_again_from_the_answer_says_it_compared_with_that_investigation_s_first_round(project, demo_report):
+    """The answer's Check again compares the new report with the
+    investigation's first round, as its page promises. The row and the
+    start page said "the report before it", which is the last report on
+    the start page and was not what `compare` was given (#866)."""
+    site, echolot = serving(answered(project, demo_report), window=1500.0)
+    check("pressed", press(site, fields={"what": "record:coldStart", "hunt": str(fx.N)}).status == 303)
+    first = project.root / ".echolot" / "hunts" / str(fx.N) / "reports" / "001.json"
+    check("compare was given the investigation's first round", echolot.ran[2][:2] == ["compare", str(first)])
+    page = page_of(site)
+    check("the row names it", rows(page)[-1] == ("done", f"Comparing with round 1 of investigation #{fx.N}", "done"),
+          rows(page))
+    said = page.one("p", id="run-compare").text
+    check("and so does the sentence under the run", said.startswith(
+        f"It was compared with round 1 of investigation #{fx.N}. ") and "the report before it" not in said, said)
+    progress = get(site, "check/state").body
+    check("the rows a page asks for while it runs say the same",
+          f"Comparing with round 1 of investigation #{fx.N}" in progress, progress[:600])
+    first.unlink()
+    check("pressed again, with round 1 gone", press(site, fields={"what": "record:coldStart", "hunt": str(fx.N)}).status
+          == 303)
+    check("the round it is compared with is the one compare was given", rows(page_of(site))[-1][1]
+          == f"Comparing with round 2 of investigation #{fx.N}" and echolot.ran[-1][1].endswith("002.json"),
+          echolot.ran[-1])
+    check("a press from the start page still compares with the report before it",
+          press(site, fields={"what": "record:coldStart"}).status == 303
+          and rows(page_of(site))[-1][1] == "Comparing with the report before it")
+    site, _ = serving(project, fail="compare", says="these reports measured two scenarios")
+    press(site, fields={"what": "record:coldStart", "hunt": str(fx.N)})
+    check("a comparison that failed names the one it did not make", page_of(site).one("p", id="run-end").text.endswith(
+        f"only the comparison with round 2 of investigation #{fx.N} is missing."))
 
 
 def test_the_answers_button_while_a_check_runs_and_when_it_cannot(project, demo_report, adb):

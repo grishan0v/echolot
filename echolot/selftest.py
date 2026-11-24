@@ -8073,6 +8073,36 @@ def _(report):
         assert text.startswith("It left the investigation open, and it was closed after that"), text
 
 
+@check("ui: Check again from an investigation's page names the round it compared with, "
+       "not the report before it")
+def _(report):
+    """The answer's Check again gives `compare` the investigation's first
+    round, as its page promises. The comparison's row and the start page
+    said "Comparing with the report before it" and "It was compared with
+    the report before it", which is the last report on the start page
+    (#866). The press keeps which round of which investigation it is, and
+    every sentence that names the comparison says that.
+    """
+    from . import check as check_mod
+    from .pages import start_page
+    what = {"do": "record", "scenario": "coldStart", "against": {"hunt": 5, "round": 1}}
+    run = {"status": "done", "what": what, "steps": [
+        {"id": "analyze", "status": "done"}, {"id": "compare", "status": "done"}]}
+    assert check_mod.rows(run, None)[-1]["name"] == "Comparing with round 1 of investigation #5", \
+        check_mod.rows(run, None)
+    assert check_mod.against(run) == "round 1 of investigation #5"
+    view = {"status": "done", "rows": check_mod.rows(run, None), "title": "Done.", "text": "", "counts": None,
+            "compare": "Faster by 0.4 s", "compared": "reading", "against": check_mod.against(run), "said": None,
+            "todo": ""}
+    html = start_page._run(view, lambda *a, **k: None)
+    assert "It was compared with round 1 of investigation #5. " in html, html
+    assert "the report before it" not in html, html
+    plain = {**run, "what": {"do": "record", "scenario": "coldStart"}}
+    assert check_mod.rows(plain, None)[-1]["name"] == "Comparing with the report before it"
+    for wrong in ({"hunt": "5", "round": 1}, {"hunt": 5, "round": True}, "round 1"):
+        assert check_mod.against({**run, "what": {**what, "against": wrong}}) == "the report before it", wrong
+
+
 # --- the run ---------------------------------------------------------------
 
 # The trace_processor this self-check is checking: what `doctor

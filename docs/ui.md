@@ -339,7 +339,10 @@ On the answer's page **Check again** stands beside the line that page gives to
 copy, and runs that line: `collect` with the config's own number of launches,
 `analyze`, and `compare` against the first report the investigation filed,
 which is the app as it was before anyone touched it. The run is shown on the
-start page.
+start page, and there the comparison's row and the sentence under the run
+name that report: "Comparing with round 1 of investigation #5", "It was
+compared with round 1 of investigation #5". A press on the start page
+compares with the report before it, and says that.
 
 **All settings** is a fold. It holds the number of launches for the button,
 the commands a press runs, and, read-only, what the page reads for you, with

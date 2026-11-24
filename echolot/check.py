@@ -455,6 +455,7 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
         launches = press["launches"] or LAUNCHES
 
     before: Path | None = None
+    round_of: dict[str, int] | None = None
     if press["hunt"]:
         # Against the app as it was before anyone touched it: the first
         # report the investigation filed, where it stands.
@@ -466,6 +467,9 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
             raise Refusal("No such investigation", "It filed no report to compare the new one with. "
                           "Go back to the start page and press the button there.", 400)
         before = home / "reports" / f"{first:03d}.json"
+        # Said wherever the comparison is named: it is not the report before
+        # this one, which the start page lists last (#866).
+        round_of = {"hunt": hunt.get("n") if _whole(hunt.get("n")) else int(press["hunt"]), "round": first}
     elif choice.get("report") and not again:
         # `analyze` writes the new report over the last one, so the last one
         # is copied beside it first: that copy is what `compare` is given.
@@ -479,6 +483,8 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
     what = {"do": do, "scenario": choice["name"], "mode": choice["mode"],
             "launches": (launches or choice.get("iterations")) if do == RECORD else None,
             "report": str(choice["report_dir"] / "report.json"), "before": str(before) if before else None}
+    if round_of:
+        what["against"] = round_of
     try:
         return job.start(project, JOB, plan, what, spawn=spawn)
     except job.Refused as e:
@@ -539,6 +545,18 @@ def _state(run: dict[str, Any], step: dict[str, Any]) -> str:
 _ENDED = {"failed": "did not finish", "stopped": "stopped", "cut": "cut short"}
 
 
+def against(run: dict[str, Any]) -> str:
+    """What a run's new report is compared with, in words. From the start
+    page, the report before it. From an investigation's page, the round of
+    that investigation `compare` is given: its first, the app as it was
+    before anyone touched it, and not the report before this one, which
+    the row and the start page named all the same (#866)."""
+    of = (run.get("what") or {}).get("against")
+    if isinstance(of, dict) and _whole(of.get("hunt")) and _whole(of.get("round")):
+        return f"round {of['round']} of investigation #{of['hunt']}"
+    return "the report before it"
+
+
 def rows(run: dict[str, Any], collect: dict[str, Any] | None) -> list[dict[str, str]]:
     """The run as a list, every row there from the start: one per launch, one
     for reading the recordings, one for the comparison when there is one."""
@@ -566,7 +584,7 @@ def rows(run: dict[str, Any], collect: dict[str, Any] | None) -> list[dict[str, 
                 else:
                     out.append({"state": "wait", "name": name, "note": ""})
     for ident, name, going in (("analyze", "Reading the recordings", "reading…"),
-                               ("compare", "Comparing with the report before it", "comparing…")):
+                               ("compare", f"Comparing with {against(run)}", "comparing…")):
         step = _step(run, ident)
         if step:
             how = _state(run, step)
@@ -743,6 +761,7 @@ def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None,
     if compared and compared.get("status") == job.DONE and report_path is not None:
         said = compare_reads(report_path.parent, compared.get("started") or 0)
         view["compare"], view["compared"] = said if said else (None, None)
+        view["against"] = against(run)
         # Whose comparison it is, where the config names several scenarios:
         # a page links to that one's, as it does for the report.
         view["compared_of"] = what.get("scenario") if len(st.get("scenarios") or []) > 1 else None
@@ -778,7 +797,7 @@ def reading(project: Path, st: dict[str, Any], run: dict[str, Any] | None,
         view["todo"] = "What the command says above is the reason. Put that right, then press the button again."
     elif where == "compare":
         view["title"] = "The new report is ready. The comparison was not made."
-        view["text"] = "The report stands as it is; only the comparison with the one before it is missing."
+        view["text"] = f"The report stands as it is; only the comparison with {against(run)} is missing."
     else:
         view["title"] = "The check did not finish."
     if ended is not None:
