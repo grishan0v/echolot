@@ -228,3 +228,24 @@ def test_a_window_whose_anchors_missed_is_not_called_the_whole_trace() -> None:
           and "everything the process did" in said, said)
     cmp = compare_mod._anchor_warning("before", w)[0]
     check("and so does compare", "whole trace" not in cmp["text"], cmp)
+
+
+def test_analyze_whole_trace_from_a_subfolder_works_on_the_project(tmp_path: Path,
+                                                                  monkeypatch) -> None:
+    """From the build folder, `--whole-trace` reads the project's config above
+    it and writes into that project, as any `analyze` does (#830)."""
+    config = {**selftest.FIXTURE_CONFIG,
+              "scenario": {"name": "coldStart", "start": "bindApplication", "end": "Screen.loaded"}}
+    (tmp_path / ".git").mkdir()
+    trace = _project(tmp_path, monkeypatch, config, fixture.pool)
+    (tmp_path / "build/out").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path / "build/out")
+    code, _, err = _cli("analyze", str(trace), "--whole-trace")
+    check("exit 0, with the config above", code == 0
+          and f"config: {(tmp_path / 'echolot.yml').resolve()}" in err, err[-800:])
+    check("the report in the project",
+          (tmp_path / ".echolot/out/whole-trace/report.json").is_file()
+          and not (tmp_path / "build/out/.echolot").exists())
+    runs = recorder.read(tmp_path / recorder.LOG_FILE)
+    check("and its line in the project's log",
+          runs and runs[-1]["facts"].get("scenario") == "whole-trace", runs[-1:])

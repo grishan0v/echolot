@@ -254,3 +254,19 @@ def test_init_from_a_subfolder_installs_into_the_project(tree: Path, monkeypatch
           and "the layer goes there" in err, err)
     check("and nothing under app/", not (tree / "proj/app/.claude").exists()
           and not (tree / "proj/app/.gitignore").exists())
+
+
+def test_source_root_is_said_to_be_going_away(tree: Path, monkeypatch, capsys) -> None:
+    (tree / "proj/echolot.yml").write_text(
+        CONFIG + "  source_root: app/src/main/kotlin\n", encoding="utf-8")
+    monkeypatch.chdir(tree / "proj/app")
+    with recorder.isolated():
+        main(["status"])
+    err = capsys.readouterr().err
+    check("once, naming the file as typed from here",
+          err.count("project.source_root is read by no command") == 1
+          and "../echolot.yml" in err, err)
+    (tree / "proj/echolot.yml").write_text(CONFIG, encoding="utf-8")
+    with recorder.isolated():
+        main(["status"])
+    check("and not without it", "source_root" not in capsys.readouterr().err)

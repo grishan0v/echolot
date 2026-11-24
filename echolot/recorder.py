@@ -76,7 +76,7 @@ def at(root: Path | str | None) -> None:
     macrobenchmark's output directory, which is named after a build variant
     and a device model. Everything it leaves behind already follows the config
     that named the project rather than the working directory — the report
-    through `_out_dir`, the investigation through `_project_root`.
+    through `_out_dir`, the investigation through `project.resolve`.
 
     This file did not, and it was the only one. `LOG_DIR` is a relative path
     and it was resolved against whatever directory the command happened to run
