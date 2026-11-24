@@ -12,6 +12,8 @@ halves — when the choice is offered, and when it must not be.
 
 from __future__ import annotations
 
+import argparse
+
 import json
 import os
 import re
@@ -158,8 +160,7 @@ def test_touch_follows_the_config(tmp_path: Path) -> None:
     would never reach the investigation, and the freshness rule would then
     offer to abandon a hunt that was running at that very moment.
     """
-    from echolot.config import Config
-    from echolot.main import _project_root
+    from echolot import project as project_mod
 
     p = setup(tmp_path, traces=5)
     hunt_mod.open_new(p, "cold start 3s → 7s", scenario="coldStart")
@@ -169,10 +170,10 @@ def test_touch_follows_the_config(tmp_path: Path) -> None:
     here = Path.cwd()
     try:
         os.chdir(elsewhere)
-        cfg = Config.load(p / "echolot.yml")
-        check("the config names the project root", _project_root(cfg) == p.resolve(),
-              str(_project_root(cfg)))
-        hunt_mod.touch(_project_root(cfg), analyze=True)
+        found = project_mod.resolve(argparse.Namespace(config=str(p / "echolot.yml")))
+        check("the config names the project root", found.folder == p.resolve(),
+              str(found.folder))
+        hunt_mod.touch(found.folder, analyze=True)
     finally:
         os.chdir(here)
     check("work from elsewhere still reaches the investigation",

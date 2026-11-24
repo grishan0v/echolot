@@ -241,7 +241,8 @@ PACKAGE = key("project", "package", TEXT, None,
 PROCESS = key("project", "process", TEXT, None,
               "The process to measure, as a glob, when it is not the package.")
 SOURCE_ROOT = key("project", "source_root", TEXT, None,
-                  "Read by no command; `root` is the checkout.")
+                  "Read by no command and going away: echolot warns about it, "
+                  "and the next release refuses it. `root` is the checkout.")
 ROOT = key("project", "root", TEXT, None,
            "The checkout rows are placed in, from the config's directory.")
 MAPPING = key("project", "mapping", TEXT, None,

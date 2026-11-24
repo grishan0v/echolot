@@ -34,7 +34,6 @@ file included, is said on the `config` line, and the next step is to fix it.
 project:
   package: com.example.app
   process: com.example.app     # GLOB over process.name
-  source_root: app/src/main/kotlin   # read by no command: the whole checkout is walked
   root: ../app                 # the checkout, when the config is kept outside it (default: the config's directory)
   mapping: app/build/outputs/mapping/benchmark/mapping.txt   # a minified build's R8 map
 
@@ -64,6 +63,11 @@ instrumentation:
   allowed: ["app/src/main", "feature/*/src/main"]
   temp_prefix: AGENTTMP_
 ```
+
+`project.source_root` is read by no command: placing a row, the leftover check
+and `mark --remove` walk the whole checkout, which `project.root` names. A
+config that still has it gets a warning, and the next release
+refuses it, so take the line out.
 
 ### `project.process`
 
