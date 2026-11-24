@@ -303,6 +303,31 @@ def test_init_outside_a_git_root_says_what_it_did_not_write(tmp_path: Path) -> N
           "/.echolot/" in (repo / ".gitignore").read_text(encoding="utf-8"), said)
 
 
+@pytest.mark.parametrize("eol", ["\r\n", "\n"])
+@pytest.mark.parametrize("last", [True, False], ids=["ends-with-eol", "no-final-eol"])
+def test_init_appends_to_the_gitignore_in_its_own_line_endings(
+        tmp_path: Path, eol: str, last: bool) -> None:
+    """Read as text and written back whole, a CRLF .gitignore came back LF,
+    and every line of the project's showed as changed (#741)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    before = eol.join(["build/", "*.iml", "local.properties"]).encode() + (
+        eol.encode() if last else b"")
+    (repo / ".gitignore").write_bytes(before)
+    said = init(repo)
+    after = (repo / ".gitignore").read_bytes()
+    check("the project's bytes are unchanged", after.startswith(before), after)
+    added = after[len(before):]
+    check("echolot's block follows, in the file's line endings",
+          added == (("" if last else eol) + eol + "# echolot: traces and the machine-local config"
+                    + eol + "/.echolot/" + eol + "/local.yml" + eol).encode(), added)
+    check("and no line ending of the other kind",
+          b"\n" not in after.replace(b"\r\n", b"") if eol == "\r\n" else b"\r" not in after,
+          after)
+    check("init says it", "↑ .gitignore" in said, said)
+
+
 # --- the hunt, opened first and closed last --------------------------------
 
 def _report(fired: bool) -> dict:

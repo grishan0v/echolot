@@ -72,7 +72,8 @@ def ensure(project: Path) -> str | None:
     """
     path = project / ".gitignore"
     try:
-        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        data = path.read_bytes() if path.exists() else b""
+        text = data.decode("utf-8")
     except (OSError, UnicodeDecodeError):
         # Appending to a file that could not be read would write it anew.
         return ("· .gitignore could not be read — left alone. Add these lines "
@@ -84,10 +85,16 @@ def ensure(project: Path) -> str | None:
         return ("· .gitignore not written — this directory is not a git root. "
                 "If a\n    repository above tracks it, add these lines to a "
                 ".gitignore here:\n" + _lines(want))
-    block = "\n".join([HEADER, *want]) + "\n"
+    # Appended as bytes, in the file's own line endings: read as text and
+    # written back whole, a CRLF file came back LF on macOS and Linux (an LF
+    # one CRLF on Windows), and every line of the project's showed as
+    # changed in review (#741).
+    eol = "\r\n" if "\r\n" in text else "\n"
+    block = eol.join([HEADER, *want]) + eol
     if text and not text.endswith("\n"):
-        text += "\n"
+        block = eol + block
     if text:
-        block = "\n" + block
-    path.write_text(text + block, encoding="utf-8")
+        block = eol + block
+    with path.open("ab") as f:
+        f.write(block.encode("utf-8"))
     return f"{'+' if not text else '↑'} .gitignore ({', '.join(want)})"
