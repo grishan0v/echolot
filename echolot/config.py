@@ -258,6 +258,10 @@ ALLOWED = key("instrumentation", "allowed", TEXTS, None,
               "every place.")
 TEMP_PREFIX = key("instrumentation", "temp_prefix", TEXT, "AGENTTMP_",
                   "What every temporary marker's name starts with.")
+# The prefix when the config names none. Every reader takes the prefix from
+# `Config.temp_prefix`, or from `mark.Markers` for a project without a
+# config, and nowhere else (#829).
+DEFAULT_PREFIX = TEMP_PREFIX.default
 CLEANUP = key("instrumentation", "cleanup", TEXT, None,
               "When the agent takes its markers out, as its skill says.")
 
@@ -621,7 +625,12 @@ class Config:
     @property
     def temp_prefix(self) -> str:
         """`instrumentation.temp_prefix`: what every temporary marker's name
-        starts with. Read here and nowhere else, with its one default."""
+        starts with. Read here and nowhere else, with its one default.
+
+        It was read in fifteen places with a fallback each, and a detector
+        parameter that holds the same prefix was read in none: a project with
+        its own prefix lost `repeated_work`'s near misses without a word (#874).
+        """
         value = self.value(TEMP_PREFIX)
         return str(value) if value else TEMP_PREFIX.default
 

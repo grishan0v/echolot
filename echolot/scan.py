@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import mark
+from .config import DEFAULT_PREFIX
 from .domains import constants, gradle_module, source_files
 
 # --- reading a build script as text -------------------------------------------
@@ -1152,7 +1153,7 @@ def skeleton(facts: Facts) -> list[str]:
     # Every one: cut to twelve, the rest dropped out of the list a person
     # confirms, and `mark` refused every site in them.
     out += [f'    - "{p}"' for p in facts.allowed]
-    out += ["  temp_prefix: AGENTTMP_", "  cleanup: always"]
+    out += [f"  temp_prefix: {DEFAULT_PREFIX}", "  cleanup: always"]
     return out
 
 

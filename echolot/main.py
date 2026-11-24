@@ -71,7 +71,7 @@ from .analyze import (
     analyze_trace,
     plan_detectors,
 )
-from .config import PACKAGE, PROCESS, WHOLE_TRACE, Config, ConfigError
+from .config import DEFAULT_PREFIX, PACKAGE, PROCESS, WHOLE_TRACE, Config, ConfigError
 from .runner import DEVICE, ITERATIONS, MODE, PROJECT_ROOT
 from .mark import Markers
 from .pages import answer_page
@@ -1123,7 +1123,7 @@ def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:
         return
     root = cfg.sources
     in_trace = markers["in_trace"]
-    code = mark_mod.named(root, markers.get("prefix") or mark_mod.DEFAULT_PREFIX)
+    code = mark_mod.named(root, markers.get("prefix") or cfg.temp_prefix)
 
     def seen(name: str) -> bool:
         fixed = code.head_of(name)
@@ -1439,7 +1439,6 @@ def _resolved_config(args) -> None:
 
 def cmd_compare(args) -> int:
     """The delta between two Marker Reports."""
-    from .mark import DEFAULT_PREFIX
     _resolved_config(args)
     unloaded = None
     try:
@@ -1473,8 +1472,7 @@ def cmd_compare(args) -> int:
         # The same fallback `analyze`, `names`, `mark` and `reflect` use: a
         # config without the key, or none, still has markers planted under
         # the default prefix.
-        prefix = (args.cfg.get("instrumentation.temp_prefix") if args.cfg else None) \
-            or DEFAULT_PREFIX
+        prefix = args.cfg.temp_prefix if args.cfg else DEFAULT_PREFIX
         cmp = compare_mod.build(
             before, after,
             before_path=str(before_path), after_path=str(after_path),
@@ -1779,7 +1777,6 @@ def _names_setup(args) -> tuple[dict, Any, str, str, str, set[str]]:
     """The masks' overrides, the binary, the markers' prefix, the process
     `names` reads and what named it, and the detectors turned off: from the
     config when one is named and there."""
-    from .mark import DEFAULT_PREFIX
 
     overrides, tp_bin, off = {}, args.tp_binary, set()
     process = args.process
@@ -1794,7 +1791,7 @@ def _names_setup(args) -> tuple[dict, Any, str, str, str, set[str]]:
             overrides = cfg_names.detector_overrides
             off = cfg_names.disabled_detectors
             tp_bin = _tp_binary(args, cfg_names)
-            prefix = str(cfg_names.get("instrumentation.temp_prefix") or prefix)
+            prefix = cfg_names.temp_prefix
             if process is None:
                 process = _names_process(args.config, cfg_names)
                 if process is not None:
@@ -2917,10 +2914,9 @@ def _domains_unwritten(cfg: Config, root: Path) -> list[str]:
     as absent from every window after it: said here, where the map is made.
     """
     from . import anchors
-    from .mark import DEFAULT_PREFIX
     entries = [str(e["slice"]) for e in cfg.get("domains") or []
                if isinstance(e, dict) and e.get("slice")]
-    prefix = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    prefix = cfg.temp_prefix
     missing = anchors.unwritten(root, entries, prefix)
     if not missing:
         return []
@@ -2956,7 +2952,7 @@ def cmd_mark(args) -> int:
     if not root.is_dir():
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
-    package, allowed, prefix = None, [], mark_mod.DEFAULT_PREFIX
+    package, allowed, prefix = None, [], DEFAULT_PREFIX
     # `instrumentation.allowed` is a guard, and an empty one allows every
     # place. So a config named and not there is refused, outside any project
     # the one under --root is read (mark is pointed at the app from
@@ -2975,7 +2971,7 @@ def cmd_mark(args) -> int:
             cfg = Config.load(config, getattr(args, "local", None))
             package = cfg.value(PACKAGE) or cfg.value(PROCESS)
             allowed = cfg.allowed
-            prefix = str(cfg.get("instrumentation.temp_prefix") or prefix)
+            prefix = cfg.temp_prefix
         except ConfigError as e:
             if not args.remove:
                 print(f"error: {config} does not load, and instrumentation.allowed "
@@ -3526,7 +3522,7 @@ def _planted(cfg: Config, root: Path):
     from . import mark as mark_mod
     from . import runner
 
-    prefix = str(cfg.get("instrumentation.temp_prefix") or mark_mod.DEFAULT_PREFIX)
+    prefix = cfg.temp_prefix
     names = mark_mod.planted(root, prefix)
     return runner.Planted(prefix, names, _install_step(cfg, root)) if names else None
 

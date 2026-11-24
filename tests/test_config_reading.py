@@ -282,8 +282,6 @@ def test_no_key_of_a_declared_section_is_read_around_its_declaration() -> None:
             continue
         for number, line in enumerate(text.splitlines(), 1):
             for m in (*dotted.finditer(line), *raw_runner.finditer(line)):
-                if "instrumentation.temp_prefix" in m.group(0):
-                    continue  # moved to `Config.temp_prefix` with #829
                 found.append(f"{name}:{number}: {m.group(0)}")
     check("none", not found, found)
 

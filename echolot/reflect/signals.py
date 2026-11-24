@@ -26,7 +26,7 @@ from typing import Any, Callable
 
 import yaml
 
-from ..config import Config
+from ..config import DEFAULT_PREFIX, Config
 from . import facts as facts_mod
 from .facts import (
     RE_ECHOLOT,
@@ -239,7 +239,7 @@ def loop_in_main_context(s: Session, f: Facts, cfg: Config | None) -> Signal | N
     hunters = hunt_agents(s)
     if not hunters and not f.instrumentation.get("files"):
         return None
-    prefix = f.instrumentation.get("prefix", "AGENTTMP_")
+    prefix = f.instrumentation.get("prefix", DEFAULT_PREFIX)
     # A marker written with Write is in `content`, and one placed through the
     # shell is in no tool edit at all; both are the loop in the main
     # context, as `instrumentation()` counts them.

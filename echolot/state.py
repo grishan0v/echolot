@@ -21,7 +21,7 @@ from . import codex, files, hosts, layer, plugin, recorder, runner
 from . import hunt as hunt_mod
 from .anchors import UNPICKED
 from .config import Config, ConfigError
-from .config import PACKAGE, PROCESS
+from .config import PACKAGE, PROCESS, TEMP_PREFIX
 
 
 def project_state(project: Path, config: str = "echolot.yml",
@@ -80,7 +80,7 @@ def project_state(project: Path, config: str = "echolot.yml",
                 "runner": str(cfg.value(runner.MODE)) if cfg.runner else None,
                 "sha": cfg.sha,
                 "confirmed": cfg.confirmed(),
-                "temp_prefix": cfg.get("instrumentation.temp_prefix"),
+                "temp_prefix": cfg.written(TEMP_PREFIX),
             }
             # The scenario the next step is about: the open investigation's,
             # else the first. Everything below that names one scenario's

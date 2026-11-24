@@ -65,11 +65,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .config import ConfigError
+from .config import DEFAULT_PREFIX, ConfigError
 from .domains import files_ending, files_named, gradle_module
 from .domains import source_files as domains_source_files
 
-DEFAULT_PREFIX = "AGENTTMP_"
 TAG = "// echolot:mark"
 # Exactly what `apply` writes, and nothing else. `remove` deletes whole lines,
 # so a rule as loose as "the tag is somewhere in it" takes the line's real code
@@ -2168,7 +2167,7 @@ class Markers:
             allowed = cfg.allowed
         except ConfigError:
             allowed = []
-        return cls(root, cfg.get("instrumentation.temp_prefix"), allowed)
+        return cls(root, cfg.temp_prefix, allowed)
 
     def allowed(self, rel: str) -> bool:
         """Whether markers may go into this path, relative to the root."""
