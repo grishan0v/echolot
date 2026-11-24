@@ -80,6 +80,7 @@ from . import time_limit
 from . import hunt as hunt_mod
 from . import main as cli
 from .config import Config, ConfigError
+from .config import MAX_ROUNDS
 from .pages import answer_page, compare_page, kit, report_page, start_page
 from .pages import setup_page
 from .pages import limit_page
@@ -544,7 +545,7 @@ def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
     try:
         cfg = Config.load(known["path"], scenario=known.get("scenario"))
         paths = dig.allowed(cfg)
-        rounds = cfg.get("loop.max_rounds") or 3
+        rounds = cfg.value(MAX_ROUNDS) or MAX_ROUNDS.default
         several = len(cfg.scenarios) > 1
     except check.Refusal as e:
         why, rounds, several = why or e.text, 3, False

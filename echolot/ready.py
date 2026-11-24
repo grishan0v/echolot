@@ -35,6 +35,7 @@ from . import layer, plain, runner, state, when
 from . import main as cli
 from . import scan as scan_mod
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
+from .config import PACKAGE
 from .pages import report_page
 
 GREEN, RED, GREY = "green", "red", "grey"
@@ -156,7 +157,7 @@ def phone(cfg: Config | None, facts: scan_mod.Facts | None, said: dict[str, list
     wanted = None
     if cfg is not None:
         with contextlib.suppress(ConfigError):
-            wanted = cfg.runner.get("device")
+            wanted = cfg.value(runner.DEVICE)
     try:
         serial = src.pick_device(str(wanted) if wanted else None)
     except runner.RunnerError as e:
@@ -171,8 +172,8 @@ def phone(cfg: Config | None, facts: scan_mod.Facts | None, said: dict[str, list
 def app_name(cfg: Config | None, facts: scan_mod.Facts | None) -> str | None:
     """What the app is called here: the package the config measures, else the
     one the build script installs."""
-    if cfg is not None and cfg.get("project.package"):
-        return str(cfg.get("project.package"))
+    if cfg is not None and cfg.value(PACKAGE):
+        return str(cfg.value(PACKAGE))
     if facts is not None and facts.app:
         chosen = scan_mod.preferred(facts.variants) or {}
         return chosen.get("application_id") or facts.app.get("application_id")
@@ -277,7 +278,7 @@ def next_step(st: dict, says: dict[str, list[str]], cfg: Config | None) -> dict[
             mode = ""
             if cfg is not None:
                 with contextlib.suppress(ConfigError):
-                    mode = str(cfg.runner.get("mode", "launch"))
+                    mode = str(cfg.value(runner.MODE))
             step.update(text=(f"There are no recordings of `{scenario}` yet. This runs its macrobenchmark "
                               "on the phone and gathers the recordings it writes."
                               if mode == "gradle" else
@@ -375,7 +376,7 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
     # How the scenario runs on the phone.
     try:
         section = cfg.runner
-        mode = str(section.get("mode", "launch"))
+        mode = str(runner.MODE.read(section))
     except ConfigError as e:
         section, mode = {}, ""
         row("How it runs on the phone", _sentence(str(e)))
@@ -386,8 +387,8 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
         row("How it runs on the phone", "A command of the project starts it, once per run "
             f"(`runner.mode: command`): `{section.get('command') or 'none named'}`.", status_config)
     elif mode == "gradle":
-        task = " ".join(str(x) for x in [section.get("gradle", "./gradlew"), section.get("gradle_task") or "?",
-                                         *(section.get("gradle_args") or [])])
+        task = " ".join(str(x) for x in [runner.GRADLE.read(section), runner.GRADLE_TASK.read(section) or "?",
+                                         *(runner.GRADLE_ARGS.read(section) or [])])
         row("How it runs on the phone", "A macrobenchmark of the project runs it (`runner.mode: gradle`): "
             f"`{task}`.", status_config + [("echolot scan", s) for s in said.get("benchmarks", [])[:1]])
     elif mode:
@@ -415,13 +416,13 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
             "and every recording it writes is gathered.")
     elif mode:
         named = "iterations" in section
-        runs = section.get("iterations", 5)
+        runs = runner.ITERATIONS.read(section)
         text = f"{runs}, from `runner.iterations`." if named else f"{runs}, the default."
         if named and runs != 5:
             text += " A command that says `-n` asks for its own number: `-n` wins."
         row("Runs", text)
         if mode in ("launch", "command"):
-            ms = section.get("duration_ms", 12000)
+            ms = runner.DURATION_MS.read(section)
             where = "from `runner.duration_ms`" if "duration_ms" in section else "the default"
             row("Each run records for", f"{_seconds(ms)}, {where}.")
 

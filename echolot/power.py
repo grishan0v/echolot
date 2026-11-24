@@ -30,21 +30,22 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .config import NUMBER, key
 from .runner import RunnerError
 from .screen import Screen
 
-# Macrobenchmark's floor, in percent.
-FLOOR = 25
-
-# The key of `runner:` read here. `config.runner_keys()` joins it to the
-# others, so a config that sets it loads (#834).
-KEYS = ("min_battery",)
+# The key of `runner:` read here. Declared, so a config that sets it loads
+# (#834). Its default is Macrobenchmark's floor, in percent.
+MIN_BATTERY = key("runner", "min_battery", NUMBER, 25,
+                  "A phone not charging and under this percentage is not "
+                  "recorded; 0 turns the check off. Belongs in local.yml.")
+FLOOR = MIN_BATTERY.default
 
 
 def floor(section: dict) -> int:
     """`runner.min_battery`, the charge under which a phone that is not
     charging is not recorded; 0 turns the check off."""
-    value = section.get("min_battery", FLOOR)
+    value = MIN_BATTERY.read(section)
     if (isinstance(value, bool) or not isinstance(value, (int, float))
             or not 0 <= value <= 100):
         raise RunnerError(

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import files, recording, sandbox
+from .config import FLAG, INTEGER, NUMBER, SHAPES, TEXT, TEXTS, Key, key
 
 # Default atrace categories. sched in ftrace_events is mandatory: without it
 # there is no thread_state, so runnable_starvation, uninstrumented_cpu and
@@ -194,15 +195,45 @@ DEVICE_TRACE = "/data/misc/perfetto-traces/echolot.pftrace"
 # they are the keys most likely to be copied in from a launch-mode config and
 # believed.
 # The keys of `runner:` read here, with the two `collect` in main.py reads
-# before it calls here, `iterations` and `device`. `stabilize.KEYS`,
-# `composenames.KEYS` and `power.KEYS` are the rest; Config.load refuses any other key by name,
-# so `iteratons: 3` is not five repeats without a word (#737).
-KEYS = ("mode", "iterations", "device", "activity", "command", "duration_ms",
-        "reset_policy", "sampling", "atrace_categories", "buffer_kb", "environment",
-        "gradle_task", "gradle", "gradle_args", "project_root", "timeout_s")
+# before it calls here, `iterations` and `device`. stabilize.py,
+# composenames.py and power.py declare the rest; Config.load refuses any
+# other key by name, so `iteratons: 3` is not five repeats without a word
+# (#737, #828).
+MODE = key("runner", "mode", TEXT, "launch",
+           "How a repeat is recorded: launch, command or gradle.")
+ITERATIONS = key("runner", "iterations", INTEGER, 5,
+                 "How many repeats `collect` records; `-n` wins over it.")
+DEVICE = key("runner", "device", TEXT, None,
+             "The serial of the device to record on; `--device` wins over it.")
+ACTIVITY = key("runner", "activity", TEXT, None,
+               "The activity launch mode starts; the launcher's when left out.")
+COMMAND = key("runner", "command", TEXT, None,
+              "What command mode runs on the host for each repeat.")
+DURATION_MS = key("runner", "duration_ms", NUMBER, 12000,
+                  "How long each repeat records, in milliseconds.")
+RESET_POLICY = key("runner", "reset_policy", TEXT, "force-stop",
+                   "What happens between repeats: force-stop or none.")
+SAMPLING = key("runner", "sampling", SHAPES, None,
+               "Stack sampling: true, false, or a rate in Hz.")
+ATRACE_CATEGORIES = key("runner", "atrace_categories", TEXTS, None,
+                        "The atrace categories recorded, over the default ones.")
+BUFFER_KB = key("runner", "buffer_kb", INTEGER, 131072,
+                "Perfetto's buffer, in kilobytes.")
+ENVIRONMENT = key("runner", "environment", FLAG, True,
+                  "Whether thermal, frequency and battery counters are recorded.")
+GRADLE_TASK = key("runner", "gradle_task", TEXT, None,
+                  "The macrobenchmark task gradle mode runs.")
+GRADLE = key("runner", "gradle", TEXT, "./gradlew",
+             "The gradle wrapper gradle mode runs.")
+GRADLE_ARGS = key("runner", "gradle_args", TEXTS, None,
+                  "The arguments after the task, each passed as one.")
+PROJECT_ROOT = key("runner", "project_root", TEXT, ".",
+                   "Where gradle mode runs, from the config's directory.")
+TIMEOUT_S = key("runner", "timeout_s", NUMBER, 3600,
+                "How long gradle mode waits for its task, in seconds.")
 
-RECORDING_KNOBS = ("environment", "atrace_categories", "buffer_kb",
-                   "duration_ms", "reset_policy", "sampling", "compose_names")
+RECORDING_KNOBS = (ENVIRONMENT.name, ATRACE_CATEGORIES.name, BUFFER_KB.name,
+                   DURATION_MS.name, RESET_POLICY.name, SAMPLING.name, "compose_names")
 
 # What `runner.compose_names` adds to the recording: the Perfetto SDK's events
 # in the category Compose writes to, and nothing any other SDK on the device
@@ -896,7 +927,7 @@ def sampling(section: dict, log: Callable[[str], None] = print) -> int | None:
     is the rate itself. A rate above what Perfetto advises is recorded as
     asked, with a warning, since only the device can say whether it keeps up.
     """
-    value = section.get("sampling")
+    value = SAMPLING.read(section)
     if value is None or value is False:
         return None
     if value is True:
@@ -1209,7 +1240,7 @@ def reset_policy(section: dict, log: Callable[[str], None] = print) -> str:
     than repeating it. A cold start with an empty database and a user's cold
     start are different things.
     """
-    value = section.get("reset_policy", "force-stop")
+    value = RESET_POLICY.read(section)
     if value in RESET_POLICIES:
         return value
     shown = "(empty)" if value in (None, "") else value
@@ -1218,29 +1249,29 @@ def reset_policy(section: dict, log: Callable[[str], None] = print) -> str:
     return "force-stop"
 
 
-def _positive(section: dict, key: str, default: int) -> int:
+def _positive(section: dict, declared: Key) -> int:
     """A size or a duration from the runner section, as a whole number.
 
     `int(...)` used to be the whole check, and `duration_ms: 12s` came out of
     `collect` as a ValueError traceback. The unit is in the key's name, so
     the value is digits alone.
     """
-    value = section.get(key, default)
+    value = declared.read(section)
     if (isinstance(value, bool) or not isinstance(value, (int, float))
             or not 1 <= value < float("inf")):
         raise RunnerError(
-            f"runner.{key}: {value!r} is not a positive number. The unit is "
+            f"{declared.dotted}: {value!r} is not a positive number. The unit is "
             f"in the name; the value is digits alone.")
     return int(value)
 
 
-def _listed(section: dict, key: str) -> list[str]:
+def _listed(section: dict, declared: Key) -> list[str]:
     """A list from the runner section, where one string is a list of one.
 
     `gradle_args: "-P…"` written without brackets used to go into the
     command a character at a time, each separated by a space.
     """
-    value = section.get(key) or []
+    value = declared.read(section) or []
     return [str(v) for v in value] if isinstance(value, (list, tuple)) else [str(value)]
 
 
@@ -1307,7 +1338,7 @@ def collect(package: str, out_dir: Path, iterations: int,
     from . import composenames, power, screen, stabilize
 
     section = section or {}
-    mode = str(section.get("mode", "launch"))
+    mode = str(MODE.read(section))
     # The device's state is checked with the rest of the section, before
     # anything is touched: a typo in `cooldown` stops here, not after a build.
     settle = stabilize.wanted(section)
@@ -1328,18 +1359,18 @@ def collect(package: str, out_dir: Path, iterations: int,
                 on_set_aside(aside)
 
     if mode == "gradle":
-        task = section.get("gradle_task")
+        task = GRADLE_TASK.read(section)
         if not task:
             raise RunnerError("runner.mode: gradle needs runner.gradle_task")
-        root = Path(section.get("project_root", "."))
-        timeout = _positive(section, "timeout_s", 3600)
+        root = Path(PROJECT_ROOT.read(section))
+        timeout = _positive(section, TIMEOUT_S)
         # Every part quoted, so each element of the list reaches gradle as one
         # argument with nothing expanded. Joined with spaces, the shell read
         # `$Startup` in a nested test class's name as a variable and ran the
         # benchmark under another filter, and split `-Dorg.gradle.jvmargs=…`
         # at its space. The line logged is the line run.
-        command = _join([str(section.get("gradle", "./gradlew")), str(task),
-                         *_listed(section, "gradle_args")])
+        command = _join([str(GRADLE.read(section)), str(task),
+                         *_listed(section, GRADLE_ARGS)])
         log(f"gradle: {command}")
         log(f"  in {root.resolve()}")
         env = None
@@ -1427,20 +1458,20 @@ def collect(package: str, out_dir: Path, iterations: int,
     if mode not in ("launch", "command"):
         raise RunnerError(
             f"unknown runner.mode: {mode}. Available: launch, command, gradle.")
-    command = section.get("command")
+    command = COMMAND.read(section)
     if mode == "command" and not command:
         raise RunnerError("runner.mode: command needs runner.command")
     if isinstance(iterations, bool) or not isinstance(iterations, int) or iterations < 1:
         raise RunnerError(
             f"-n / runner.iterations: {iterations!r} is not a number of "
             f"repeats. One or more, in digits.")
-    duration_ms = _positive(section, "duration_ms", 12000)
+    duration_ms = _positive(section, DURATION_MS)
     reset = reset_policy(section, log)
     hz = sampling(section, log)
     config = trace_config(package, duration_ms,
-                          _listed(section, "atrace_categories") or DEFAULT_CATEGORIES,
-                          _positive(section, "buffer_kb", 131072),
-                          environment=bool(section.get("environment", True)),
+                          _listed(section, ATRACE_CATEGORIES) or DEFAULT_CATEGORIES,
+                          _positive(section, BUFFER_KB),
+                          environment=bool(ENVIRONMENT.read(section)),
                           sampling_hz=hz, compose_names=names)
 
     dev = pick_device(device)
@@ -1453,7 +1484,7 @@ def collect(package: str, out_dir: Path, iterations: int,
                 f"is not there prints an error and exits 0, and every trace "
                 f"would hold the device and no app. A gradle-mode round "
                 f"uninstalls the app it tested when it ends.")
-        activity = section.get("activity") or resolve_activity(dev, package)
+        activity = ACTIVITY.read(section) or resolve_activity(dev, package)
         log(f"device {dev}, activity {activity}")
     else:
         log(f"device {dev}, scenario: {command}")
@@ -1948,10 +1979,10 @@ def _launch(device: str, activity: str) -> dict:
     # `Activity:` is the one the launch ended on, which is not always the one
     # started: an app that opens a page read last, a login or an onboarding
     # by itself ends its launch there (#909).
-    for key, field in (("TotalTime", "total_time_ms"),
-                       ("LaunchState", "launch_state"),
-                       ("Activity", "activity")):
-        m = re.search(rf"^{key}:\s*(.+)$", started, re.MULTILINE)
+    for said, field in (("TotalTime", "total_time_ms"),
+                        ("LaunchState", "launch_state"),
+                        ("Activity", "activity")):
+        m = re.search(rf"^{said}:\s*(.+)$", started, re.MULTILINE)
         if m:
             value = m.group(1).strip()
             info[field] = int(value) if value.isdigit() else value

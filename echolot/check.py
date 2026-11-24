@@ -46,6 +46,8 @@ from . import hunt as hunt_mod
 from . import files as files_mod
 from . import job, ready, recorder, state, stats, when
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
+from .runner import DURATION_MS, ITERATIONS, MODE
+from .stabilize import COOLDOWN
 from .pages import compare_page, report_page
 
 JOB = "check"
@@ -116,7 +118,7 @@ def _noun(mode: str) -> tuple[str, str]:
 
 def _record_s(section: dict[str, Any], n: int) -> float:
     try:
-        each = float(section.get("duration_ms", 12000)) / 1000.0
+        each = float(DURATION_MS.read(section)) / 1000.0
     except (TypeError, ValueError):
         each = 12.0
     return n * (each + AROUND_S)
@@ -168,7 +170,7 @@ def hint(do: str, mode: str, n: int | None, section: dict[str, Any], *, unread: 
         # and `collect` says so the moment it is started.
         return f"As many {many} as `runner.iterations` in the config says{then}. Nothing in your code changes."
     text = f"{_counted(n, one, many)}, {about(_record_s(section, n) + n * each_s)}{then}. Nothing in your code changes."
-    if section.get("cooldown"):
+    if COOLDOWN.read(section):
         text += f" The phone may wait to cool down between {many}."
     if before and stats.cut(before, n) is None:
         # `compare`'s own rule: too few a side to be sure of any move.
@@ -304,7 +306,7 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
         try:
             cfg = Config.load(known["path"], scenario=name)
             section = dict(cfg.runner)
-            mode = str(section.get("mode", "launch"))
+            mode = str(MODE.read(section))
         except ConfigError:
             # The config loaded a moment ago, every scenario with it: it was
             # changed since, and the next reading says how it stands.
@@ -323,7 +325,7 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
         out["choices"].append({
             "name": name, "chosen": focus, "do": do, "mode": mode, "unread": unread, "counted": counted,
             "runs": [step["shown"] for step in runs],
-            "section": section, "iterations": None if mode == "gradle" else _whole(section.get("iterations", 5)),
+            "section": section, "iterations": None if mode == "gradle" else _whole(ITERATIONS.read(section)),
             "label": LABEL[READ] if do == READ else LABEL["again" if before else "first"],
             "text": f"{_measures(cfg)} {_stands(unread, report)}",
             "hints": hints,
