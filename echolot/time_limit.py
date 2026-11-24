@@ -81,8 +81,9 @@ _HASH = re.compile(r"[0-9a-f]{64}")
 # used as a path.
 _NAME = re.compile(r"[^\x00-\x1f/]{1,200}")
 _NUMBER = "(?P<ms>[1-9][0-9]{0,5})"
-# The seconds in the first comment, as `plain.hum` writes a limit the field takes.
-_WORDS = r"[0-9]{1,2}\.[0-9] s"
+# The seconds in the first comment, as `plain.hum_limit` writes a limit the
+# field takes: up to three decimals, and one in a file written before (#868).
+_WORDS = r"[0-9]{1,2}\.[0-9]{1,3} s"
 # A line that holds the limit or held it, written by anybody: the key, a
 # number, and a comment or nothing after it. The `#` before the key is a
 # limit taken off.

@@ -167,6 +167,20 @@ def test_a_limit_that_is_set_is_changed(project):
     check("read as 3.25 s", Config.load(path).scenario_budget_ms == 3250)
 
 
+@pytest.mark.parametrize("typed, ms, said", [("0,25", 250, "0.25 s"), ("0.15", 150, "0.15 s"), ("2.25", 2250, "2.25 s")])
+def test_a_limit_is_said_as_it_was_typed(project, typed, ms, said):
+    """0.25 s was written and shown as "0.2 s" (#868)."""
+    path = written(project)
+    site, _ = served(project)
+    check("taken", set_limit(site, typed).status == 303)
+    check("the comment in the file says it as typed", the_line(path.read_text(encoding="utf-8"))
+          == f"  budget_ms: {ms}  # the time limit, {said}: change the number to change it")
+    row = limit_row(site)
+    check("and All settings", f"{said} (budget_ms: {ms})" in row.text, row.text)
+    check("and the page can change that line again", set_limit(site, "1").status == 303
+          and the_line(path.read_text(encoding="utf-8")) == project_setup.limit_line(1000))
+
+
 def test_an_empty_field_takes_the_limit_off_and_the_file_is_as_the_page_first_wrote_it(project):
     path = written(project)
     first = path.read_bytes()

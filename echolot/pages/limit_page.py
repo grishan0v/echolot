@@ -61,7 +61,7 @@ def _behind(found: dict[str, Any], link: Link, look: str) -> str:
     behind = found.get("behind")
     if not behind:
         return ""
-    was = "no time limit" if behind["was"] is None else f"a limit of {plain.hum(behind['was'])}"
+    was = "no time limit" if behind["was"] is None else f"a limit of {plain.hum_limit(behind['was'])}"
     text = (f"<b>This report was made with {e(was)}.</b> echolot reads the limit when it reads the recordings, so "
             "the report changes once they are read again.")
     action = link("check")

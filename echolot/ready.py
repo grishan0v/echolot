@@ -441,7 +441,7 @@ def settings(st: dict, head: str, says: dict[str, list[str]], cfg: Config | None
                 "that against nothing.", more=[f"A line under `{under}:` in `echolot.yml` sets one, in "
                                                "milliseconds: `budget_ms: 2000` is 2 seconds."])
         else:
-            row("Time limit", f"{plain.hum(budget)} (`budget_ms: {budget:g}`). The report's first line "
+            row("Time limit", f"{plain.hum_limit(budget)} (`budget_ms: {budget:g}`). The report's first line "
                 "holds the scenario against it.",
                 more=[f"To change it, edit that line under `{under}:` in `echolot.yml`."])
 

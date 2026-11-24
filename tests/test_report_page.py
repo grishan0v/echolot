@@ -353,9 +353,9 @@ def test_two_times_of_the_verdict_and_its_range_never_read_alike():
     """#709: 478.51 ms against 460 ms read "takes 0.5 s, you allowed 0.5 s, 4% over", and the
     range under it "from 0.5 to 0.5 s"."""
     main_ = page_of(plain.annotate(make([entry("gc_pressure", [])], duration=478.51, budget=460.0))).one("main")
-    check("the window", main_.one("h1").text == "The launch takes 479 ms", main_.one("h1").text)
-    check("the limit and the range", main_.one("p", "lead").text
-          == "You allowed 460 ms, so it runs 4% over. Measured on 3 launches, from 459 to 539 ms.",
+    check("the window", main_.one("h1").text == "The launch takes 0.48 s", main_.one("h1").text)
+    check("the limit, as it was set (#868), and the range", main_.one("p", "lead").text
+          == "You allowed 0.46 s, so it runs 4% over. Measured on 3 launches, from 459 to 539 ms.",
           main_.one("p", "lead").text)
 
 

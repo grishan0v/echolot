@@ -159,6 +159,64 @@ def hum_apart(a: float, b: float) -> tuple[str, str]:
     return said
 
 
+def hum_limit(ms: float) -> str:
+    """A time limit the way a person set it: in seconds from 100 ms on, with
+    the digits it was given up to whole milliseconds ("0.25 s", "2.25 s",
+    "0.5 s", "2.0 s"), not rounded to the tenth `hum` keeps. A limit typed
+    as 0.25 s was said as "0.2 s" (#868)."""
+    if ms >= 100:
+        said = f"{ms / 1000:.3f}".rstrip("0")
+        return f"{said}0 s" if said.endswith(".") else f"{said} s"
+    return f"{ms:g} ms"
+
+
+def _ms_of(said: str) -> float:
+    number, unit = said.split(" ")
+    return float(number) * (1000 if unit == "s" else 1)
+
+
+def _alike_apart(a: float, b: float) -> tuple[str, str]:
+    """`hum_apart`'s forms for a time that reads as its limit, each form taken
+    only where it says the limit exactly: "501 ms" and "500 ms", "2.251 s"
+    and "2.250 s" (#709)."""
+    forms = (["{:.0f} ms", "{:.1f} ms"] if max(a, b) < 1000 else
+             ["{s:.2f} s", "{s:.3f} s"]) + ["{:.2f} ms"]
+    for form in forms:
+        said = form.format(a, s=a / 1000), form.format(b, s=b / 1000)
+        if said[0] != said[1] and _ms_of(said[1]) == b:
+            return said
+    return said
+
+
+def hum_against(took_ms: float, limit_ms: float, ratio: float) -> tuple[str, str]:
+    """A time and its limit as the verdict says them: the limit as it was set
+    (`hum_limit`), and the time with at least as many digits, and more where
+    the two said would read alike, or where "… times as long" would not be
+    their quotient: "takes 0.7 s, you allowed 0.25 s, 2.7 times as long" is
+    2.8 by its own numbers (#868). `ratio` is `verdict.ratio`. A share over
+    the limit ("25% over") is the key's, as before: under twice the limit the
+    times keep the digits that tell them apart and no more."""
+    limit = hum_limit(limit_ms)
+    shown = limit.split(" ")[0]
+    digits = len(shown.split(".")[1]) if limit.endswith(" s") and "." in shown else 1
+    tries = ([f"{took_ms / 1000:.{d}f} s" for d in range(digits, 4)] if took_ms >= 100 else []) \
+        + [f"{took_ms:.0f} ms", f"{took_ms:.1f} ms", f"{took_ms:.2f} ms"]
+    for took in tries:
+        a, b = _ms_of(took), _ms_of(limit)
+        if a == b and took_ms != limit_ms:
+            return _alike_apart(took_ms, limit_ms)
+        if took_ms <= limit_ms:
+            if a <= b:
+                return took, limit
+            continue
+        if a <= b or b <= 0:
+            continue
+        if ratio >= 2 and f"{a / b:.1f}" != f"{ratio:.1f}":
+            continue
+        return took, limit
+    return tries[-1], limit
+
+
 def kernel_name(report: dict[str, Any]) -> str:
     """The name the kernel gives the report's main thread: it keeps 15
     characters of a thread's name, and the main thread of an app carries the
@@ -871,7 +929,7 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
         # long" against a limit. The platform's own start, when the trace
         # holds one, is the platform's number, and is said as that.
         rest = "Its window is not the scenario's"
-        rest += f", so it is not held against the time limit of {hum(budget)}." if budget else "."
+        rest += f", so it is not held against the time limit of {hum_limit(budget)}." if budget else "."
         startup = (report.get("window") or {}).get("startup") or {}
         start_ms = startup.get("dur_ms") if isinstance(startup, dict) else None
         if isinstance(start_ms, (int, float)) and not isinstance(start_ms, bool) and start_ms > 0:
@@ -889,7 +947,7 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     # rounded to one decimal, never the rounded window over the rounded budget
     # ("1.9 s" over "0.5 s" is 3.8 where 1919 ms over 520 ms is 3.7).
     ratio = round(ctx.window_ms / budget, 3)
-    took, limit = hum_apart(ctx.window_ms, budget)
+    took, limit = hum_against(ctx.window_ms, budget, ratio)
     lead, allowed = f"The {ctx.noun} takes {took}.", f"You allowed {limit}, so"
     # Judged by the exact times: a window a tenth of a millisecond over the
     # limit has a ratio that rounds to 1.0 and is still not within it.

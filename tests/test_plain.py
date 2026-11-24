@@ -578,7 +578,7 @@ def verdict_of(duration, budget):
     (400.0, 500.0, "fine", "The launch takes 0.4 s. You allowed 0.5 s, so it is within the limit."),
     (500.0, 500.0, "fine", "The launch takes 0.5 s. You allowed 0.5 s, so it is within the limit."),
     (501.0, 500.0, "worth_a_look", "The launch takes 501 ms. You allowed 500 ms, so it is just over the limit."),
-    (478.51, 460.0, "worth_a_look", "The launch takes 479 ms. You allowed 460 ms, so it runs 4% over."),
+    (478.51, 460.0, "worth_a_look", "The launch takes 0.48 s. You allowed 0.46 s, so it runs 4% over."),
     (460.1, 460.0, "worth_a_look",
      "The launch takes 460.1 ms. You allowed 460.0 ms, so it is just over the limit."),
     (1219.0, 1240.0, "fine", "The launch takes 1.22 s. You allowed 1.24 s, so it is within the limit."),
@@ -589,7 +589,12 @@ def verdict_of(duration, budget):
     (1920.0, 500.0, "needs_attention",
      "The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.8 times as long."),
     (1919.0, 520.0, "needs_attention",
-     "The launch takes 1.9 s. You allowed 0.5 s, so it takes 3.7 times as long."),
+     "The launch takes 1.92 s. You allowed 0.52 s, so it takes 3.7 times as long."),
+    # The limit as it was typed, and a time whose quotient is the ratio said (#868).
+    (686.0, 250.0, "needs_attention",
+     "The launch takes 0.686 s. You allowed 0.25 s, so it takes 2.7 times as long."),
+    (450.0, 150.0, "needs_attention", "The launch takes 0.45 s. You allowed 0.15 s, so it takes 3.0 times as long."),
+    (2000.0, 2250.0, "fine", "The launch takes 2.00 s. You allowed 2.25 s, so it is within the limit."),
     (625.2, 500.0, "worth_a_look", "The launch takes 0.6 s. You allowed 0.5 s, so it runs 25% over."),
 ])
 def test_the_verdict_is_the_launch_against_the_budget(duration, budget, want_level, text):
@@ -607,6 +612,27 @@ def test_the_verdict_is_the_launch_against_the_budget(duration, budget, want_lev
     (1200.1, 1200.4, ("1200.10 ms", "1200.40 ms"))])
 def test_two_different_times_never_read_alike(a, b, want):
     check(f"{a} and {b}", plain.hum_apart(a, b) == want, plain.hum_apart(a, b))
+
+
+@pytest.mark.parametrize("ms, said", [(250, "0.25 s"), (150, "0.15 s"), (2250, "2.25 s"), (125, "0.125 s"),
+                                      (500, "0.5 s"), (2000, "2.0 s"), (60000, "60.0 s"), (80, "80 ms")])
+def test_a_limit_is_said_as_it_was_set(ms, said):
+    """A limit typed as 0.25 s was said as "0.2 s" (#868)."""
+    check(f"{ms} ms", plain.hum_limit(ms) == said, plain.hum_limit(ms))
+
+
+def test_the_ratio_said_is_the_quotient_of_the_two_times_said():
+    """"takes 0.7 s, you allowed 0.25 s, 2.7 times as long" is 2.8 by its own numbers (#868)."""
+    for window in range(500, 9000, 37):
+        for budget in (100.0, 125.0, 150.0, 250.0, 520.0, 2250.0):
+            text = verdict_of(float(window), budget)["text"]
+            found = re.match(r"The launch takes ([0-9.]+) (s|ms)\. You allowed ([0-9.]+) (s|ms), so it takes "
+                             r"([0-9.]+) times", text)
+            if not found:
+                continue
+            a = float(found[1]) * (1000 if found[2] == "s" else 1)
+            b = float(found[3]) * (1000 if found[4] == "s" else 1)
+            check(f"{window} against {budget}", f"{a / b:.1f}" == found[5] and b == budget, text)
 
 
 def test_two_times_in_the_verdict_differ_when_the_launch_is_not_on_the_limit():
@@ -627,8 +653,8 @@ def test_the_ratio_in_the_sentence_is_the_key_rounded_to_one_decimal():
     check("the key", got["ratio"] == 3.69, got)
     check("the sentence says that key to one decimal, and not the other quotient",
           "so it takes 3.7 times as long." in got["text"] and "3.8" not in got["text"], got["text"])
-    check("beside the rounded numbers it shows",
-          got["text"].startswith("The launch takes 1.9 s. You allowed 0.5 s, so"), got["text"])
+    check("beside the numbers it shows, the limit as it was set (#868)",
+          got["text"].startswith("The launch takes 1.92 s. You allowed 0.52 s, so"), got["text"])
     for window in range(900, 9000, 41):
         for budget in (300.0, 500.0, 520.0, 1234.0):
             got = verdict_of(float(window), budget)

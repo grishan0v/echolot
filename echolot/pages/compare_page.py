@@ -142,7 +142,7 @@ def _window(reading: dict[str, Any]) -> str:
     several = (b.get("runs") or 1) > 1 or (a.get("runs") or 1) > 1
     dot = (f"each {noun}" if exact else f"the fastest and the slowest {noun}") if several else None
     key = kit.chart_key("median" if several else f"the {noun}", dot,
-                        f"your limit, {plain.hum(budget)}" if budget else None)
+                        f"your limit, {plain.hum_limit(budget)}" if budget else None)
     return ('<div class="fig lead-chart">'
             + kit.chart([before, after], top, mark=budget, unit="ms, median" if several else "ms",
                         title=f"The whole {noun}, before and after") + key + "</div>")

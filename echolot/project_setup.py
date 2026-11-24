@@ -194,7 +194,7 @@ def _reads(text: str) -> dict[str, Any] | None:
 def limit_line(limit_ms: int | None) -> str:
     """The line of the time limit as the page writes it, without its end."""
     if limit_ms:
-        return LIMIT_SET.format(ms=limit_ms, words=plain.hum(limit_ms))
+        return LIMIT_SET.format(ms=limit_ms, words=plain.hum_limit(limit_ms))
     return LIMIT_OFF.format(ms=LIMIT_SHOWN)
 
 
