@@ -95,3 +95,24 @@ def test_numbers_someone_wrote_still_tell_work_apart(tmp_path: Path) -> None:
             + [("Load step7", 300, 80, [])])
     rows = _outlier(analyze_trace(_trace(tmp_path, work), Config(selftest.FIXTURE_CONFIG)))
     check("no row: the slow one is a name of its own", rows == [], rows)
+
+
+def test_every_name_of_the_window_has_its_family(tmp_path: Path) -> None:
+    """#831: the table is built once per trace, for slice and thread names
+    alike, and not only for the main thread's slices. A name the config's
+    `domains` lists keeps its digits, as the merge keeps them."""
+    raw = {**selftest.FIXTURE_CONFIG,
+           "domains": [{"slice": "Choreographer#doFrame 55103", "code": "Frames"}]}
+    cfg = Config(raw)
+    with TraceSession(_trace(tmp_path, FRAMES)) as tp:
+        _setup_context(tp, cfg, _resolve_process(tp, cfg.process)[0]["upid"])
+        family = {r["name"]: r["family"]
+                  for r in tp.query("SELECT name, family FROM _name_family")}
+    check("a frame's vsync id is folded",
+          family.get("Choreographer#doFrame 55101") == "Choreographer#doFrame #", family)
+    check("a worker thread's number is folded",
+          family.get("DefaultDispatcher-worker-1") == "DefaultDispatcher-worker-#", family)
+    check("a lock note keeps its line and loses its owner's numbers",
+          any("Store.java:41" in f and "Thread-# (#)" in f for f in family.values()), family)
+    check("a name the project listed is not folded",
+          "Choreographer#doFrame 55103" not in family, family)

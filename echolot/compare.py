@@ -55,9 +55,11 @@ from . import launch as launch_mod
 from . import when as when_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
+from . import names as names_mod
 from . import report as report_mod
 from . import files, plain, stats, table
-from .report import family, identity_of, metric_of, short_runs
+from .names import across_builds
+from .report import identity_of, metric_of, short_runs
 
 # What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
 # on a 6 ms slice is not "×1.7 slower"; relative floor second, so a 40 ms move
@@ -317,7 +319,7 @@ def _one_sided(before: dict, after: dict, listed: list[dict],
     # By the name `report._merge_names` gives it, so that a row of the table
     # and the same slice here are seen to be one.
     own = frozenset(str(r["location"]) for r in listed if r.get("detector") == "markers")
-    tabled = {report_mod.slice_family(str(r["location"]), keep=temp_prefix, names=own)
+    tabled = {names_mod.slice_across_builds(str(r["location"]), keep=temp_prefix, names=own)
               for r in listed if r["change"] in (APPEARED, VANISHED)}
     for side, other in (("after", "before"), ("before", "after")):
         n = runs[side]
@@ -1620,13 +1622,13 @@ def _key(row: dict, identity: tuple[str, ...]) -> tuple:
 
 def _family_key(row: dict, identity: tuple[str, ...],
                 keep: str | None = None) -> tuple:
-    """`keep` is the instrumentation prefix — see `report.family`.
+    """`keep` is the instrumentation prefix — see `names.across_builds`.
 
     Two markers the hunt planted are two different things by construction;
     folding `AGENTTMP_fill_v4` onto `AGENTTMP_fill_v6` would let one be
     reported as the other having moved.
     """
-    return tuple(None if v is None else family(str(v), keep=keep)
+    return tuple(None if v is None else across_builds(str(v), keep=keep)
                  for v in _key(row, identity))
 
 
@@ -1877,8 +1879,8 @@ def _name(row: dict, identity: tuple[str, ...], how: str,
                  if c != "location" and row.get(c) is not None]
         detail = " · ".join(named) or None
     if how == "family":
-        loc = family(loc, keep=keep)
-        detail = None if detail is None else family(str(detail), keep=keep)
+        loc = across_builds(loc, keep=keep)
+        detail = None if detail is None else across_builds(str(detail), keep=keep)
     return loc, None if detail is None else str(detail)
 
 

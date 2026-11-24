@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import compare as compare_mod  # noqa: E402
 from echolot import recorder  # noqa: E402
-from echolot import report as report_mod  # noqa: E402
+from echolot import names as names_mod  # noqa: E402
 from echolot.main import main  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -60,7 +60,7 @@ def test_silent_in_both_names_the_quiet_detectors(demo_report) -> None:
 
 
 def test_hex_folds_to_0x() -> None:
-    got = report_mod.family("Lock contention on 0x7f3a2b (owner tid: 1234)")
+    got = names_mod.across_builds("Lock contention on 0x7f3a2b (owner tid: 1234)")
     check("0x#", got == "Lock contention on 0x# (owner tid: #)", got)
 
 

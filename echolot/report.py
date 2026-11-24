@@ -21,6 +21,7 @@ from typing import Any, Callable
 from . import files
 from . import launch as launch_mod
 from . import needs as needs_mod
+from .names import runtime_name
 from . import recording as recording_mod
 from . import stats, table
 from . import when as when_mod
@@ -69,123 +70,6 @@ THREADS = "threads"
 #   max_ms — where a single slow occurrence shows up at all, and a median over
 #   maxima across repeats is exactly what hides one.
 SPREAD = ["self_ms", "total_ms", "max_ms"]
-
-# Names that differ only by numbers are one phenomenon: 'Lock contention (owner
-# tid: 1234)' and the same with tid 5678, `Choreographer#doFrame 55112` in one
-# run and `55120` in the next, worker-2 and worker-5 of one pool.
-NUMBER = re.compile(r"0x[0-9a-fA-F]+|\d+")
-
-
-def family(name: str, keep: str | None = None) -> str:
-    """Collapses names that differ only by numbers.
-
-    Used by `names` to keep an inventory of a real trace from running to
-    thousands of rows, and by `compare` as the second matching pass: without
-    it a thread pool that handed the work to another worker reads as one row
-    vanishing and an unrelated one appearing.
-
-    `keep` is a prefix whose numbers are nobody's accident. Everything this
-    collapses — a tid inside a lock note, a frame number, worker-2 against
-    worker-5 — is a number the runtime chose, and two names differing only
-    there are one phenomenon. A marker the agent placed is the opposite case:
-    it wrote the digits itself, to tell two things apart.
-
-    That cost a real finding. An agent instrumenting a migration ladder wrote
-    `AGENTTMP_fill_v4` and `AGENTTMP_fill_v6` around the two rungs, and got
-    back one row — `AGENTTMP_fill_v# · N=2 · 1447 ms`. One stage that happens
-    twice looks ordinary; two rungs where the second repeats the first is the
-    bug it was hunting. The tool had both rows and merged them.
-    """
-    if keep and name.startswith(keep):
-        return name
-    # One pass: the digits pass after the hex one rewrote its `0x#` as `#x#`.
-    return NUMBER.sub(lambda m: "0x#" if m.group(0).startswith("0x") else "#", name)
-
-
-# The numbers inside a name that the runtime picks anew in every run, and only
-# those (#504). `family` folds every digit, which is right for a second
-# matching pass and wrong for a row's name: `(Store.java:41)` in a lock note
-# is where the code is, and folding it would cost `place` its line.
-_RUNTIME = [
-    # An address: `Lock contention on 0x7f3a2b`.
-    (re.compile(r"0x[0-9a-fA-F]+"), "0x#"),
-    # A tid: `(owner tid: 13533)`, `tid 4202`.
-    (re.compile(r"\b(tid:?\s*)\d+"), r"\g<1>#"),
-    # The owner's tid in ART's long lock note: `with owner Thread-3 (4455) at`.
-    (re.compile(r"(with owner .+? \()\d+(\))"), r"\g<1>#\g<2>"),
-    # How many waited, in the same note: `waiters=0`, `waiters=1`.
-    (re.compile(r"\b(waiters=)\d+"), r"\g<1>#"),
-    # A frame's vsync id, and what a resync says beside it:
-    # `Choreographer#doFrame 55112`, `… - resynced to 55120 in 21.1ms`.
-    (re.compile(r"(Choreographer#doFrame\b.*)$"),
-     lambda m: NUMBER.sub("#", m.group(1))),
-    # A binder thread's pid: `binder:1234_5`.
-    (re.compile(r"\b((?:Hw)?[Bb]inder:)\d+"), r"\g<1>#"),
-    # The number of a pool's or an unnamed thread: `Thread-31`,
-    # `pool-3-thread-2`, `DefaultDispatcher-worker-3`, `AsyncTask #2`,
-    # `binder:#_5`. After `-`, `_` or `#` only, so `Store.java:41` and
-    # `Lambda$1` keep theirs, and so does the unknown line `(:-1)`.
-    (re.compile(r"(?<=[-_])(?<!:-)\d+\b"), "#"),
-    (re.compile(r"#\d+\b"), "#"),
-]
-
-
-def runtime_name(name: str, keep: str | None = None,
-                 names: frozenset[str] | set[str] = frozenset()) -> str:
-    """A name with the numbers the runtime chose folded to `#`.
-
-    One wait that happens in every run is one row: `Lock contention on a
-    monitor lock (owner tid: 15427)` in one run and `… 10359` in the next are
-    the same wait, and `Thread-31` … `Thread-39` across fifteen runs are one
-    unnamed thread, started once in each. Merged by the raw name, a 15/15
-    wait read as fifteen 1/15 accidents (#504).
-
-    `keep` is the instrumentation prefix and `names` the project's own marker
-    names, which are left as they are: their digits were written by someone
-    to tell two things apart — see `family`.
-    """
-    if name in names or (keep and name.startswith(keep)):
-        return name
-    for pattern, to in _RUNTIME:
-        name = pattern.sub(to, name)
-    return name
-
-
-# Where an installed APK lives: `/data/app/~~<random>==/<package>-<random>==/`
-# since Android 11, `/data/app/<package>-<random>==/` before it. Picked anew at
-# every install, so the two builds of a comparison name every JIT compilation
-# of the app's own code differently: `JIT compiling void Foo.bar() (kind=
-# Baseline) from /data/app/~~…`. A package name holds no `-`, so the first one
-# ends it.
-_INSTALL = re.compile(r"/data/app/(~~[^/]+/)?([^/]+?)-[^/]+/")
-# `family`'s numbers, and an address `runtime_name` already wrote as `0x#`:
-# folded by `family`'s pattern, its `0` made it `#x#`.
-_DIGITS = re.compile(r"0x(?:[0-9a-fA-F]+|#)|\d+")
-
-
-def slice_family(name: str, keep: str | None = None,
-                 names: frozenset[str] | set[str] = frozenset()) -> str:
-    """A slice's name as two builds' traces can share it (#610).
-
-    Every number folded, as `family` folds them, and the APK's install
-    directory as well. `runtime_name` folds only the numbers the runtime
-    picks anew in every run, which is right for one row across repeats of
-    one build and leaves too much for a name across two: a fence number
-    (`waiting for HWC release 313`) is not among them, and on a real cold
-    start it made five names of one set that the other set had under
-    other numbers. A line number in a lock note is one place in the code,
-    and a build that moved the code by two lines would show it gone and new.
-
-    `keep` and `names` are the project's own markers, kept as written: see
-    `family`. Applied to a name `runtime_name` folded, it gives what it gives
-    for the raw one.
-    """
-    if name in names or (keep and name.startswith(keep)):
-        return name
-    name = _INSTALL.sub(lambda m: f"/data/app/{'~~#/' if m.group(1) else ''}{m.group(2)}-#/",
-                        name)
-    return _DIGITS.sub(lambda m: "0x#" if m.group(0).startswith("0x") else "#", name)
-
 
 def metric_of(row: dict[str, Any]) -> str:
     """Which column this row is judged by.
@@ -1088,7 +972,7 @@ def _merge_names(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     and `compare` is their reader; what one trace holds is what `echolot
     names` prints.
 
-    Names are folded by `slice_family`. None when a repeat has no names: a
+    Names are folded by `names.slice_across_builds`. None when a repeat has no names: a
     report written before the section existed, or one whose query failed.
     The other side then cannot be read against it, which is not "none".
     """

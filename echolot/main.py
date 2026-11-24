@@ -54,6 +54,7 @@ from . import launch as launch_mod
 from . import moves as moves_mod
 from . import place as place_mod
 from . import plain as plain_mod
+from . import names as names_mod
 from . import report as report_mod
 from . import verdict as verdict_mod
 from .analyze import (
@@ -281,7 +282,7 @@ def _anchor_candidates(tp, upid: int) -> None:
     for r in rows:
         # The numbers `family` folds, written as `*`: a `#` the name had of
         # its own, as in `Choreographer#doFrame`, stays.
-        glob = report_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
+        glob = names_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
                                      str(r["name"]))
         seen = folded.get(glob)
         if seen is None:
@@ -1967,7 +1968,7 @@ def group_families(rows, covered, skipped, keep: str | None = None) -> dict:
     """
     families: dict[str, dict] = {}
     for r in rows:
-        fam = families.setdefault(report_mod.family(r["name"], keep=keep), {
+        fam = families.setdefault(names_mod.across_builds(r["name"], keep=keep), {
             "n": 0, "ns": 0, "threads": set(), "dets": set(), "skips": set(),
         })
         fam["n"] += r["n"]

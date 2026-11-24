@@ -34,7 +34,7 @@
 --
 -- So the gate here is a single occurrence against the median for that same
 -- name, rather than a total against a threshold. The name with the numbers
--- the runtime chose folded (`_name_family`, built in main.py): every frame is
+-- the runtime chose folded (`_name_family`, built in analyze.py): every frame is
 -- `Choreographer#doFrame <its vsync id>`, so by the raw name each frame was
 -- a group of one and no frame was ever an outlier (#728). Its row is named
 -- `Choreographer#doFrame #`. Two floors under it, because

@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import compare as compare_mod  # noqa: E402
+from echolot import names as names_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_report import env, one, row  # noqa: E402
@@ -211,7 +212,7 @@ def test_two_owners_in_one_run_add_up() -> None:
 
 
 def test_numbers_that_say_where_or_what_are_kept() -> None:
-    fold = report_mod.runtime_name
+    fold = names_mod.runtime_name
     check("a frame's vsync id goes", fold("Choreographer#doFrame 55112")
           == "Choreographer#doFrame #")
     check("pool and binder threads lose their numbers",
@@ -228,6 +229,18 @@ def test_numbers_that_say_where_or_what_are_kept() -> None:
           fold("AGENTTMP_fill_v4", keep="AGENTTMP_") == "AGENTTMP_fill_v4"
           and fold("step_2", names={"step_2"}) == "step_2"
           and fold("AGENTTMP_step_2", keep="AGENTTMP_") == "AGENTTMP_step_2")
+
+
+def test_a_tid_after_an_equals_sign_is_folded_too() -> None:
+    """#847: ART writes `… for tid=23762`, and the fold took `tid: N` and
+    `tid N` only, so the section was another row in every launch."""
+    fold = names_mod.runtime_name
+    name = "SuspendPlatformOrVirtualThread suspended Firebase Blocking Thread #0 for tid=23762"
+    check("the tid goes, as the thread's number does",
+          fold(name) == "SuspendPlatformOrVirtualThread suspended Firebase Blocking Thread # for tid=#",
+          fold(name))
+    check("and the two spellings it took before still fold",
+          fold("(owner tid: 13533)") == "(owner tid: #)" and fold("tid 4202") == "tid #")
 
 
 def test_a_frame_that_is_another_vsync_each_run_is_one_row_in_compare() -> None:

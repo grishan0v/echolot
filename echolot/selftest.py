@@ -1429,7 +1429,8 @@ def _(report):
                             before_path="a.json", after_path="b.json")
     got = {side: [(r["name"], r["runs"], r["other"], r["threads"]) for r in cmp["names"][side]]
            for side in ("before", "after")}
-    new = report_mod.slice_family(fixture.jit_name(fixture.JIT_NEW, fixture.INSTALL[1]))
+    from . import names as names_mod
+    new = names_mod.slice_across_builds(fixture.jit_name(fixture.JIT_NEW, fixture.INSTALL[1]))
     assert got == {"before": [], "after": [(new, "3/3", "0/3", "Jit thread pool")]}, got
     assert "/data/app/~~#/com.example.app-#/base.apk" in new, new
 
@@ -3791,7 +3792,7 @@ def _(report):
 def _(report):
     """The tool folded away the distinction it had asked the agent to make.
 
-    `family` collapses digits so an inventory of a real trace does not run to
+    `names.across_builds` collapses digits so an inventory of a real trace does not run to
     thousands of rows: `worker-2` and `worker-5` are one pool, a tid inside a
     lock note is noise. Every number it folds is one the runtime chose.
 
@@ -3808,20 +3809,20 @@ def _(report):
     """
     from .main import group_families
     from .mark import DEFAULT_PREFIX
-    from .report import family
+    from .names import across_builds
 
-    # What the runtime numbered still folds — that is what `family` is for.
-    assert family("DefaultDispatcher-worker-2") == \
-        family("DefaultDispatcher-worker-5"), "the pool stopped folding"
-    assert family("DefaultDispatcher-worker-2", keep=DEFAULT_PREFIX) == \
-        family("DefaultDispatcher-worker-5", keep=DEFAULT_PREFIX), \
+    # What the runtime numbered still folds — that is what `across_builds` is for.
+    assert across_builds("DefaultDispatcher-worker-2") == \
+        across_builds("DefaultDispatcher-worker-5"), "the pool stopped folding"
+    assert across_builds("DefaultDispatcher-worker-2", keep=DEFAULT_PREFIX) == \
+        across_builds("DefaultDispatcher-worker-5", keep=DEFAULT_PREFIX), \
         "the prefix rule folded something it does not own"
 
     # What the agent numbered does not.
     a, b = DEFAULT_PREFIX + "fill_v4", DEFAULT_PREFIX + "fill_v6"
-    assert family(a) == family(b), "the fixture no longer reproduces the fold"
-    assert family(a, keep=DEFAULT_PREFIX) == a, family(a, keep=DEFAULT_PREFIX)
-    assert family(a, keep=DEFAULT_PREFIX) != family(b, keep=DEFAULT_PREFIX), \
+    assert across_builds(a) == across_builds(b), "the fixture no longer reproduces the fold"
+    assert across_builds(a, keep=DEFAULT_PREFIX) == a, across_builds(a, keep=DEFAULT_PREFIX)
+    assert across_builds(a, keep=DEFAULT_PREFIX) != across_builds(b, keep=DEFAULT_PREFIX), \
         "two markers the agent numbered apart still come back as one"
 
     # And through the grouping `names` actually prints, which is where it bit.
