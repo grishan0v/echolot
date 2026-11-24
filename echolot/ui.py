@@ -490,11 +490,6 @@ def _clients(site: Site) -> list[dig.Client]:
     return [found] if isinstance(found, dig.Client) else list(found)
 
 
-def _whys(offered: list[tuple[dig.Client, str | None]]) -> list[str] | None:
-    """Why none of the clients can start, each reason once, in their order."""
-    return list(dict.fromkeys(why for _, why in offered if why)) or None
-
-
 def _dig_parts(visit: Visit, data: dict[str, Any], params: dict[str, str]) -> dict[str, Any] | None:
     """What a served report adds to start an agent from it, where the server
     takes that press: the way to the screen before it starts, or why there
@@ -505,8 +500,8 @@ def _dig_parts(visit: Visit, data: dict[str, Any], params: dict[str, str]) -> di
         return None
     offered = dig.offer(site.project, _clients(site), visit.st, [])
     can = [dig.adapter(c.key).name for c, why in offered if why is None]
-    return dig_page.report_parts(report_page.checks(data), action, bool(can), None if can else _whys(offered),
-                                 who=can)
+    return dig_page.report_parts(report_page.checks(data), action, bool(can), None if can else dig.reasons(offered),
+                                 who=can, aside=dig.aside(offered))
 
 
 def _phone(lines: list[dict[str, Any]]) -> str | None:
@@ -532,8 +527,9 @@ def _dig_url(site: Site, name: str, client: str | None, scenario: str | None) ->
 def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
     """The screen before an agent starts: what a press of Start would do,
     for the checks ticked on the report, with the client the address names
-    or, where it names none, the first the page offers (`dig.offer`), and a
-    way to each other one that can start. Nothing is started here."""
+    or, where it names none, the first the page offers (`dig.offer`), a way
+    to each other one that can start, and why each other one on this
+    computer cannot (`dig.aside`). Nothing is started here."""
     site = visit.site
     try:
         data, where, named = _dig_report(visit, params)
@@ -548,8 +544,10 @@ def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
                         "neither.")
     client, why = chosen
     if why and not any(w is None for _, w in offered):
-        # None can start: every reason, once each.
-        why = _whys(offered)
+        # None can start: every reason, once each. A folder none of them may
+        # edit is one reason, said once, and no screen leads to another
+        # client the press would refuse the same (#863).
+        why = dig.reasons(offered, client.key)
     agent = dig.adapter(client.key)
     paths = None
     known = visit.st.get("config") or {}
@@ -579,7 +577,7 @@ def _dig_ask(visit: Visit, params: dict[str, str]) -> Page:
         "running": agent.shown(paths, site.project) if paths is not None else "",
         "copy": report_page.request_text(data, picks, where, last=True), "action": action, "back": back or "",
         "keys": [c["key"] for c in picks], "many": len(picks) > report_page.FOCUS,
-        "others": [(name, url) for name, url in others if url],
+        "others": [(name, url) for name, url in others if url], "aside": dig.aside(offered, client.key),
     }, site.url, visit.steps(None)))
 
 

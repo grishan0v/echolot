@@ -715,7 +715,7 @@ def _(report):
                if r["location"] == "AppStart")
     assert row["total_ms"] == 1006.0, row
     assert row["self_ms"] < row["total_ms"], f"children not subtracted: {row}"
-    assert row["self_ms"] == 115.0, f"1006 minus 891 ms of children: {row}"
+    assert row["self_ms"] == 101.0, f"1006 minus 905 ms of children: {row}"
 
 
 @check("main_thread_block: self time never exceeds the window")
@@ -1006,19 +1006,59 @@ def _(report):
 
 # --- main_thread_waits --------------------------------------------------------
 
-@check("main_thread_waits: the app's thread that ended each sleep, idle or blocked")
+@check("main_thread_waits: the app's thread that let the main thread go, in the slice it waited in")
 def _(report):
-    """Room's two disk threads woke the main thread: once while it sat in
-    `loadConfig`, once while it was idle with nothing open below the anchor.
-    One row for both, their digits folded. The third wakeup ended a sleep
-    that began in the GC lock's contention, and a lock's wait is left to the
-    detectors of locks."""
+    """Room's two disk threads let the main thread go twice, once in
+    `loadConfig` and once in `readSession`. One row for both, their digits
+    folded, that names the slice it waited longest in. The third wakeup ended
+    a sleep that began in the GC lock's contention, and a lock's wait is left
+    to the detectors of locks."""
     row = only_row(report, "main_thread_waits")
     assert (row["location"], row["count"], row["total_ms"], row["max_ms"]) \
         == ("arch_disk_io_#", 2, 18.0, 12.0), row
-    # 12 ms idle, 6 blocked: shares, so that a merged row's median total and
-    # its worst repeat's evidence do not read as a sum.
-    assert row["detail"] == "67% idle · 33% blocked in loadConfig", row
+    assert row["detail"] == "blocked in readSession", row
+
+
+@check("main_thread_waits: the looper's idle between messages is no wait")
+def _(report):
+    """A start of an app with a WebView (`fixture.looper_waits`): Chromium's IO
+    thread posts to the idle looper, 210 ms of sleeps with no slice open, and
+    lets the main thread go three times inside a frame's `animation`, 26 ms.
+    The row is the 26 ms, and ranks above SharedPreferences' 20 ms in
+    `activityStart` because they are waits, not because it posts the most.
+    The compositor's thread only ever woke the idle looper, and is no row
+    (#926). Read as one, the IO thread's row was 236 ms, 89% of it idle."""
+    cfg = Config({**FIXTURE_CONFIG, "scenario": {
+        "name": "webview", "start": {"name": "bindApplication"},
+        "end": {"name": "Screen.firstFrame"}}})
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "looper.perfetto-trace"
+        path.write_bytes(fixture.looper_waits())
+        got = _analyze(path, cfg)
+    waits = [(r["location"], r["count"], r["total_ms"], r["max_ms"], r["detail"])
+             for r in rows(got, "main_thread_waits")]
+    assert waits == [("Chrome_IOThread", 3, 26.0, 10.0, "blocked in animation"),
+                     ("SharedPreferenc", 1, 20.0, 20.0, "blocked in activityStart")], waits
+
+
+@check("main_thread_waits: a row written before #926 is read by its waits, not its idle time")
+def _(report):
+    """A report from before #926 adds the idle looper's sleeps to a row's
+    waits and gives the shares in `detail`. Its page says the part blocked
+    inside a slice, and weighs only that, also in a window an end anchor
+    closed: 4.1 s, 92% of it idle, reads as 0.3 s of waiting."""
+    from . import plain
+    old = {"location": "Chrome_IOThread", "runs": "5/5", "count": 1290, "total_ms": 4116.0,
+           "max_ms": 1001.0, "detail": "92% idle · 8% blocked in animation"}
+    det = {"id": "main_thread_waits", "title": "", "rows": [old], "error": None, "checked": True}
+    rep = {"window": {"duration_ms": 13324.0, "startup": {"type": "cold", "dur_ms": 398.0},
+                      "start_anchor": {"glob": "bindApplication", "matches": 1},
+                      "end_anchor": {"glob": "activityPause", "matches": 1}},
+           "runs": 5, "detectors": [det]}
+    said = plain.found(det, rep)
+    assert said.startswith("The main thread waited 0.3 s for `Chrome_IOThread`"), said
+    assert "3.8 s it sat idle" in said and "is not counted" in said, said
+    assert plain.attention(det, rep) == plain.WORTH_A_LOOK, plain.attention(det, rep)
 
 
 @check("main_thread_kernel_waits: the main thread held in the kernel, by the thread that let it out")
@@ -1505,6 +1545,36 @@ def _(report):
     new = names_mod.slice_across_builds(fixture.jit_name(fixture.JIT_NEW, fixture.INSTALL[1]))
     assert got == {"before": [], "after": [(new, "3/3", "0/3", "Jit thread pool")]}, got
     assert "/data/app/~~#/com.example.app-#/base.apk" in new, new
+
+
+@check("compare --plain says in how many launches a name of one side was, as the table does")
+def _(report):
+    """From five runs a name may be missing from one of them and still be
+    listed, and the table says `4/5 against 0/5`. The plain reading said
+    "In every launch after and in none before" of such a name, a wait a
+    reader then took for one every launch made (#851). Here a name in all
+    five runs after and one in four: the sentence opens with both, and says
+    which name missed a run."""
+    from . import compare as compare_mod
+    from . import moves
+    from . import report as report_mod
+
+    def with_names(tag: str, runs: list[dict[str, float]]) -> dict:
+        side = _set_of(tag, len(runs))
+        side[report_mod.SLICE_NAMES] = report_mod._merge_names([{report_mod.NAMES_ALL: {
+            name: {"total_ms": ms, "max_ms": ms, "threads": ["main"]} for name, ms in run.items()}}
+            for run in runs])
+        return side
+    before = with_names("a", [{"common": 30.0}] * 5)
+    for runs, said in (([{"common": 30.0, "wait": 2.0}] * 4 + [{"common": 30.0}],
+                        "In 4 of 5 runs after and in none before: `wait` (2 ms a run, main)."),
+                       ([{"common": 30.0, "load": 6.0, "wait": 2.0}] * 4 + [{"common": 30.0, "load": 6.0}],
+                        "In every run after, or all but one, and in none before: `load` (6 ms a run, "
+                        "main), `wait` (2 ms a run in 4 of 5, main).")):
+        after = with_names("b", runs)
+        cmp = compare_mod.build(before, after, before_path="a.json", after_path="b.json")
+        note = next((n for n in moves.read(before, after, cmp)["notes"] if n["id"] == "names"), None)
+        assert note is not None and note["text"].startswith(said), note
 
 
 @check("a row over a pool says how many threads it adds up, and the main "
@@ -2005,6 +2075,72 @@ def _(report):
         assert shown == ["1/3"] * 4 + ["2/3", "3/3"], said
 
 
+def main_thread_trace(path: Path, slices: list[tuple[str, float, float]],
+                      launched_as: str | None = None) -> Path:
+    """A trace of `com.example.app` (pid 7300) whose main thread ran from 130
+    to 900 ms and left `slices`, `(name, start_ms, dur_ms)` side by side, and
+    nothing else: what the window's frames are read from, and nothing to blur
+    it. With `launched_as`, system_server records a launch from 100 to 400 ms
+    that completed as that package's: the app's own, or the permission
+    dialog's that came up over it (#810)."""
+    pid, app, system = 7300, "com.example.app", 1000
+    builder = fixture.TraceProtoBuilder()
+    fixture.process_tree(builder, [(pid, app, {pid: app}),
+                                   (system, "system_server", {system: "system_server"})])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {0: [
+        (fixture.ms(130), next(seq), "sched", "swapper/0", 0, fixture.R, app, pid),
+        (fixture.ms(900), next(seq), "sched", app, pid, fixture.S, "swapper/0", 0)]}
+    for ts, order, kind, name in fixture._flatten(
+            [(name, at, dur, []) for name, at, dur in sorted(slices, key=lambda s: s[1])],
+            [], seq):
+        by_cpu[0].append((ts, order, "print", pid,
+                          f"B|{pid}|{name}\n" if kind == "B" else f"E|{pid}\n"))
+    if launched_as:
+        name = "launchingActivity#1"
+        for at, buf in ((100, f"S|{system}|{name}|1"), (400, f"F|{system}|{name}|1"),
+                        (400, f"B|{system}|{name}:completed:{launched_as}"),
+                        (400, f"E|{system}")):
+            by_cpu[0].append((fixture.ms(at), next(seq), "print", system, buf + "\n"))
+    fixture.ftrace(builder, by_cpu)
+    path.write_bytes(builder.serialize())
+    return path
+
+
+# A cold start whose first frame comes after `activityStart`, and a window
+# cut from `bindApplication` to it: the app's start up to its first Activity,
+# which draws nothing because nothing was drawn yet (#849).
+BEFORE_FIRST_FRAME = [("bindApplication", 140, 60), ("activityStart", 210, 5),
+                      ("Choreographer#doFrame 1", 260, 20), ("Choreographer#doFrame 2", 300, 10)]
+BIND_TO_ACTIVITY = {"project": {"package": "com.example.app", "process": "com.example.app"},
+                    "scenario": {"name": "bind", "start": {"name": "bindApplication"},
+                                 "end": {"name": "activityStart"}}}
+
+
+@check("analyze: a window that closes before the app's first frame is not one where "
+       "the scenario drew nothing")
+def _(report):
+    """A window from `bindApplication` to `activityStart` closes before any
+    frame of a cold start, and `analyze` said of it that the app drew no
+    frame and the scenario did not reach its screen; `collect` stopped its
+    round on the same reading, so it could never be recorded with more than
+    one repeat (#849). A frame there was none of yet says nothing. A window
+    the app drew nothing in after its first frame still does (#536)."""
+    from . import report as report_mod
+    with tempfile.TemporaryDirectory() as tmp:
+        early = _analyze(main_thread_trace(Path(tmp) / "bind.perfetto-trace",
+                                           BEFORE_FIRST_FRAME), Config(BIND_TO_ACTIVITY))
+        assert early["window"]["drawn"] is None, early["window"]["drawn"]
+        assert "drew no frame" not in report_mod.to_markdown(early), "nothing said"
+        late = _analyze(main_thread_trace(Path(tmp) / "list.perfetto-trace", [
+            *BEFORE_FIRST_FRAME, ("list_open", 400, 1), ("list_shown", 700, 1)]),
+            Config({**BIND_TO_ACTIVITY, "scenario": {
+                "name": "list", "start": {"name": "list_open"},
+                "end": {"name": "list_shown"}}}))
+        assert late["window"]["drawn"] == {"count": 0}, late["window"]["drawn"]
+        assert "The app drew no frame in its recording" in report_mod.to_markdown(late)
+
+
 @check("collect: a round its first repeat stops leaves the set before where it was")
 def _(report):
     """The first trace is read before the rest are recorded, and a round whose
@@ -2125,11 +2261,16 @@ def _(report):
         assert _cold_only([paths[1]]) == ([paths[1]], []), "alone, it is read as given"
 
 
-def _collect_ending(ended: list[str], n: int, where: Path,
-                    started: str = ".Main") -> tuple[list[dict], list[str]]:
+def _collect_ending(ended: list[str], n: int, where: Path, started: str = ".Main",
+                    dump: str = "", pulled: bytes = b"a trace",
+                    **kw) -> tuple[list[dict], list[str]]:
     """`runner.collect` of `n` cold launches of `com.example.app/<started>` on
     a fake device whose `am start -W` says each ended on the next of `ended`,
-    in the short form a phone prints: the recordings made, and what was said."""
+    in the short form a phone prints, or as the component given where it
+    holds a `/`: the recordings made, and what was said. `dump` is what
+    `dumpsys package` answers, and every call of it is said as `dumpsys`;
+    `pulled` is every trace the device hands over, and `kw` goes to
+    `collect` as it is."""
     from . import runner
     package, serial = "com.example.app", "emulator-5554"
     ended = list(ended)
@@ -2147,10 +2288,14 @@ def _collect_ending(ended: list[str], n: int, where: Path,
                     "    isKeyguardShowing=false\n")
         if text.startswith("am start -W"):
             to = ended.pop(0) if len(ended) > 1 else ended[0]
-            return (f"Status: ok\nLaunchState: COLD\nActivity: {package}/{to}\n"
+            to = to if "/" in to else f"{package}/{to}"
+            return (f"Status: ok\nLaunchState: COLD\nActivity: {to}\n"
                     f"TotalTime: 523\nComplete\n")
+        if text == f"dumpsys package {package}":
+            said.append("dumpsys")
+            return dump
         if args[3:4] == ["pull"]:
-            Path(args[-1]).write_bytes(b"a trace")
+            Path(args[-1]).write_bytes(pulled)
         return ""
 
     said: list[str] = []
@@ -2158,7 +2303,8 @@ def _collect_ending(ended: list[str], n: int, where: Path,
     runner._run = adb
     try:
         made = runner.collect(package, where, n, name="run",
-                              section={"activity": f"{package}/{started}"}, log=said.append)
+                              section={"activity": f"{package}/{started}"}, log=said.append,
+                              **kw)
     finally:
         runner._run = real
     return made, said
@@ -2234,6 +2380,168 @@ def _(report):
     assert said in report_mod.overview(got), "and in the overview analyze prints"
     plain = report["window"]
     assert plain.get("boot_receivers") is None and "activity" not in plain, plain
+
+
+# A permission dialog's component as `am start -W` names it, and what
+# `dumpsys package` lists of an app's permissions on an SM-A515F (Android 13),
+# cut to the sections `runner.ungranted` reads (#810).
+_DIALOG = ("com.google.android.permissioncontroller/"
+           "com.android.permissioncontroller.permission.ui.GrantPermissionsActivity")
+_PERMISSIONS_DUMP = """\
+Packages:
+  Package [com.example.app] (2c4e3f1):
+    requested permissions:
+      android.permission.INTERNET
+      android.permission.CAMERA
+      android.permission.POST_NOTIFICATIONS
+    install permissions:
+      android.permission.INTERNET: granted=true
+    User 0: ceDataInode=4321 installed=true hidden=false suspended=false stopped=false
+      gids=[3003]
+      runtime permissions:
+        android.permission.CAMERA: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]
+        android.permission.POST_NOTIFICATIONS: granted=false, flags=[ USER_SENSITIVE_WHEN_GRANTED|USER_SENSITIVE_WHEN_DENIED]
+        android.permission.ACCESS_FINE_LOCATION: granted=true, flags=[ USER_SET]
+      disabledComponents:
+        com.example.app.Unused
+"""
+
+
+@check("collect: a launch a permission dialog took is said as the dialog's, with the "
+       "command that grants the permission")
+def _(report):
+    """A debug build that asks for `POST_NOTIFICATIONS` before its first frame,
+    on Android 13 and never granted: the dialog comes up over the app and the
+    platform's launch ends on it, every repeat (#810). The line under the
+    repeat said the app went on to another activity by itself, and `analyze`
+    then sent a person who had recorded with `runner.mode: launch` to set it.
+    The permissions the app holds ungranted are read once, kept with each
+    repeat the dialog took, and the grant command names the likely one."""
+    from . import runner
+    grant = "`adb shell pm grant com.example.app android.permission.POST_NOTIFICATIONS`"
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([_DIALOG], 3, Path(tmp), dump=_PERMISSIONS_DUMP)
+        under = [s.strip() for s in said if "permission dialog took" in s]
+        assert len(under) == 1 and said.index(next(
+            s for s in said if "permission dialog took" in s)) - 1 == next(
+            i for i, s in enumerate(said) if "[1/3]" in s), said
+        assert under[0].startswith("[!] a permission dialog took the launch: it ended on "
+                                   "com.google.android.permissioncontroller's "
+                                   "GrantPermissionsActivity"), under
+        assert grant in under[0] and "`android.permission.CAMERA` ungranted too" in under[0], under
+        assert not any("by itself" in s for s in said), said
+        assert said.count("dumpsys") == 1, "read once, at the first launch it took"
+        kept = [runner.launch_record(r["path"]) for r in made]
+        assert all(k["ungranted"] == ["android.permission.CAMERA",
+                                      "android.permission.POST_NOTIFICATIONS"]
+                   for k in kept), kept
+        end = runner.activities_said(made) or ""
+        assert end.startswith("a permission dialog took every launch of the 3") \
+            and grant in end, end
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([".Main"], 2, Path(tmp), dump=_PERMISSIONS_DUMP)
+        assert "dumpsys" not in said and not any("permission" in s for s in said), said
+        assert "ungranted" not in runner.launch_record(made[0]["path"]), "only when it took one"
+
+
+class _Startups:
+    """What `launch.find` asks of a trace_processor, answered for a trace of
+    `process` whose launches are `startups`."""
+
+    def __init__(self, process: str, startups: list[dict]):
+        self.process, self.startups = process, startups
+
+    def exec_script(self, sql: str) -> None:
+        pass
+
+    def query(self, sql: str) -> list[dict]:
+        if "FROM android_startups" in sql:
+            return self.startups
+        return [{"name": self.process}] if "FROM _proc" in sql else []
+
+
+@check("launch window: a trace whose launch a permission dialog took says so, and does "
+       "not send a launch-mode recording to set the launch mode")
+def _(report):
+    """The trace's launch was `com.google.android.permissioncontroller`'s, and
+    the error said to record with `runner.mode: launch`, which is how it had
+    been recorded (#810). The dialog is named from the trace's launches, or
+    from the activity `collect` kept beside the trace where the trace holds
+    none, and the grant command from the permissions it kept with it."""
+    from . import launch as launch_mod
+    from . import recording
+    dialog = {"startup_id": 1, "ts": 100, "ts_end": 900, "own": 0,
+              "package": "com.google.android.permissioncontroller"}
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "startup_iter000.perfetto-trace"
+        trace.write_bytes(b"a trace")
+        try:
+            launch_mod.find(_Startups("com.example.app", [dialog]), 1, str(trace))
+        except launch_mod.NoLaunch as e:
+            said = str(e)
+        else:
+            raise AssertionError("a trace with the dialog's launch only has no window")
+        assert said.startswith("no launch of com.example.app in trace "
+                               "startup_iter000.perfetto-trace: its launch is "
+                               "com.google.android.permissioncontroller's. A permission "
+                               "dialog came up over the app"), said
+        assert "`adb shell pm grant com.example.app <permission>`" in said \
+            and launch_mod.NOTIFICATIONS in said and "runner.mode" not in said, said
+        recording.write(trace, {"runner": "launch", "launch": {
+            "activity": _DIALOG, "ungranted": ["android.permission.POST_NOTIFICATIONS"]}})
+        try:
+            launch_mod.find(_Startups("com.example.app", []), 1, str(trace))
+        except launch_mod.NoLaunch as e:
+            said = str(e)
+        assert ("its launch is com.google.android.permissioncontroller's" in said
+                and "`adb shell pm grant com.example.app "
+                    "android.permission.POST_NOTIFICATIONS`" in said), said
+        recording.write(trace, {"runner": "launch", "launch": {"activity": None}})
+        try:
+            launch_mod.find(_Startups("com.example.app", []), 1, str(trace))
+        except launch_mod.NoLaunch as e:
+            said = str(e)
+        assert "permission" not in said and "does that" not in said \
+            and "`collect` started the app inside this recording" in said, said
+
+
+@check("collect: under `window: launch` a first repeat a permission dialog took stops "
+       "the round, and the stop names the dialog")
+def _(report):
+    """The first look at repeat 1 read the window `analyze` would cut, and a
+    trace with no launch of the app made it say nothing: all five repeats of
+    a round the dialog took were recorded, and `analyze` refused each (#810).
+    It stops there now with `analyze`'s reason; a window cut by anchors is
+    measured with the dialog up, and its round goes on."""
+    import argparse
+
+    from . import runner
+    from .main import _scenario_ran
+    launch_cfg = Config({**BIND_TO_ACTIVITY, "scenario": {"name": "run", "window": "launch"}})
+    # On the binary this run checks, as every trace a check opens is.
+    on_binary = argparse.Namespace(tp_binary=_binary)
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = main_thread_trace(Path(tmp) / "dialog.perfetto-trace", BEFORE_FIRST_FRAME,
+                                  launched_as="com.google.android.permissioncontroller")
+        body = trace.read_bytes()
+        out = Path(tmp) / "traces"
+        try:
+            _collect_ending([_DIALOG], 3, out, dump=_PERMISSIONS_DUMP, pulled=body,
+                            check_first=lambda t: _scenario_ran(launch_cfg, t, on_binary))
+        except runner.RunnerError as e:
+            said = str(e)
+        else:
+            raise AssertionError("a round whose first launch the dialog took goes on")
+        assert said.startswith("repeat 1 of 3: no launch of com.example.app in trace "
+                               "run_iter000.perfetto-trace: its launch is "
+                               "com.google.android.permissioncontroller's"), said
+        assert ("`adb shell pm grant com.example.app android.permission.POST_NOTIFICATIONS`"
+                in said), said
+        assert not list(out.glob("*.perfetto-trace")), "nothing kept"
+        made, _ = _collect_ending([_DIALOG], 2, out, dump=_PERMISSIONS_DUMP, pulled=body,
+                                  check_first=lambda t: _scenario_ran(
+                                      Config(BIND_TO_ACTIVITY), t, on_binary))
+        assert len(made) == 2, "anchors cut a window the dialog leaves alone"
 
 
 def _powered(plugged: bool, level: int, saver: str = "0") -> str:
@@ -2913,6 +3221,48 @@ def _(report):
         v = moves.read(before, after, cmp)["verdict"]
         assert (v["movement"], v["by"]) == (movement, "frames"), v
         assert shares in v["text"] and "its length is the recording's" in v["text"], v["text"]
+
+
+def _set_of(tag: str, runs: int) -> dict:
+    """A merged report of `runs` repeats with no rows, its traces named by
+    `tag`: two sides under one set of names are the same recordings to
+    `compare`, which then compares nothing (#713)."""
+    side = _side_with({})
+    side.update(runs=runs, traces=[f"{tag}{i}.perfetto-trace" for i in range(runs)])
+    return side
+
+
+@check("compare --plain says beside a share of late frames the counts of the run it is the share of")
+def _(report):
+    """Late 4, 3, 4, 3, 3 of 16, 15, 15, 16, 16 frames: each run's share is
+    25, 20, 26.7, 18.8 and 18.8%, and their median, which the verdict
+    reads, is 20%, the 3 of 15 of the second run. The sentence put beside
+    it the median late frames and the median frames drawn, 3 of 16, two
+    other runs and 19%: "20% … 3 of 16 frames a launch", and the same 3 of
+    16 read 18% in another pair (#846). The counts are the middle run's
+    now; with an even number of runs, the two the median lies halfway
+    between."""
+    from . import compare as compare_mod
+    from . import moves
+    from . import report as report_mod
+
+    def drag(tag: str, frames: tuple, late: tuple) -> dict:
+        side = _set_of(tag, len(frames))
+        side["window"].update({"start_anchor": None, "end_anchor": None, "duration_ms": 14900.0,
+                               "frames": report_mod._merge_frames(
+                                   [{"window": {"frames": {"count": n, "late": k}}}
+                                    for n, k in zip(frames, late, strict=True)])})
+        return side
+    five = drag("a", (16, 15, 15, 16, 16), (4, 3, 4, 3, 3))
+    for after, said in ((drag("b", (16, 15, 15, 16, 17), (3, 4, 3, 3, 3)),
+                         "The app made 20% of its frames late before and 19% after: 3 of 15 frames in the "
+                         "middle run, then 3 of 16."),
+                        (drag("c", (16, 15, 15, 16), (3, 4, 3, 4)),
+                         "The app made 20% of its frames late before and 22% after: 3 of 15 frames in the "
+                         "middle run, then 3 of 15 and 4 of 16 in the two middle runs.")):
+        cmp = compare_mod.build(five, after, before_path="a.json", after_path="b.json")
+        v = moves.read(five, after, cmp)["verdict"]
+        assert v["by"] == "frames" and v["text"].startswith(said), v["text"]
 
 
 @check("frame_jank: the worst frame in the trace is outside the window")
@@ -6435,10 +6785,10 @@ def _(report):
     merged = report_mod.aggregate(runs)
     rows = next(d for d in merged["detectors"] if d["id"] == "main_thread_block")["rows"]
     order = [r["location"] for r in rows]
-    # 500 ms × 1/5 is 100: below the 180, 120, 115 and 104 found every time,
+    # 500 ms × 1/5 is 100: below the 180, 120, 104 and 101 found every time,
     # above the 64 that was. One trace orders by the median, as before.
     assert order[:4] == ["waitWhileAllocatingLocked", "collection_mapping",
-                         "AppStart", "Steady_heavy"], order
+                         "Steady_heavy", "AppStart"], order
     assert order[4:6] == ["spike_once", "spike_twice"], order
     single = next(d for d in report["detectors"] if d["id"] == "main_thread_block")["rows"]
     assert [r["self_ms"] for r in single] == sorted(
@@ -8101,6 +8451,83 @@ def _(report):
     assert check_mod.rows(plain, None)[-1]["name"] == "Comparing with the report before it"
     for wrong in ({"hunt": "5", "round": 1}, {"hunt": 5, "round": True}, "round 1"):
         assert check_mod.against({**run, "what": {**what, "against": wrong}}) == "the report before it", wrong
+
+
+def _dig_project(root: Path, allowed: str | None) -> dict:
+    """A project both clients could start in but for what the config says:
+    Claude Code's commands, a git repository and Codex's rules. The state the
+    page reads, as much of it as the reading before a press looks at."""
+    from . import codex, dig
+    for rel in (*dig.LAYER, codex.RULE_PATH):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(codex.RULE_FILE if rel == codex.RULE_PATH else "the layer\n", encoding="utf-8")
+    (root / ".git").mkdir()
+    path = root / "echolot.yml"
+    path.write_text("project:\n  package: com.example.app\n  process: com.example.app\nscenario:\n  name: coldStart\n"
+                    "  window: launch\n" + (f"instrumentation:\n  allowed: {allowed}\n" if allowed is not None else ""),
+                    encoding="utf-8")
+    return {"project": str(root), "layer_verdict": "current", "last_doctor": None, "hunt": None, "collect": None,
+            "config": {"path": str(path), "scenario": None}}
+
+
+@check("ui: with no folder in instrumentation.allowed, Dig deeper offers no agent and says "
+       "so once, with where to name one and how")
+def _(report):
+    """`instrumentation.allowed` naming no folder was read at the press and
+    not before it. The dialog offered Start it from here (#813), and the
+    screen of each client led to the other's, refused alike, and back (#863).
+    The folder is now part of the reading before a press: every client is
+    refused for it, the reason is one and said once, and no screen offers a
+    client.
+    """
+    from . import dig
+    from .pages import dig_page
+    claude = dig.Client(program="/bin/claude", version="2.1.300", key="claude")
+    codex_ = dig.Client(program="/bin/codex", version="0.159.2", key="codex")
+    for allowed in (None, "[]"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            st = _dig_project(root, allowed)
+            offered = dig.offer(root, [claude, codex_], st, [])
+            whys = [why for _, why in offered]
+            assert whys[0] and whys[0] == whys[1] == dig.unplaced(st), whys
+            assert "names no folder" in whys[0] and "under `instrumentation:`" in whys[0] \
+                and "`allowed: [\"app/src/main\"" in whys[0], whys[0]
+            assert dig.reasons(offered) == [whys[0]] and dig.aside(offered) == [], dig.reasons(offered)
+            ask = dig_page.report_parts([], "/t/dig/ask", False, dig.reasons(offered), who=[])["ask"]
+            assert "ask-start" not in ask and ask.count("names no folder") == 1, ask
+            (root / "echolot.yml").write_text((root / "echolot.yml").read_text(encoding="utf-8").replace(
+                "instrumentation:\n  allowed: []\n", "") + 'instrumentation:\n  allowed: ["app/src/main"]\n',
+                encoding="utf-8")
+            assert [why for _, why in dig.offer(root, [claude, codex_], st, [])] == [None, None]
+
+
+@check("ui: where one agent can start, Dig deeper says why each other one on this computer "
+       "cannot")
+def _(report):
+    """The page read why it could not start Codex, and said it only when it
+    could start no agent at all: a project set up for Claude Code alone never
+    learned that Codex needed `.codex/rules/echolot.rules`, nor which command
+    writes it (#819). Where one client can start, the dialog and the screen
+    before the start say why each other one installed here cannot. One that
+    is not installed is not named: nothing says it is wanted.
+    """
+    from . import codex, dig, dig_codex
+    from .pages import dig_page
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _dig_project(root, '["app/src/main"]')
+        (root / codex.RULE_PATH).unlink()
+        lacks = dig_codex.ready(root)
+        assert lacks and "`.codex/rules/echolot.rules`" in lacks and "`echolot init --for " in lacks, lacks
+        claude = dig.Client(program="/bin/claude", key="claude")
+        offered = [(claude, None), (dig.Client(program="/bin/codex", key="codex"), lacks)]
+        assert dig.aside(offered) == [lacks] and dig.aside(offered, "codex") == [], dig.aside(offered)
+        ask = dig_page.report_parts([], "/t/dig/ask", True, None, who=["Claude Code"], aside=dig.aside(offered))["ask"]
+        assert 'id="ask-start"' in ask and 'class="small sub dig-aside"' in ask \
+            and "<code>.codex/rules/echolot.rules</code>" in ask, ask
+        absent = dig.Client(key="codex", why="Codex is not installed on this computer.")
+        assert dig.aside([(claude, None), (absent, absent.why)]) == []
 
 
 # --- the run ---------------------------------------------------------------
