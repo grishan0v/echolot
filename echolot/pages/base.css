@@ -88,7 +88,7 @@ code { padding: 1px 5px; border-radius: var(--r1); background: var(--surface); o
 .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: -.01em; text-decoration: none; min-height: 32px; }
 .brand svg { width: 24px; height: 24px; flex: none; }
 .crumb { color: var(--ink-2); font-size: var(--t-sm); min-width: 0; overflow-wrap: anywhere; }
-.crumb i::before { content: "/"; font-style: normal; color: var(--line-2); padding: 0 6px; }
+.crumb i::before { content: "/"; font-style: normal; color: var(--line-2); padding: 0 2px; }
 .steps { margin-left: auto; display: flex; align-items: center; font-size: var(--t-sm); }
 .steps a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 4px; color: var(--ink-2); text-decoration: none; border-radius: var(--r1); }
 .steps a:hover { color: var(--ink); }

@@ -248,7 +248,7 @@ def test_the_verdict_is_the_summarys_first_sentence_and_how_many_rounds(states):
           page.one("p", "lead").text == "Three things inside it cost the most.")
     check("the title of the file is the question", page.one("title").text == f"echolot answer: {fx.QUESTION}")
     check("the top bar says the app and the scenario, and has no steps",
-          page.one("span", "crumb").text == "com.example.appcoldStart" and not page.all("nav"))
+          page.one("span", "crumb").text == "com.example.app coldStart" and not page.all("nav"))
 
 
 def test_a_summary_with_no_short_first_sentence_stands_whole_under_the_pages_headline(states):
@@ -899,11 +899,11 @@ def test_the_top_bar_takes_the_steps_and_the_crumb_of_a_page_that_is_served(stat
               [(a.text, a.attrs["href"], a.attrs.get("aria-current")) for a in links]
               == [("Start", "/", None), ("Report", "/report", None), ("Agent's answer", "/answer", "page")])
     own = page_of(states["many"], steps=steps).one("span", "crumb").text
-    check("the crumb stays the page's own unless one is given", own == "com.example.appcoldStart")
+    check("the crumb stays the page's own unless one is given", own == "com.example.app coldStart")
     check("one given as a string takes its place",
           page_of(states["many"], crumb="My app").one("span", "crumb").text == "My app")
     check("and so do several", page_of(states["many"], crumb=["My app", None, "First launch"]).one("span", "crumb").text
-          == "My appFirst launch")
+          == "My app First launch")
     check("an empty one leaves the bar without it", not page_of(states["many"], crumb="").all("span", "crumb"))
     odd = page_of(states["many"], crumb="<b>x</b>").one("span", "crumb")
     check("what is given is text, never markup", odd.text == "<b>x</b>" and not odd.all("b"))

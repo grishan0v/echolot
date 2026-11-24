@@ -268,12 +268,15 @@ appears on the page.
 measures and where it stands: not checked yet, recordings that wait, or when
 it was last checked. The scenario goes to the commands as `--scenario`.
 
-**The number of launches** for one press is under **All settings**: 3 unless
-you change it, from 1 to 20. Three is quick and already shows how much the
-launches differ; to be sure which changes hold, a comparison needs four a
-side, or three against five. It goes to `collect` as `-n`. Nothing is written
-to `echolot.yml`: `runner.iterations` stays what `echolot collect` takes in a
-terminal. **All settings** also lists the commands a press runs.
+**The number of launches** for one press is under **All settings**, from 1
+to 20. It starts at `runner.iterations` in the config, the number `echolot
+collect` takes in a terminal and **Check again** on an investigation's page
+records (5 where the config does not say; 3 where its value is not a whole
+number). Three is quick and already shows how much the launches differ; to be
+sure which changes hold, a comparison needs four a side, or three against
+five. It goes to `collect` as `-n`. Nothing is written to `echolot.yml`.
+**All settings** also lists the commands a press runs, with the number typed
+in the field.
 
 **With script switched off** in the browser everything above works: the
 button and Stop are forms, and the page of a run loads itself again every few

@@ -238,10 +238,10 @@ def _launches(offer: dict[str, Any], frozen: bool) -> tuple[str, str] | None:
     field = (f'<label class="field" for="launches">Record <input type="text" inputmode="numeric" maxlength="2" '
              f'id="launches" name="launches" form="check-form" value="{offer["launches"]}" '
              f'autocomplete="off" aria-describedby="launches-h"{" disabled" if frozen else ""}> launches at each press</label>')
-    says = (f'<p class="small sub" id="launches-h">From 1 to {offer["most"]}. Three is quick and already shows how much '
-            'the launches differ. To be sure which changes hold, a comparison needs four a side, or three against '
-            'five. Nothing saves this number: <code>runner.iterations</code> in the config stays what '
-            '<code>echolot collect</code> takes in a terminal.</p>')
+    says = (f'<p class="small sub" id="launches-h">From 1 to {offer["most"]}. It starts at '
+            '<code>runner.iterations</code> in the config, the number <code>echolot collect</code> takes in a '
+            'terminal. Three is quick and already shows how much the launches differ. To be sure which changes '
+            'hold, a comparison needs four a side, or three against five. Nothing saves a number typed here.</p>')
     return "Launches in one check", field + says
 
 
@@ -252,7 +252,10 @@ def _commands(offer: dict[str, Any]) -> tuple[str, str] | None:
     if choice is None or not choice.get("runs"):
         return None
     several = len(offer["choices"]) > 1
-    lines = "".join(f'<pre class="yaml" tabindex="0">{e(line)}</pre>' for line in choice["runs"])
+    # The line that records follows the field: `data-n` marks it, and the
+    # start page's script puts the number typed in place of its `-n` (#825).
+    lines = "".join(f'<pre class="yaml" tabindex="0"{" data-n" if " -n " in line else ""}>{e(line)}</pre>'
+                    for line in choice["runs"])
     whose = f" for <code>{e(choice['name'])}</code>" if several else ""
     return "What a press runs", (
         f"<p>The button runs these{whose}, one after another, in the project's folder: the commands you would "

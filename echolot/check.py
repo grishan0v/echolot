@@ -53,8 +53,10 @@ from .pages import compare_page, report_page
 JOB = "check"
 RECORD, READ = "record", "read"
 
-# How many launches one press records unless "All settings" says otherwise.
-# Three is the fewest that shows a spread, and it keeps a first check short.
+# How many launches one press records where the config's `runner.iterations`
+# is not a whole number to start from. The field starts at that number, the
+# one `echolot collect` takes in a terminal and the answer's Check again
+# records: a field that started at three said "four a side" beside it (#825).
 LAUNCHES = 3
 MOST = 20
 
@@ -317,21 +319,23 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
         do = READ if unread else RECORD
         before = int(report.get("runs") or 1) if _reads(report) else None
         counted = do == RECORD and mode != "gradle"
+        iterations = None if mode == "gradle" else _whole(ITERATIONS.read(section))
+        n = iterations or LAUNCHES
         each_s = read_s(project, name)
         hints = ({str(n): hint(do, mode, n, section, before=before, each_s=each_s) for n in range(1, MOST + 1)}
                  if counted else {})
         report_dir = project / cfg.report_dir
         choice = {"name": name, "mode": mode}
-        runs = steps(project, str(known["path"]), choice, do, LAUNCHES if counted else None,
+        runs = steps(project, str(known["path"]), choice, do, n if counted else None,
                      report_dir / "before.json" if before else None, several)
         out["choices"].append({
             "name": name, "chosen": focus, "do": do, "mode": mode, "unread": unread, "counted": counted,
             "runs": [step["shown"] for step in runs],
-            "section": section, "iterations": None if mode == "gradle" else _whole(ITERATIONS.read(section)),
+            "section": section, "iterations": iterations, "launches": n,
             "label": LABEL[READ] if do == READ else LABEL["again" if before else "first"],
             "text": f"{_measures(cfg)} {_stands(unread, report)}",
             "hints": hints,
-            "hint": hints.get(str(LAUNCHES)) or hint(do, mode, None, section, unread=unread, before=before,
+            "hint": hints.get(str(n)) or hint(do, mode, None, section, unread=unread, before=before,
                                                      each_s=each_s),
             # What keeps this choice from being pressed, and what keeps it
             # from being recorded anew where a press reads.
@@ -342,6 +346,9 @@ def offer(project: Path, st: dict[str, Any], lines: list[dict[str, Any]],
             # reads them again reads (`again`, after the time limit changed).
             "there": len(files or ()),
         })
+    picked = chosen(out)
+    if picked is not None:
+        out["launches"] = picked["launches"]
     return out
 
 
@@ -452,7 +459,7 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
     # `collect` with the config's own number; from the start page it names one.
     launches = None
     if do == RECORD and choice["mode"] != "gradle" and not press["hunt"]:
-        launches = press["launches"] or LAUNCHES
+        launches = press["launches"] or choice.get("launches") or LAUNCHES
 
     before: Path | None = None
     round_of: dict[str, int] | None = None

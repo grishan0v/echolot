@@ -18,11 +18,21 @@
   padding: 8px 8px 8px 16px; background: var(--float); border-radius: var(--r3); box-shadow: var(--shadow); }
 .dock-t { flex: 1 1 8rem; font-size: var(--t-sm); font-weight: 600; }
 .dock-b { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-left: auto; }
+/* What gets focus, or is jumped to, stops above the bar, never under it. */
+html:has(#dock) { scroll-padding-bottom: 96px; }
+/* On a phone the bar is one row (issue 825): with nothing ticked the button that
+   ticks says what the count would, and the count is left to a screen reader. */
 @media (max-width: 560px) {
-  .dock-in { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 8px 8px 4px 16px; }
-  .dock-b { grid-column: 1 / -1; grid-row: 2; margin-left: -12px; }
+  .dock { padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
+  .dock-in { flex-wrap: nowrap; gap: 4px; padding: 4px 4px 4px 12px; }
+  .dock-t { flex: 1 1 auto; min-width: 0; font-size: var(--t-xs); }
+  .dock[data-n="0"] .dock-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .dock-b { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; gap: 4px; margin-left: 0; justify-content: flex-end; }
+  .dock[data-n="0"] .dock-b { justify-content: flex-start; margin-left: -8px; }
+  .dock-b .btn { white-space: normal; text-align: left; line-height: 1.25; padding-inline: 8px; }
   .dock-b:not(:has(button:not([hidden]))) { display: none; }
-  #dock-go { grid-column: 2; grid-row: 1; }
+  #dock-go { flex: none; }
+  html:has(#dock) { scroll-padding-bottom: 72px; }
 }
 
 /* the request to the agent */

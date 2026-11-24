@@ -281,26 +281,27 @@ def test_before_a_run_the_button_says_what_a_press_does(project):
     check("Check the app, the page's one big button, ready to press",
           go.text == "Check the app" and "disabled" not in go.attrs and go.attrs["class"] == "btn primary press", go.attrs)
     check("how many launches, about how long, and that the code is not touched",
-          hint(page) == "3 launches, about a minute. Nothing in your code changes.", hint(page))
+          hint(page) == "5 launches, about a minute and a half. Nothing in your code changes.", hint(page))
     check("no run is shown, and nothing was started", not page.all("ol", "run") and not echolot.ran)
     check("the step is the button's, so no command is offered to copy", not page.all("code", id="next-cmd")
           and "What to do next" not in page.text)
     runs = [pre.text for pre in setting(page, "What a press runs").all("pre")]
     check("what a press runs is said under All settings, as a person would type it", runs == [
-        "echolot collect -c echolot.yml -n 3",
+        "echolot collect -c echolot.yml -n 5",
         "echolot analyze .echolot/traces/coldStart_iter*.perfetto-trace -c echolot.yml --html"], runs)
 
 
 def test_how_long_it_takes_comes_from_the_config(project):
     project.app().config(SLOW).agents().doctor()
-    check("the runs times the recording's length, plus the reading: 3 × (20 + 4) + 3 × 2.5 s",
-          hint(page_of(site_of(project))) == "3 launches, about a minute and a half. Nothing in your code changes.")
+    check("the runs times the recording's length, plus the reading: 5 × (20 + 4) + 5 × 2.5 s",
+          hint(page_of(site_of(project))) == "5 launches, about 2 minutes. Nothing in your code changes.")
     project.config(ANCHORS)
     check("a command of the project runs it: runs, and its own length",
           hint(page_of(site_of(project))) == "3 runs, about 45 seconds. Nothing in your code changes.")
     project.config(COOLING)
     check("a phone that is held cool may wait, and the line says so", hint(page_of(site_of(project))) == (
-        "3 launches, about a minute. Nothing in your code changes. The phone may wait to cool down between launches."))
+        "5 launches, about a minute and a half. Nothing in your code changes. The phone may wait to cool down between "
+        "launches."))
 
 
 @pytest.mark.parametrize("seconds, said", [
@@ -316,13 +317,15 @@ def test_the_number_of_launches_is_under_all_settings_with_what_compare_needs(pr
     page = page_of(site)
     row = setting(page, "Launches in one check")
     field = row.one("input")
-    check("three, unless it is changed", field.attrs["value"] == "3" and field.attrs["name"] == "launches"
+    check("runner.iterations, the number collect takes, unless it is changed (#825)", field.attrs["value"] == "5"
+          and field.attrs["name"] == "launches"
           and field.attrs["inputmode"] == "numeric", field.attrs)
     check("nothing the browser would hold a press back for while the fold is closed",
           "required" not in field.attrs and "pattern" not in field.attrs and field.attrs.get("type") == "text")
     check("with what a comparison needs, in compare's own numbers",
           "a comparison needs four a side, or three against five" in row.text, row.text)
-    check("and that nothing saves it", "Nothing saves this number" in row.text and "runner.iterations" in row.text)
+    check("where it starts, and that nothing saves it", "It starts at runner.iterations in the config, the number "
+          "echolot collect takes in a terminal." in row.text and "Nothing saves a number typed here." in row.text, row.text)
     offers = json.loads(page.one("form", id="check-form").attrs["data-offers"])
     hints = offers["record:coldStart"]["hints"]
     check("the line beside the button is there for every number, for the script to show",
@@ -336,6 +339,20 @@ def test_the_number_of_launches_is_under_all_settings_with_what_compare_needs(pr
         "collect", "-c", str(project.root / "echolot.yml"), "-n", "7"], echolot.ran[0])
     check("and the config is as it was", (project.root / "echolot.yml").read_bytes() == before)
     check("seven launches, seven rows", len([r for r in rows(page_of(site)) if r[1].startswith("Launch")]) == 7)
+
+
+def test_the_number_of_launches_starts_at_the_configs_own(project):
+    """The button recorded three, the page advised four a side, and the
+    answer's Check again recorded `runner.iterations` (#825)."""
+    site, echolot = serving(project.app().config(LAUNCH + "\nrunner:\n  iterations: 7\n").agents().doctor())
+    page = page_of(site)
+    check("the field says the config's number", setting(page, "Launches in one check").one("input").attrs["value"] == "7")
+    check("so does what a press runs, marked for the script to follow the field",
+          [(pre.text, "data-n" in pre.attrs) for pre in setting(page, "What a press runs").all("pre")][0]
+          == ("echolot collect -c echolot.yml -n 7", True))
+    check("and the line beside the button", hint(page).startswith("7 launches,"), hint(page))
+    check("a press with no number records as many", press(site, fields={"what": "record:coldStart"}).status == 303
+          and echolot.ran[0][-2:] == ["-n", "7"], echolot.ran)
 
 
 @pytest.mark.parametrize("launches", ["0", "21", "-1", "3.5", "three", "999", " 1 2 "])
@@ -470,13 +487,12 @@ def test_a_press_records_reads_and_shows_the_short_version(project):
     check("the browser is sent to the start page, where the run is", reply.status == 303 and reply.body == ""
           and dict(reply.headers)["Location"] == f"/{site.token}/", (reply.status, reply.headers))
     config = str(project.root / "echolot.yml")
-    traces = [str(project.root / ".echolot" / "traces" / f"coldStart_iter00{i}.perfetto-trace") for i in range(3)]
-    check("collect with three launches, then analyze over each recording by name, as a page too", echolot.ran == [
-        ["collect", "-c", config, "-n", "3"], ["analyze", *traces, "-c", config, "--html"]], echolot.ran)
+    traces = [str(project.root / ".echolot" / "traces" / f"coldStart_iter00{i}.perfetto-trace") for i in range(5)]
+    check("collect with runner.iterations launches, then analyze over each recording by name, as a page too",
+          echolot.ran == [["collect", "-c", config, "-n", "5"], ["analyze", *traces, "-c", config, "--html"]], echolot.ran)
     page = page_of(site)
     check("every launch recorded, the recordings read", rows(page) == [
-        ("done", "Launch 1 of 3", "recorded"), ("done", "Launch 2 of 3", "recorded"), ("done", "Launch 3 of 3", "recorded"),
-        ("done", "Reading the recordings", "done")], rows(page))
+        *[("done", f"Launch {i} of 5", "recorded") for i in range(1, 6)], ("done", "Reading the recordings", "done")], rows(page))
     check("done, and the short version", page.one("p", id="run-end").text == "Done. The short version:")
     counts = [li.text for li in page.one("ul", "counts").all("li")]
     check("the report's own counts, a word with every figure",
@@ -498,10 +514,13 @@ def test_check_again_compares_with_the_report_before_it(project):
     page = page_of(site)
     check("once a report exists the button is Check again", button(page).text == "Check again"
           and "primary" in button(page).attrs["class"])
-    check("and the line says a comparison follows, and what three against three can say", hint(page) == (
+    check("and the line says a comparison follows: five against three is enough to tell a change (#825)", hint(page) == (
+        "5 launches, about a minute and a half, then a comparison with the report before it. Nothing in your code "
+        "changes."), hint(page))
+    three = json.loads(page.one("form", id="check-form").attrs["data-offers"])["record:coldStart"]["hints"]["3"]
+    check("and what three against three can say, where three is typed", three == (
         "3 launches, about a minute, then a comparison with the report before it. Nothing in your code changes. "
-        "To tell a change from chance it takes four launches a side: All settings has the number."),
-        hint(page))
+        "To tell a change from chance it takes four launches a side: All settings has the number."), three)
     check("what a press runs ends with compare", setting(page, "What a press runs").all("pre")[-1].text
           == "echolot compare .echolot/out/before.json -c echolot.yml --html")
     check("pressed", press(site, fields={"what": "record:coldStart"}).status == 303)
@@ -726,8 +745,8 @@ def test_stopped_the_recordings_already_finished_are_kept_and_nothing_is_analyse
     check("collect was asked to end, and analyze never started", [r[0] for r in echolot.ran] == ["collect"])
     page = page_of(site)
     check("the rows as they stood", rows(page) == [
-        ("done", "Launch 1 of 3", "recorded"), ("done", "Launch 2 of 3", "recorded"), ("stopped", "Launch 3 of 3", "stopped"),
-        ("wait", "Reading the recordings", "")], rows(page))
+        ("done", "Launch 1 of 5", "recorded"), ("done", "Launch 2 of 5", "recorded"), ("stopped", "Launch 3 of 5", "stopped"),
+        ("wait", "Launch 4 of 5", ""), ("wait", "Launch 5 of 5", ""), ("wait", "Reading the recordings", "")], rows(page))
     check("and what was kept, in a sentence", page.one("p", id="run-end").text
           == "Stopped. 2 recordings are kept, and nothing was analysed.", page.one("p", id="run-end").text)
     check("the two recordings are there", sorted(p.name for p in (project.root / ".echolot" / "traces").iterdir())
@@ -772,13 +791,13 @@ def test_a_recording_that_fails_shows_what_collect_said(project):
     check("a sentence of the page's own first", page.one("p", id="run-end").text
           == "The recording did not finish. Nothing was analysed.", page.one("p", id="run-end").text)
     check("then the command, as a person would type it", page.one("div", id="run").all("code")[0].text
-          == "echolot collect -c echolot.yml -n 3")
+          == "echolot collect -c echolot.yml -n 5")
     check("and what it said, in its own words, as text", page.one("pre", "printed").raw()
           == f"device EXAMPLE0001\ncollection error: {said}", page.one("pre", "printed").raw())
     check("with where everything it printed is", ".echolot/log/check.collect.log" in page.one("div", id="run").text
           and (project.root / ".echolot" / "log" / "check.collect.log").is_file())
     check("and what to do", "Put that right, then press the button again." in page.one("div", id="run").text)
-    check("the first launch is the one that did not finish", rows(page)[0] == ("failed", "Launch 1 of 3", "did not finish")
+    check("the first launch is the one that did not finish", rows(page)[0] == ("failed", "Launch 1 of 5", "did not finish")
           and rows(page)[-1] == ("wait", "Reading the recordings", ""))
     check("the button is there to press again", button(page).text == "Check the app" and "disabled" not in button(page).attrs)
 
@@ -789,7 +808,7 @@ def test_a_recording_that_fails_midway_keeps_what_it_recorded(project):
     page = page_of(site)
     check("two were finished and are kept", page.one("p", id="run-end").text == (
         "The recording did not finish. 2 recordings were finished before that and are kept. Nothing was analysed."))
-    check("the third is the one that failed", [r[0] for r in rows(page)] == ["done", "done", "failed", "wait"])
+    check("the third is the one that failed", [r[0] for r in rows(page)] == ["done", "done", "failed", "wait", "wait", "wait"])
 
 
 def test_what_a_command_said_is_shown_as_text(project):
@@ -808,7 +827,7 @@ def test_reading_that_fails_keeps_the_recordings(project):
         "Reading the recordings did not finish. The recordings are kept, and no report was written from them."))
     check("analyze's own words", page.one("pre", "printed").raw() == "error: no process matches com.example.app in coldStart_iter000"
           and page.one("div", id="run").all("code")[0].text.startswith("echolot analyze .echolot/traces/coldStart_iter*"))
-    check("the launches stay recorded, the reading is what failed", [r[0] for r in rows(page)] == ["done", "done", "done", "failed"])
+    check("the launches stay recorded, the reading is what failed", [r[0] for r in rows(page)] == ["done"] * 5 + ["failed"])
     check("and the recordings are the button's to read", button(page).text == "Read the recordings")
 
 
@@ -1299,7 +1318,7 @@ def test_files_written_by_a_newer_echolot(project, monkeypatch):
 def test_a_recording_length_that_is_no_number_still_draws_the_page(project):
     project.app().config(LAUNCH + "\nrunner:\n  duration_ms: soon\n").agents().doctor()
     check("the line counts with the usual length; collect will say what is wrong with the number",
-          hint(page_of(site_of(project))) == "3 launches, about a minute. Nothing in your code changes.")
+          hint(page_of(site_of(project))) == "5 launches, about a minute and a half. Nothing in your code changes.")
 
 
 def test_a_report_that_cannot_be_kept_starts_nothing(project):

@@ -56,6 +56,10 @@
       go.textContent = offer.label;
       go.disabled = !!offer.why;
       say(hint, offer.why || (offer.hints && offer.hints[n]) || offer.hint);
+      // What a press runs says the number a press would send.
+      if (n && offer.hints && offer.hints[n]) {
+        E.all('pre[data-n]').forEach(function (pre) { pre.textContent = pre.textContent.replace(/ -n [0-9]+/, ' -n ' + n); });
+      }
       if (anew) anew.hidden = !offer.anew;
     }
     E.all('input[name="what"]').forEach(function (el) { el.addEventListener('change', show); });
