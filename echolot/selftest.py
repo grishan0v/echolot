@@ -1597,6 +1597,171 @@ def _(report):
         assert _cold_only([paths[1]]) == ([paths[1]], []), "alone, it is read as given"
 
 
+def _powered(plugged: bool, level: int, saver: str = "0") -> str:
+    """What the read before a repeat answers (screen.READ), cut to its lines:
+    the screen on and unlocked, the phone plugged in or not."""
+    return (f"  mWakefulness=Awake\n  mIsPowered={'true' if plugged else 'false'}\n"
+            f"  mBatteryLevel={level}\n  mStayOn=true\n    isKeyguardShowing=false\n"
+            f"low_power={saver}\n")
+
+
+def _collect_powered(reads: list[str], n: int, where: Path,
+                     section: dict | None = None) -> tuple[list[dict], list[str], list[str]]:
+    """`runner.collect` of `n` repeats on a fake device whose reads before the
+    set and before each repeat answer `reads` in order, the last for every read
+    after: the recordings made, what was said, and what adb was asked."""
+    from . import runner
+    package, serial = "com.example.app", "emulator-5554"
+    reads, asked = list(reads), []
+
+    def adb(args, stdin=None, timeout=120):
+        args = list(args)
+        text = " ".join(args[4:]) if args[3:4] == ["shell"] else " ".join(args)
+        asked.append(text)
+        if text == "adb devices":
+            return f"List of devices attached\n{serial}\tdevice\n\n"
+        if text.startswith("pm path"):
+            return f"package:/data/app/{package}/base.apk\n"
+        if text.startswith("dumpsys power"):
+            return reads.pop(0) if len(reads) > 1 else reads[0]
+        if text.startswith("am start -W"):
+            return "Status: ok\nLaunchState: COLD\nTotalTime: 523\nComplete\n"
+        if args[3:4] == ["pull"]:
+            Path(args[-1]).write_bytes(b"a trace")
+        return ""
+
+    said: list[str] = []
+    real = runner._run
+    runner._run = adb
+    try:
+        made = runner.collect(package, where, n, name="run",
+                              section={"activity": f"{package}/.Main", **(section or {})},
+                              log=said.append)
+    finally:
+        runner._run = real
+    return made, said, asked
+
+
+@check("collect: a phone that is not charging stops the set under runner.min_battery, "
+       "gets one line above it, and each trace keeps how it was powered")
+def _(report):
+    """An SM-A515F ran a whole session on battery, 49% to 45%, and a later
+    hunt on it from 44% to 39%: `collect` read `mIsPowered` before every
+    repeat for the screen's sake and said nothing of it, and the agent asked
+    adb itself (#524). Macrobenchmark refuses below 25%; launch and command
+    modes had no floor. A phone that charges, with battery saver off, gets no
+    line: the normal case stays quiet.
+    """
+    from . import recording, runner
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "low"
+        try:
+            _collect_powered([_powered(False, 20)], 3, out)
+        except runner.RunnerError as e:
+            said = str(e)
+        else:
+            raise AssertionError("a phone not charging at 20% was recorded")
+        assert "20%" in said and "runner.min_battery" in said, said
+        assert not out.exists() or not list(out.iterdir()), "nothing recorded under the floor"
+
+        made, said, _ = _collect_powered([_powered(False, 20)], 1, Path(tmp) / "off",
+                                         section={"min_battery": 0})
+        assert len(made) == 1, "min_battery: 0 turns the check off"
+
+        made, said, _ = _collect_powered([_powered(False, 50)], 2, Path(tmp) / "battery")
+        lines = [s for s in said if "power" in s]
+        assert len(lines) == 1 and "not charging, 50%" in lines[0], said
+        kept = [recording.read(r["path"]) for r in made]
+        assert all(k.get("power") == "not charging" and k.get("battery_saver") == "off"
+                   for k in kept), kept
+        assert recording.kept(made[0]["path"], "battery_level") == 50
+
+        made, said, _ = _collect_powered([_powered(True, 90)], 2, Path(tmp) / "charging")
+        assert not any("power" in s for s in said), said
+        assert recording.read(made[0]["path"]).get("power") == "charging"
+
+
+@check("collect: the cable out or battery saver on during a set is said at that "
+       "repeat, and compare reads the set as not recorded alike")
+def _(report):
+    """The read before each repeat already knew whether the phone charged
+    (screen.py); a set that lost its power halfway recorded its second half
+    on a draining battery with nothing said (#524). The change is said once,
+    before the repeat that found it, and the set's merged account splits, so
+    `compare` says its repeats were not recorded alike."""
+    from . import recording
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said, _ = _collect_powered(
+            [_powered(True, 80), _powered(True, 80), _powered(False, 79),
+             _powered(False, 79, saver="1")], 3, Path(tmp))
+        lines = [s for s in said if s.startswith("  [!] power")]
+        assert [line.split(":")[0] for line in lines] == [
+            "  [!] power before repeat 2 of 3", "  [!] power before repeat 3 of 3"], said
+        assert "battery saver on" in lines[1], lines
+        block = recording.merge([recording.read(r["path"]) for r in made])
+        assert set(block["mixed"]) == {"power", "battery_saver"}, block
+        alike = recording.merge([{"runner": "launch", "power": "charging",
+                                  "battery_saver": "off"}])
+        said = recording.moved({"recording": block}, {"recording": alike}, needs={})
+        assert [m["id"] for m in said] == ["recording", "recording-mixed"], said
+        assert "power" in said[0]["text"] and "power" in said[1]["text"], said
+
+
+@check("collect: a gradle round that uninstalled the app it measured says so, "
+       "passed or failed")
+def _(report):
+    """The connected test task uninstalls the app it tested when it ends,
+    passed or failed, and the person's own install went with it; the next
+    launch-mode round stopped on an app that was not installed, and nothing
+    had said why (#524). An app that was not there before the round is not
+    said: the round left the phone as it found it."""
+    from . import runner
+    package, serial = "com.example.app", "emulator-5554"
+
+    def round_(paths: list[str], fails: bool = False) -> tuple[list[str], str | None]:
+        paths = list(paths)
+
+        def adb(args, stdin=None, timeout=120):
+            text = " ".join(args[4:]) if list(args[3:4]) == ["shell"] else " ".join(args)
+            if text == "adb devices":
+                return f"List of devices attached\n{serial}\tdevice\n\n"
+            if text.startswith("pm path"):
+                return paths.pop(0)
+            if text.startswith("dumpsys power"):
+                return _powered(True, 90)
+            return ""
+
+        def task(*a, **kw):
+            if fails:
+                raise runner.RunnerError("the scenario command returned 1")
+            return 1.0
+
+        said: list[str] = []
+        saved = runner._run, runner.run_command, runner.harvest
+        runner._run, runner.run_command = adb, task
+        runner.harvest = lambda *a, **kw: [{"path": Path(tmp) / "t.perfetto-trace", "size": 1}]
+        error = None
+        try:
+            runner.collect(package, Path(tmp) / "traces", 1, name="run", log=said.append,
+                           section={"mode": "gradle", "gradle_task": "x",
+                                    "project_root": tmp})
+        except runner.RunnerError as e:
+            error = str(e)
+        finally:
+            runner._run, runner.run_command, runner.harvest = saved
+        return [s for s in said if "no longer installed" in s], error
+
+    there = f"package:/data/app/{package}/base.apk\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        gone, error = round_([there, ""])
+        assert error is None and len(gone) == 1, gone
+        assert serial in gone[0] and runner.KEEP_INSTALLED in gone[0], gone
+        assert round_([there, there]) == ([], None), "still installed: nothing said"
+        assert round_(["", ""]) == ([], None), "not there before: nothing said"
+        gone, error = round_([there, ""], fails=True)
+        assert len(gone) == 1 and error, (gone, error)
+
+
 @check("collect: a failed scenario command says the line that failed and what to do")
 def _(report):
     """Gradle's useful half is on stdout, and the message showed stderr.
@@ -2047,7 +2212,10 @@ def _drag(variant: dict) -> dict:
     from . import report as report_mod
     cfg = Config({**FIXTURE_CONFIG, "scenario": {"name": "drag", "start": {"name": "AppStart"}}})
     with tempfile.TemporaryDirectory() as tmp:
-        trace = Path(tmp) / "drag.perfetto-trace"
+        # Named by the build: two builds of one fixture have one pid and one
+        # window, and under one name `compare` reads them as the same
+        # recordings, whose checks it does not compare (#713).
+        trace = Path(tmp) / f"drag-{'-'.join(sorted(variant)) or 'janky'}.perfetto-trace"
         trace.write_bytes(fixture.build(**variant))
         one = _analyze(trace, cfg)
     return report_mod.aggregate([copy.deepcopy(one) for _ in range(3)])
@@ -2416,6 +2584,90 @@ def _(report):
     assert "found the app still running in 3 of 4 repeats" in text, cmp["warnings"]
     assert "found the app already stopped in every repeat" in text, text
     assert "recording-mixed" not in {w["id"] for w in cmp["warnings"]}, cmp["warnings"]
+
+
+def _set_to(scale: float | None, dont_keep: bool | None, runner: str = "launch") -> dict:
+    """The fixture's block as four repeats of a round on a device whose
+    animation scales are all `scale` and "Don't keep activities" `dont_keep`;
+    None for both is a `collect` from before they were read."""
+    from . import recording as recording_mod
+    device = {} if scale is None and dont_keep is None else {
+        "animation_scales": {"window": scale, "transition": scale, "animator": scale},
+        "always_finish_activities": dont_keep}
+    return recording_mod.merge([{"runner": runner, "reset_policy": "force-stop",
+                                 "app_at_stop": "running", **device}] * 4)
+
+
+@check("compare says when the device's animation scales or \"Don't keep activities\" differ")
+def _(report):
+    """A list scroll on an SM-A515F with all three animation scales at 5 on
+    one side and 1 on the other gave 5 to 17 rows that held and no warning
+    (#612); "Don't keep activities" turns a return to a living process into a
+    warm start (#616). Both are said, and the verdicts stand. A set from a
+    `collect` before they were read cannot say them: that is said, and never
+    taken for the same settings."""
+    from . import compare as compare_mod
+
+    def said(before: dict, after: dict) -> tuple[dict[str, str], dict[str, bool | None]]:
+        cmp = compare_mod.build(
+            _side_with({"main_thread_block": SLOWER[0]}, recording=before),
+            _side_with({"main_thread_block": SLOWER[1]}, recording=after),
+            before_path="a.json", after_path="b.json")
+        return ({w["id"]: w["text"] for w in cmp["warnings"]},
+                {r["detector"]: r["holds"] for r in cmp["rows"]})
+
+    text, holds = said(_set_to(5.0, True), _set_to(1.0, False))
+    assert ("the device's animation scales all three `5` before and all three `1` after"
+            in text.get("recording", "")), text
+    assert '"Don\'t keep activities" on before and off after' in text["recording"], text
+    assert holds == {"main_thread_block": True}, holds
+    text, _ = said(_set_to(1.0, False), _set_to(1.0, False))
+    assert not {"recording", "recording-unknown"} & set(text), text
+    text, _ = said(_set_to(None, None), _set_to(1.0, False))
+    assert "recording" not in text, text
+    assert "does not say the device's animation scales" in text.get("recording-unknown", ""), text
+    text, _ = said(_set_to(None, None), _set_to(None, None))
+    assert not {"recording", "recording-unknown"} & set(text), text
+
+
+@check("the header says when animations were scaled or \"Don't keep activities\" was on")
+def _(report):
+    """Nothing for a phone as it comes, nor for a set nobody read the
+    settings of; a line for scales that are not 1, and a warning for the
+    option where the scenario returns to the app rather than starting it
+    cold."""
+    from . import report as report_mod
+    plain = report_mod.to_markdown({**report, "recording": _set_to(1.0, False)})
+    assert "Animation scales" not in plain and "Don't keep activities" not in plain, plain
+    old = report_mod.to_markdown({**report, "recording": _set_to(None, None)})
+    assert "Animation scales" not in old and "Don't keep activities" not in old, old
+    rec = {**_set_to(5.0, True), "runner": "command", "reset_policy": "none"}
+    head = report_mod.to_markdown({**report, "recording": rec})
+    assert "Animation scales: all three `5`, where a phone comes with 1" in head, head[:3000]
+    assert '> ⚠️ "Don\'t keep activities" was on' in head, head[:3000]
+    cold = report_mod.to_markdown({**report, "recording": _set_to(1.0, True)})
+    assert "A cold start creates its activity anyway" in cold, cold[:3000]
+    assert '> ⚠️ "Don\'t keep activities"' not in cold, cold[:3000]
+
+
+@check("\"Don't keep activities\" is read from ActivityManager, not from the setting")
+def _(report):
+    """`settings put global always_finish_activities 0` changed the setting
+    and not ActivityManager: `dumpsys activity` still said
+    `mAlwaysFinishActivities=true`, and starts stayed warm. The dump prints
+    that line only while the option is on, so a dump without it is off
+    whatever the setting says. A scale never set animates at 1."""
+    from . import recording as recording_mod
+    head = "ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)\n"
+    stored = ("window_animation_scale=5.0\ntransition_animation_scale=null\n"
+              "animator_duration_scale=0.5\nalways_finish_activities={}\n")
+    got = recording_mod.parse_settings(stored.format(0) + head + "  mAlwaysFinishActivities=true\n")
+    assert got == {"animation_scales": {"window": 5.0, "transition": 1.0, "animator": 0.5},
+                   "always_finish_activities": True}, got
+    got = recording_mod.parse_settings(stored.format(1) + head)
+    assert got["always_finish_activities"] is False, got
+    got = recording_mod.parse_settings("")
+    assert got == {"animation_scales": None, "always_finish_activities": None}, got
 
 
 @check("compare says throttling on one side when the other has no thermal record")
@@ -4917,6 +5169,52 @@ def _(report):
     # one.
     assert rows["flaky_once"]["runs"] == "1/2", rows["flaky_once"]
     assert rows["collection_mapping"]["runs"] == "2/2", rows["collection_mapping"]
+
+
+@check("merging repeats: a row in every repeat ranks above a longer one seen "
+       "once, and a cut says how many of the rows it left out one repeat found")
+def _(report):
+    """The first rows of a detector are what an agent reads: `report -d` shows
+    five and the overview one. Ranked by the median of the repeats that found
+    a row, 500 ms in one repeat of five came before 180 ms in all five, and on
+    a large app's cold start a third of a detector's 38 rows were found once
+    (#495). The cut changes what is read, not what is kept: report.md, which a
+    person and the GitHub Action read, and report.json hold every row."""
+    import copy
+
+    from . import report as report_mod
+    runs = [copy.deepcopy(report) for _ in range(5)]
+    for i, run in enumerate(runs):
+        run["trace"] = f"run{i}"
+    block = next(d for d in runs[3]["detectors"] if d["id"] == "main_thread_block")
+    for name, ms in (("spike_once", 500.0), ("spike_twice", 450.0)):
+        block["rows"].append({"location": name, "count": 1, "self_ms": ms,
+                              "total_ms": ms, "detail": "—"})
+    merged = report_mod.aggregate(runs)
+    rows = next(d for d in merged["detectors"] if d["id"] == "main_thread_block")["rows"]
+    order = [r["location"] for r in rows]
+    # 500 ms × 1/5 is 100: below the 180, 120, 115 and 104 found every time,
+    # above the 64 that was. One trace orders by the median, as before.
+    assert order[:4] == ["waitWhileAllocatingLocked", "collection_mapping",
+                         "AppStart", "Steady_heavy"], order
+    assert order[4:6] == ["spike_once", "spike_twice"], order
+    single = next(d for d in report["detectors"] if d["id"] == "main_thread_block")["rows"]
+    assert [r["self_ms"] for r in single] == sorted(
+        (r["self_ms"] for r in single), reverse=True), single
+
+    view = report_mod.detector_view(merged, "main_thread_block", top=3)
+    shown = [loc for loc in order if f"| {loc}" in view]
+    assert shown == order[:3], (shown, view)
+    assert (f"_Showing 3 of {len(order)}; of the {len(order) - 3} left, 2 were "
+            f"found in one run of 5. `--top {len(order)}` for all._") in view, view
+    # Every row found in every repeat: the cut says no more than it did.
+    whole = report_mod.detector_view(report_mod.aggregate(runs[:3]), "main_thread_block", top=3)
+    assert f"_Showing 3 of {len(single)}; `--top {len(single)}` for all._" in whole, whole
+
+    assert "| waitWhileAllocatingLocked" in report_mod.overview(merged), "the overview's top row"
+    md, js = report_mod.to_markdown(merged), report_mod.to_json(merged)
+    assert all(f"| {loc}" in md for loc in order), "report.md keeps every row"
+    assert all(f'"location": "{loc}"' in js for loc in order), "report.json keeps every row"
 
 
 @check("merging repeats: rows a detector kept apart stay apart")

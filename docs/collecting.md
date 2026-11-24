@@ -41,13 +41,44 @@ name merely begins with this one's: re-recording `startup` leaves
 `startup_warm_*` alone.
 
 Beside each trace it records, `collect` keeps a short account of how it
-recorded it, `<trace>.recording.json`: the runner, the reset policy, and
-whether the force-stop before the repeat found the app still running. The
+recorded it, `<trace>.recording.json`: the runner, the reset policy,
+whether the force-stop before the repeat found the app still running, and
+how the phone was powered (see [Power](#power)). The
 trace cannot say any of that itself, and `analyze` carries it into the
 report's `recording` block, where `compare` sets it against the other side's
 (see [How the two were recorded](compare.md#how-the-two-were-recorded)). It
 moves with its trace when a set is set aside; copy it along if you move
 traces by hand, or that set's runner reads as unknown.
+
+The account also keeps two things `collect` reads of the device once a
+round, before the first repeat, in launch and command modes:
+
+- `animation_scales`, the window, transition and animator scales of
+  Developer options. An animation lasts its length times its scale: on an
+  SM-A515F a list scroll recorded with all three at 5 against one at 1 gave
+  5 to 17 rows that held in `compare`, and nothing said the device had
+  animated five times slower. UI-test setups set them to 0 on purpose, so
+  `collect` records whatever they are rather than refusing.
+- `always_finish_activities`, "Don't keep activities": the system destroys
+  an activity as soon as it leaves the screen, so a return to a living
+  process creates it again. On the SM-A515F `HOME` and `am start` of the
+  launcher activity came back `WARM` in 431–469 ms with it on and `HOT` in
+  144–179 ms with it off. It changes little in a cold start and everything
+  in a scenario that returns to the app (`reset_policy: none`, or a command
+  that goes home and back).
+
+The option is read from ActivityManager, not from the setting it keeps.
+`adb shell settings put global always_finish_activities 0` changes the
+setting and not the running system, which reads it at boot: the option stays
+on, and the account says so. Switch it in Developer options, which change
+both, or restart the phone after `settings put`. The scales take effect at
+once either way.
+
+The report's header names any scale that is not 1, and says when the option
+was on (see [What the device was set to do](analysing.md#what-the-device-was-set-to-do));
+`compare` says when either differs between the two sides. In gradle mode
+neither is read: the macrobenchmark drives the device, and a run with AGP's
+`animationsDisabled` turns the scales to 0 for its own length.
 
 The account also keeps how the repeat started, under `launch`: which repeat
 of the set it was and which recording of that repeat (`attempt`, 2 and on for
@@ -243,6 +274,28 @@ whole process tree. `gradle` is the command in front of the task, run from
 A task that fails harvests nothing, whatever the benchmark wrote before it
 failed: the traces of a half-finished run stay in the module's output
 directory, and the previous set stays in `.echolot/traces`.
+
+The connected test task uninstalls the app it tested when it ends, passed or
+failed, and an install that was on the phone before the round goes with it,
+its data too. The next `launch` round then stops on an app that is not
+installed. So when `collect` can tell which phone the round runs on (the
+one `--device`, `runner.device` or `ANDROID_SERIAL` names, or the one adb
+lists), it asks whether the app is there before the task and after it, and
+says when the round took it away:
+
+```
+  [!] com.example.app is no longer installed on R58M123ABC: the connected test task uninstalls the app it tested when it ends, passed or failed, …
+```
+
+Install the app again before a `launch` or `command` round. To have the
+round leave it installed, add
+`-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true` to
+`runner.gradle_args` (Android Gradle plugin 8.2 and later). `collect` does
+not pass it on its own: what is on the phone after a round stays what the
+plugin documents. An app that was not there before the round gets no line,
+and neither does a round whose phone `collect` cannot tell: several
+attached and none named, or no adb on `PATH`, which gradle mode does not
+need.
 
 A startup macrobenchmark needs no end anchor. Every trace it writes holds
 the launch it drove, so its scenario can be `scenario.window: launch`, as in
@@ -441,8 +494,48 @@ measured no start. If the screen went dark or locked since the check,
 the repeat's own trace is not. On a screen that is on and unlocked the
 repeat is kept, and its line says that no start was measured.
 
-In `gradle` mode the macrobenchmark drives the device, its screen included,
-and `collect` reads nothing from it beyond what `runner.cooldown` waits on.
+In `gradle` mode the macrobenchmark drives the device, its screen included.
+`collect` reads from it only what `runner.cooldown` waits on, the power
+before the task, and whether the app is installed before and after it.
+
+## Power
+
+A phone that is not charging records its set on a battery that drains, and
+one that runs low turns battery saver on, which slows it partway through a
+set. An SM-A515F ran a whole session on battery, 49% to 45%, and a later hunt
+on it from 44% to 39%, with nothing said: the read before each repeat knew
+the phone was not charging, and said it only when the screen went dark.
+Macrobenchmark refuses to start below 25% (`LOW-BATTERY`), charging or not.
+
+So the read `collect` makes before the set and before each repeat (see
+[The screen](#the-screen)) also takes `mIsPowered` and `mBatteryLevel` from
+`dumpsys power`, and battery saver from `settings get global low_power`:
+
+- a phone that is not charging and is under `runner.min_battery` stops
+  `collect` before anything is recorded. The default is 25, Macrobenchmark's
+  mark; `0` turns the check off. A charging phone is not stopped: its level
+  rises. In gradle mode the floor applies before the task, when `collect`
+  can tell which phone the round runs on;
+- a phone that is not charging above it gets one line, and so does battery
+  saver:
+  `[!] power: R58M123ABC is not charging, 49%. The set runs on a draining battery, …`;
+- a change between repeats, the cable out or saver on, is said before the
+  repeat that found it: `[!] power before repeat 4 of 8: not charging, 71%,
+  and charging, 72% before. …`.
+
+A charging phone with saver off gets no line. Each trace's account keeps
+`power` (`charging` or `not charging`), `battery_saver` (`on` or `off`) and
+`battery_level`; what the device did not print is `null`, never `charging`
+or `off`. `analyze` carries the first two into the report's `recording`
+block, and `compare` says when the two sides differ in them, or when one
+side's repeats do (see [How the two were recorded](compare.md#how-the-two-were-recorded)).
+`charging` is the phone plugged in: a port too weak to keep up drains it all
+the same, and the level in each account shows that.
+
+```yaml
+runner:
+  min_battery: 25    # percent; 0 turns the check off. Belongs in local.yml
+```
 
 ## The build on the phone
 

@@ -587,11 +587,18 @@ def latest(st: dict) -> list[dict[str, Any]]:
     return out
 
 
+def _at(ts: Any) -> str:
+    """A moment of an investigation as the page says it: local time with its
+    zone, to the minute, the way the agent's answer page says the same
+    moment (#734) and `hunt --show` says it in local time (#227)."""
+    return when.local(ts, seconds=False) or "—"
+
+
 def hunt_words(h: dict[str, Any]) -> str:
     """What `hunt --list` says an investigation did, as sentences: how many
     times the app was recorded, how many reports it kept, and how long it has
     been open or when it ended. The counts are the record's, the length of
-    time and the date are `hunt._ran_for` and `hunt._when`."""
+    time is `hunt._ran_for`, and the date is `_at`."""
     recorded, kept = int(h.get("collects") or 0), int(h.get("reports") or 0)
     first = f"The app was recorded {_times(recorded)}" if recorded else "The app was not recorded"
     first += (" and no report was kept." if not kept else
@@ -600,7 +607,7 @@ def hunt_words(h: dict[str, Any]) -> str:
     if (h.get("status") or "open") == "open":
         second = f"It is open, with {_spelled(ran)} of work so far." if ran else "It is open."
     else:
-        second = ("It ended" + (f" on {hunt_mod._when(h['closed_at'])}" if h.get("closed_at") else "")
+        second = ("It ended" + (f" on {_at(h['closed_at'])}" if h.get("closed_at") else "")
                   + (f", after {_spelled(ran)}" if ran else "") + ".")
     return f"{first} {second}"
 
@@ -614,7 +621,7 @@ def investigations(project: Path) -> list[dict[str, Any]]:
         filed = hunt_mod.archived_reports(project, h) if h.get("n") else {}
         out.append({
             "n": h.get("n"), "current": bool(h.get("current")),
-            "when": hunt_mod._when(h.get("opened_at")), "status": h.get("status") or "open",
+            "when": _at(h.get("opened_at")), "status": h.get("status") or "open",
             "question": h.get("question") or "", "plain": hunt_words(h),
             "conclusion": h.get("conclusion") if isinstance(h.get("conclusion"), str) else None,
             # What its own page shows, for the link to it: the agent's answer

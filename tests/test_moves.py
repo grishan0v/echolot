@@ -546,7 +546,8 @@ def test_the_demo_pair_reads_without_a_claim_it_cannot_back(demo_report, demo_ch
     check("the verdict is a sentence", got["verdict"]["text"].endswith("Measured on 5 launches before and 5 after."),
           got["verdict"])
     same = reading(demo_report, demo_report)
-    check("a report against itself moves nothing", same["verdict"]["movement"] == moves.NO_CHANGE
+    check("a report against itself is the same recordings, and moves nothing (#713)",
+          same["verdict"]["movement"] == moves.NOT_COMPARED
           and not {c["movement"] for c in same["checks"]} & {moves.BETTER, moves.WORSE, moves.GONE, moves.NEW}, same)
 
 
@@ -630,3 +631,72 @@ def test_a_reading_that_fails_leaves_the_table(pair_on_disk, monkeypatch):
     check("and it says what happened", "the plain reading could not be worked out" in err, err)
     check("with nothing half-written", "plain" not in json.loads(
         (pair_on_disk / "out" / "comparison.json").read_text(encoding="utf-8")))
+
+
+# --- not measured alike (#713) ----------------------------------------------------------
+
+
+def same_recordings(*reps):
+    """The same three recordings read twice: names, pid and window alike."""
+    for rep in reps:
+        rep["traces"] = [f"traces/coldStart_iter00{i}.perfetto-trace" for i in range(3)]
+    return reps
+
+
+def test_the_same_recordings_on_both_sides_are_not_compared_and_no_check_moves():
+    """#713: the same three recordings read with two sets of thresholds read
+    "WORSE Heavy work on the main thread", 1.1 s to 1.6 s."""
+    before, after = same_recordings(
+        report([entry("main_thread_block", [steady("inflate", 300)]), entry("gc_pressure")]),
+        report([entry("main_thread_block", [steady("inflate", 300), steady("bind", 600)]),
+                entry("gc_pressure")]))
+    got = reading(before, after)
+    v = got["verdict"]
+    check("the verdict says what the two are first", v["movement"] == moves.NOT_COMPARED
+          and v["headline"] == "The same recordings on both sides"
+          and v["text"].startswith("Both sides are the same recordings: the same 3 trace names, the same "
+                                   "process (pid 4100)") and "no check below is called better or worse" in v["text"], v)
+    block = next(c for c in got["checks"] if c["id"] == "main_thread_block")
+    check("the check that found more is not called worse", block["movement"] == moves.NOT_COMPARED
+          and block["text"] == "Both sides are the same recordings, so whatever moved here is the tool's or the "
+                               "config's, not the app's. Added up, what it found was 0.3 s before and 0.9 s after.",
+          block)
+    check("no check is better, worse, new or gone",
+          not {c["movement"] for c in got["checks"]} & {moves.BETTER, moves.WORSE, moves.NEW, moves.GONE},
+          [c["movement"] for c in got["checks"]])
+    check("one that found nothing either time is still fine both times",
+          next(c for c in got["checks"] if c["id"] == "gc_pressure")["movement"] == moves.FINE_BOTH)
+    text = moves.render(got, width=100)
+    check("the terminal says it at the top, and names the check as not compared",
+          text.startswith("NOT COMPARED  The same recordings on both sides.")
+          and " NOT COMPARED Heavy work on the main thread" in text and "WORSE" not in text, text)
+
+
+def test_a_check_whose_threshold_changed_is_not_compared_and_the_others_keep_their_verdict():
+    before = report([entry("main_thread_block", [steady("inflate", 300)], params={"min_slice_ms": 83.3}),
+                     entry("binder_txn", [steady("binder transaction", 600)], params={"min_txn_ms": 14.4})])
+    after = report([entry("main_thread_block", [steady("inflate", 300), steady("bind", 600)],
+                          params={"min_slice_ms": 16}),
+                    entry("binder_txn", [steady("binder transaction", 300)], params={"min_txn_ms": 14.4})])
+    got = reading(before, after)
+    block = next(c for c in got["checks"] if c["id"] == "main_thread_block")
+    check("the check whose threshold moved is not compared, and says from what to what",
+          block["movement"] == moves.NOT_COMPARED and block["text"]
+          == "Its thresholds changed between the two (min_slice_ms from 83.3 to 16 ms), so it did not count by "
+             "the same measure on both sides. Added up, what it found was 0.3 s before and 0.9 s after.", block)
+    binder = next(c for c in got["checks"] if c["id"] == "binder_txn")
+    check("a check with the same thresholds keeps its verdict", binder["movement"] == moves.BETTER, binder)
+    check("the verdict is still the window's", got["verdict"]["movement"] == moves.NO_CHANGE, got["verdict"])
+    check("and the note that the two were read unlike stays",
+          any(n["id"] == "unlike" for n in got["notes"]), got["notes"])
+
+
+def test_a_check_another_echolot_read_differently_is_not_compared():
+    before = report([entry("main_thread_block", [steady("inflate", 300)], sha="aaa")])
+    after = report([entry("main_thread_block", [steady("inflate", 900)], sha="bbb")])
+    for rep, version in ((before, "0.17.0"), (after, "0.18.0")):
+        rep["toolchain"] = {"echolot": version}
+    item = reading(before, after)["checks"][0]
+    check("not compared, and why", item["movement"] == moves.NOT_COMPARED
+          and item["text"].startswith("The two versions of echolot that wrote the reports read this check "
+                                      "differently"), item)

@@ -206,8 +206,8 @@ def test_command_mode_reads_the_build_again_after_the_first_repeat(
     said = _collect(tmp_path, planted("AGENTTMP_a"), section=COMMAND)
     kinds = adb.kinds()
     check("before the set, and once the first repeat has recorded, before its pull",
-          kinds[:3] == ["devices", "build", "screen"]
-          and kinds[3:9] == ["screen", "rm", "perfetto", "wait", "build", "pull"]
+          kinds[:4] == ["devices", "build", "screen", "settings"]
+          and kinds[4:10] == ["screen", "rm", "perfetto", "wait", "build", "pull"]
           and kinds.count("build") == 2 and kinds.count("pull") == 3, kinds)
     check("said both times", "  [!] the build on the phone lacks the temporary marker in the "
           "code; the scenario may install another, so it is read again after the first repeat"
@@ -239,12 +239,9 @@ def test_command_mode_with_the_markers_in_the_build_reads_it_once(
     check("once", adb.kinds().count("build") == 1, adb.kinds())
 
 
-def test_gradle_mode_is_not_asked(tmp_path: Path, monkeypatch) -> None:
-    """The macrobenchmark builds the app from the code."""
-    def refuse(args, stdin=None, timeout=120):
-        raise AssertionError(f"gradle mode called adb: {args}")
-    monkeypatch.setattr(runner, "_run", refuse)
-    monkeypatch.delenv("ANDROID_SERIAL", raising=False)
+def test_gradle_mode_is_not_asked(tmp_path: Path, adb: FakeAdb) -> None:
+    """The macrobenchmark builds the app from the code. Gradle mode reads the
+    phone around the task (#524), and never its build."""
     app = tmp_path / "app"
     app.mkdir()
     (app / "gradlew").write_text("#!/bin/sh\nd=build/outputs/x\nmkdir -p $d\n"
@@ -254,7 +251,8 @@ def test_gradle_mode_is_not_asked(tmp_path: Path, monkeypatch) -> None:
                          section={"mode": "gradle", "gradle_task": "x",
                                   "project_root": str(app)},
                          planted=planted("AGENTTMP_a"))
-    check("recorded, and adb never asked", len(got) == 1, got)
+    check("recorded, and the build never read", len(got) == 1 and "build" not in adb.kinds(),
+          (got, adb.kinds()))
 
 
 # --- from the command line -----------------------------------------------------------

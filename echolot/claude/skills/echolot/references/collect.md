@@ -214,7 +214,25 @@ anything is recorded: `<package> is not installed on <serial>`. Install the
 build the scenario measures and collect again. An `Error:` from `am start`
 after a launch, an activity that is not there, stops the set at that repeat
 with the line. Neither used to: `am start` exits 0 either way, and the traces
-held the device and no app.
+held the device and no app. A gradle-mode round is the usual way an app goes
+missing: the connected test task uninstalls the app it tested when it ends,
+and the round says so, `[!] <package> is no longer installed on <serial>`.
+Install the build again before a launch or command round, or keep it with
+`-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true` in
+`runner.gradle_args` (AGP 8.2 and later).
+
+**A phone that is not charging is said, and stopped under the floor.** Before
+the set `collect` reads the phone's power with its screen. Not charging and
+under `runner.min_battery` (25%, Macrobenchmark's mark) stops it before
+anything is recorded: ask the person to plug the phone in; `runner.min_battery:
+0` in local.yml records on battery anyway, when they choose that. Not charging
+above it, or battery saver on, is one line, `[!] power: … is not charging,
+49%`, and the set is recorded. A change between repeats, the cable out or
+saver on, is said before the repeat that found it. A charging phone gets no
+line. Each trace's account keeps `power`, `battery_saver` and
+`battery_level`, and `compare` warns (`recording`, `recording-mixed`) when
+the sides, or one side's repeats, differ in them: record both sides on the
+same power.
 
 **`collect` records the build that is on the phone** in launch and command
 modes, and builds nothing. After a change to the code — `echolot mark

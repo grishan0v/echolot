@@ -394,8 +394,9 @@ def test_no_stop_no_app_at_the_stop(tmp_path, adb):
     runner.collect(PACKAGE, tmp_path / "traces", 1, section={"reset_policy": "none"},
                    name="startup", log=lambda m: None)
     kept = recording_mod.read(tmp_path / "traces" / "startup_iter000.perfetto-trace")
-    check("the policy, and nothing about a stop that was not made",
-          kept == {"runner": "launch", "reset_policy": "none"}, kept)
+    check("the policy, the device's settings, and nothing about a stop that was not made",
+          kept == {"runner": "launch", "reset_policy": "none", "power": "charging",
+                   **SHIPPED}, kept)
 
 
 def test_the_account_moves_with_its_trace_when_a_set_is_set_aside(tmp_path):
@@ -418,3 +419,206 @@ def test_an_unreadable_account_is_no_account():
         check("broken JSON", recording_mod.read(trace) == {})
         recording_mod.sidecar(trace).write_text('{"runner": 3}', encoding="utf-8")
         check("a field of the wrong kind", recording_mod.read(trace) == {})
+
+
+# --- the device's settings: animation scales (#612), "Don't keep activities" (#616)
+
+SHIPPED = {"animation_scales": {"window": 1.0, "transition": 1.0, "animator": 1.0},
+           "always_finish_activities": False}
+DUMP_HEADER = "ACTIVITY MANAGER RUNNING PROCESSES (dumpsys activity processes)\n"
+
+
+def settings_answer(window="1.0", transition="1.0", animator="1.0", stored="0",
+                    dump: bool | None = False) -> str:
+    """What the round's settings read prints: `dump` None for a dump that did
+    not answer, else whether ActivityManager has the option on."""
+    out = (f"window_animation_scale={window}\ntransition_animation_scale={transition}\n"
+           f"animator_duration_scale={animator}\nalways_finish_activities={stored}\n")
+    if dump is not None:
+        out += DUMP_HEADER + ("  mAlwaysFinishActivities=true\n" if dump else "")
+    return out
+
+
+def scales(n: float) -> dict:
+    return {"window": n, "transition": n, "animator": n}
+
+
+def test_the_settings_read_as_a_phone_comes():
+    check("every scale 1, the option off",
+          recording_mod.parse_settings(settings_answer()) == SHIPPED)
+    check("a scale never set animates at the system's default, 1",
+          recording_mod.parse_settings(settings_answer(animator="null"))["animation_scales"]
+          == scales(1.0))
+
+
+def test_dont_keep_activities_is_activity_managers_not_the_settings():
+    """`settings put global always_finish_activities 0` on the phone of the
+    test: the setting said 0, `dumpsys activity` still said
+    `mAlwaysFinishActivities=true`, and starts stayed warm."""
+    read = recording_mod.parse_settings
+    check("on in ActivityManager, 0 in the setting: on",
+          read(settings_answer(stored="0", dump=True))["always_finish_activities"] is True)
+    check("1 in the setting, no line in the dump: off",
+          read(settings_answer(stored="1", dump=False))["always_finish_activities"] is False)
+    check("no dump: the setting stands in",
+          read(settings_answer(stored="1", dump=None))["always_finish_activities"] is True
+          and read(settings_answer(stored="null", dump=None))["always_finish_activities"]
+          is False)
+
+
+def test_a_device_that_does_not_say_leaves_its_settings_unknown():
+    read = recording_mod.parse_settings
+    check("nothing printed", read("") == {"animation_scales": None,
+                                          "always_finish_activities": None})
+    check("a scale that is not a number takes the three with it",
+          read(settings_answer(window="fast"))["animation_scales"] is None)
+    check("nor a negative one",
+          read(settings_answer(transition="-1"))["animation_scales"] is None)
+
+
+def test_collect_reads_the_settings_once_a_round_and_keeps_them_beside_every_trace(
+        tmp_path, adb):
+    adb.script["settings"] = [settings_answer("5", "5", "5", stored="0", dump=True)]
+    out = tmp_path / "traces"
+    runner.collect(PACKAGE, out, 3, section={}, name="startup", log=lambda m: None)
+    check("one read for three repeats", adb.kinds().count("settings") == 1, adb.kinds())
+    check("asked of the device it records on",
+          next(c for c in adb.calls if kind(c) == "settings")[:4]
+          == ["adb", "-s", adb.calls[1][2], "shell"], adb.calls)
+    kept = [recording_mod.read(out / f"startup_iter00{i}.perfetto-trace") for i in range(3)]
+    check("each trace's account has them",
+          all(k["animation_scales"] == scales(5.0) and k["always_finish_activities"] is True
+              for k in kept), kept)
+
+
+def test_a_settings_read_that_fails_costs_no_repeat(tmp_path):
+    fake = FakeAdb(fail="settings")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runner, "_run", fake)
+        mp.delenv("ANDROID_SERIAL", raising=False)
+        results = runner.collect(PACKAGE, tmp_path / "traces", 2, section={},
+                                 name="startup", log=lambda m: None)
+    kept = recording_mod.read(tmp_path / "traces" / "startup_iter000.perfetto-trace")
+    check("the set recorded", len(results) == 2, results)
+    check("and the settings unknown, not guessed",
+          not {"animation_scales", "always_finish_activities"} & set(kept), kept)
+
+
+def test_an_account_from_before_the_settings_reads_without_them(tmp_path):
+    trace = tmp_path / "startup_iter000.perfetto-trace"
+    recording_mod.sidecar(trace).write_text(json.dumps(
+        {"echolot": "0.17.0", "runner": "launch", "reset_policy": "force-stop",
+         "app_at_stop": "running"}), encoding="utf-8")
+    kept = recording_mod.read(trace)
+    check("what it kept, and nothing more",
+          kept == {"runner": "launch", "reset_policy": "force-stop", "app_at_stop": "running"},
+          kept)
+    recording_mod.sidecar(trace).write_text(json.dumps(
+        {"runner": "launch", "animation_scales": {"window": "1"},
+         "always_finish_activities": 1}), encoding="utf-8")
+    check("settings of the wrong kind read as not kept",
+          recording_mod.read(trace) == {"runner": "launch"}, recording_mod.read(trace))
+
+
+def test_analyze_carries_the_settings_into_the_report_and_its_header(tmp_path):
+    trace = tmp_path / "startup_iter000.perfetto-trace"
+    trace.write_bytes(fixture.build())
+    recording_mod.write(trace, {"runner": "command", "reset_policy": "none",
+                                "animation_scales": scales(5.0),
+                                "always_finish_activities": True})
+    rep = selftest._analyze(trace, Config(selftest.FIXTURE_CONFIG))
+    rec = rep["recording"]
+    check("in the recording block",
+          rec["animation_scales"] == scales(5.0) and rec["always_finish_activities"] is True,
+          rec)
+    head = report_mod.to_markdown(rep)
+    check("the header names the scales",
+          "Animation scales: all three `5`, where a phone comes with 1" in head, head[:3000])
+    check("and warns of the option, for a scenario that returns to the app",
+          '> ⚠️ "Don\'t keep activities" was on' in head
+          and "a warm start where a phone without it starts hot" in head, head[:3000])
+
+
+def test_the_header_says_nothing_of_a_phone_as_it_comes_or_of_one_nobody_read():
+    lines = recording_mod.header_lines
+    check("defaults", lines({"runner": "launch", **SHIPPED}) == [])
+    check("unknown", lines({"runner": "launch", "animation_scales": None,
+                            "always_finish_activities": None}) == [])
+    check("a report from before the block", lines(None) == [])
+
+
+def test_the_header_words_the_option_by_what_the_set_measured():
+    cold = recording_mod.header_lines({"runner": "launch", "reset_policy": "force-stop",
+                                       "animation_scales": scales(1.0),
+                                       "always_finish_activities": True})
+    check("a cold start: said, not warned",
+          len(cold) == 1 and not cold[0].startswith(">")
+          and "A cold start creates its activity anyway" in cold[0], cold)
+    off = recording_mod.header_lines({"runner": "launch", "animation_scales": scales(0.0),
+                                      "always_finish_activities": False})
+    check("animations off, by name", off == [
+        "Animation scales: all three `0`, where a phone comes with 1: animations were off, "
+        "so the frames a phone draws for them, and the work behind those frames, are not "
+        "in these numbers. Developer options set them back."], off)
+    one = recording_mod.header_lines({"animation_scales": {"window": 1.0, "transition": 1.0,
+                                                           "animator": 0.5}})
+    check("each scale named where they differ",
+          one and one[0].startswith("Animation scales: window `1`, transition `1`, "
+                                    "animator `0.5`,"), one)
+
+
+def test_compare_says_when_the_device_animated_or_kept_activities_differently():
+    """The list scroll of #612: all three scales at 5 on one side and at 1 on
+    the other, rows that held, and no warning."""
+    slow = recording_mod.merge(blocks(animation_scales=[scales(5.0)] * 4,
+                                      always_finish_activities=[True] * 4))
+    plain = recording_mod.merge(blocks(animation_scales=[scales(1.0)] * 4,
+                                       always_finish_activities=[False] * 4))
+    cmp = compare(side(BEFORE, recording=slow), side(AFTER, recording=plain))
+    said = text(cmp, "recording")
+    check("the scales, both sides",
+          "the device's animation scales all three `5` before and all three `1` after"
+          in said, said)
+    check("and the option", '"Don\'t keep activities" on before and off after' in said, said)
+    check("said, not refused: the verdicts stand",
+          holds(cmp) == {"main_thread_block": True, "io_wait": True}, holds(cmp))
+    cmp = compare(side(BEFORE, recording=plain), side(AFTER, recording=plain))
+    check("the same settings: nothing",
+          not {"recording", "recording-unknown", "recording-mixed"} & warned(cmp),
+          cmp["warnings"])
+
+
+def test_a_side_whose_repeats_ran_with_other_settings_is_said():
+    split = recording_mod.merge(blocks(
+        animation_scales=[scales(5.0), scales(5.0), scales(1.0), scales(1.0)],
+        always_finish_activities=[False] * 4))
+    plain = recording_mod.merge(blocks(animation_scales=[scales(1.0)] * 4,
+                                       always_finish_activities=[False] * 4))
+    cmp = compare(side(BEFORE, recording=split), side(AFTER, recording=plain))
+    check("the before side's split, worded",
+          "the device's animation scales all three `5` in 2 of 4, all three `1` in 2 of 4"
+          in text(cmp, "recording-mixed"), cmp["warnings"])
+
+
+def test_a_set_recorded_before_the_settings_were_read_is_unknown_never_the_same():
+    """The orchestrated case of #612: a baseline from yesterday's `collect`
+    against a round recorded today."""
+    old = recording_mod.merge(blocks(runner=["launch"] * 4))
+    new = recording_mod.merge(blocks(animation_scales=[scales(1.0)] * 4,
+                                     always_finish_activities=[False] * 4))
+    cmp = compare(side(BEFORE, recording=old), side(AFTER, recording=new))
+    said = text(cmp, "recording-unknown")
+    check("could not be checked, said",
+          "The before side does not say the device's animation scales nor whether "
+          '"Don\'t keep activities" was on' in said
+          and "cannot be checked" in said, cmp["warnings"])
+    check("no difference claimed", "recording" not in warned(cmp), cmp["warnings"])
+    cmp = compare(side(BEFORE, recording=old), side(AFTER, recording=old))
+    check("two sets from before: nothing",
+          not {"recording", "recording-unknown", "recording-mixed"} & warned(cmp),
+          cmp["warnings"])
+    gradle = recording_mod.merge(blocks(runner=["gradle"] * 4, reset_policy=[None] * 4,
+                                        app_at_stop=[None] * 4))
+    cmp = compare(side(BEFORE, recording=gradle), side(AFTER, recording=new))
+    check("a Macrobenchmark's round, which never reads them, is not called unknown",
+          "recording-unknown" not in warned(cmp), cmp["warnings"])

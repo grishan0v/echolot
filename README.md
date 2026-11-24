@@ -101,8 +101,12 @@ something becomes a section of the report:
 ## What you get
 
 `report.md` for you and `report.json` for the agent, in `.echolot/out/`.
-An 81 MB trace with 475k slices comes out as a 14 KB `report.json` in about
-five seconds, and the repeats of a set are read side by side, each in a
+The agent reads it through `echolot report`: an overview of one line per
+detector, and each detector's rows one command away, ranked by the median
+times the share of repeats that found them. On a large Kotlin app's cold start, five repeats
+with default thresholds, twelve detectors fired with 255 rows; `report.json`
+keeps them all in about 240 KB, and the overview the agent reads is about
+3.5 KB. The repeats of a set are read side by side, each in a
 trace_processor of its own: fifteen cold starts in about nine seconds.
 `echolot analyze --html` adds `report.html`: the same report in plain words as
 a page, one file that opens from disk. `echolot hunt --show --html`

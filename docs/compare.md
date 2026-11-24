@@ -369,9 +369,9 @@ top, the way the Marker Report already states an anchor that never matched.
 | `sampling` | a callstack sampler ran during one round and not the other, or at another rate, or in only some repeats of one — see below |
 | `compose_names` | one round was recorded with composable names and the other not, or only some of its repeats were. The names come with the app's Perfetto SDK loaded at its start, which cost a cold start 67 ms on the device it was measured on |
 | `compile` | the app was compiled differently in the two rounds, or in the repeats of one, or — where the traces could not say how — the JIT compiled several times more methods on one side — see below |
-| `recording` | the two sides were not recorded the same way: another runner or reset policy, a force-stop that found the app running on one side and already stopped on the other, or another trace config — data sources, atrace categories and ftrace events, each named on the side that had it. The detectors that read what one side recorded and the other did not are named — see [How the two were recorded](#how-the-two-were-recorded) |
-| `recording-mixed` | one side's own repeats were not recorded alike, by runner, reset policy or trace config, so its medians mix two ways of recording |
-| `recording-unknown` | one side cannot say how it was recorded while the other can: a report from before reports kept it, traces recorded before `collect` wrote its account beside them or by something else, or traces with no config of their own |
+| `recording` | the two sides were not recorded the same way: another runner or reset policy, a force-stop that found the app running on one side and already stopped on the other, the phone charging on one side and on battery on the other or in battery saver on one side only, another trace config — data sources, atrace categories and ftrace events, each named on the side that had it — or a device set otherwise: other animation scales, or "Don't keep activities" on one side only. The detectors that read what one side recorded and the other did not are named — see [How the two were recorded](#how-the-two-were-recorded) |
+| `recording-mixed` | one side's own repeats were not recorded alike, by runner, reset policy, power, battery saver, trace config or the device's settings, so its medians mix two ways of recording |
+| `recording-unknown` | one side cannot say how it was recorded while the other can: a report from before reports kept it, traces recorded before `collect` wrote its account beside them or by something else, traces with no config of their own, or a `collect` from before it read the device's settings |
 | `version` | the two reports were written by different versions of echolot, or one does not say which wrote it. A side that does not say leaves every row without a verdict — see [Which echolot wrote each](#which-echolot-wrote-each) |
 | `detector-changed` | a detector read the trace with different code on the two sides. Its rows stay, without a verdict |
 | `same-traces` | both sides are the same recordings — the same trace names, pid and window to the hundredth of a millisecond — so whatever moved is the tool's or the config's, and no row carries a verdict |
@@ -494,9 +494,33 @@ app running is kept, and a difference in it is said; what most of a side's
 repeats did is that side's, since the first repeat of every `collect` finds
 the app as the last session left it.
 
+The account also says how the phone was powered before each repeat:
+`power`, `charging` or `not charging`, and `battery_saver`, `on` or `off`
+(see [Power](collecting.md#power)). A side recorded on battery against one
+recorded charging, or in battery saver against one without it, is said;
+a side whose phone lost its cable halfway is `recording-mixed`. A side that
+does not say, recorded before `collect` kept it, is unknown there, and gets
+no sentence of its own.
+
+The device's settings are there for the same reason: the trace carries
+neither. `collect` reads the animation scales of Developer options and
+"Don't keep activities" once a round (see [collecting](collecting.md)). A
+list scroll on the SM-A515F with all three scales at 5 on one side and 1 on
+the other gave 5 to 17 rows that held — Compose's animation work, the GPU
+thread — with nothing to say that every animation on one side ran five times
+as long. "Don't keep activities" destroys an activity as soon as it leaves
+the screen, so a scenario that returns to the app measures a warm start
+where the other side measured a hot one. Either is named with both sides'
+values, and the verdicts stand, as for every `recording` difference.
+
 A side that cannot say — traces recorded before `collect` kept its account,
 by another tool, or a report from before the block — gets `recording-unknown`
-rather than silence, and two sides that both cannot say get nothing.
+rather than silence, and two sides that both cannot say get nothing. A set
+from a `collect` that kept its account but did not yet read the device's
+settings says how it was driven and not those, and gets its own
+`recording-unknown`: the settings cannot be checked, which is not the same
+as their being the same. A Macrobenchmark's round never reads them, and is
+not called unknown for it.
 
 ### Which echolot wrote each
 
@@ -647,6 +671,7 @@ much it needs you. Here it has a movement: which way it went.
 | gone | it found something before and finds nothing now, and what it found was more than a small or occasional thing |
 | new | the same the other way round |
 | no change | it found something on a side, and no move can be called: the sentence says why |
+| not compared | it looked both times, but not by one measure: its thresholds changed between the two (named, from what to what), the echolot that read it did (`version`, `detector-changed`), or both sides are the same recordings (`same-traces`). Whatever moved is the config's or the tool's, so it is called neither better nor worse. With the same recordings the verdict at the top says that too, as `not_compared` |
 | fine both times | it looked both times and found nothing |
 | not checked | it could not look on one side or on both, or one of the reports is too old to say (it says why); `compare` leaves such a check out of its table too |
 
@@ -752,7 +777,8 @@ Top to bottom:
 - the verdict, its notes, and one sentence on what a colour means here;
 - the whole window before and after as a chart, with the time limit as a line;
 - a filter by movement, which is the page's counts as well: all, got better,
-  did not change, got worse (when anything did), fine both times, not checked;
+  did not change, got worse and not compared (when any did), fine both times,
+  not checked;
 - the table: one row per check, with what changed in a sentence, the movement,
   and what the check found added up before and after. "nothing" is a side that
   found none, "at times" one whose findings are in a minority of the launches,

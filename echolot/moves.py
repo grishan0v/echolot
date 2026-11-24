@@ -27,6 +27,9 @@ Here it says which way a check moved (`movement`):
   no_change    it found something on a side, and no move can be called
   fine_both    it looked both times and found nothing
   not_checked  it could not look on one side or on both
+  not_compared it looked both times, but not by one measure: its thresholds
+               changed, the tool that read it did, or both sides are the
+               same recordings, so whatever moved is not the app's (#713)
 
 The two words are kept apart in the keys: a check's item carries `movement`,
 and what each report said of it stays under `before` and `after` as
@@ -62,9 +65,10 @@ from .report import metric_of
 
 BETTER, WORSE, NO_CHANGE, GONE, NEW, FINE_BOTH, NOT_CHECKED = (
     "better", "worse", "no_change", "gone", "new", "fine_both", "not_checked")
-MOVEMENTS = (WORSE, NEW, BETTER, GONE, NO_CHANGE, FINE_BOTH, NOT_CHECKED)
-# The verdict's own fourth answer: two reports that are not of one thing.
+# The verdict's own fourth answer: two reports that are not of one thing. A
+# check's too: one not measured alike on the two sides.
 NOT_COMPARED = "not_compared"
+MOVEMENTS = (WORSE, NEW, BETTER, GONE, NO_CHANGE, FINE_BOTH, NOT_CHECKED, NOT_COMPARED)
 
 # When a move is called. The same three conditions for the window and for a
 # check's sum:
@@ -417,11 +421,56 @@ def _said(*parts: str) -> str:
     return " ".join(part for part in parts if part)
 
 
+def _same(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any]) -> str | None:
+    """Why the two sides are one set of recordings, when `compare` says so."""
+    if not any(w.get("id") == "same-traces" for w in cmp.get("warnings") or []):
+        return None
+    return compare.same_recordings(before, after) or "the same recordings"
+
+
+def _threshold(key: str, was: Any, now: Any) -> str:
+    """`min_slice_ms from 83.3 to 16 ms`."""
+    def said(v: Any) -> str:
+        return "nothing" if v is None else f"{v:g}" if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)
+    unit = " ms" if key.endswith("_ms") and all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in (was, now)) else ""
+    return f"{key} from {said(was)} to {said(now)}{unit}"
+
+
+def _held(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any]) -> dict[str, str] | str | None:
+    """Why a check is not compared, as a sentence: one for every check (a
+    string), one per check that is not (a dict), or None.
+
+    The same rows `compare` takes the verdict from (`compare.unjudged`), and
+    the checks whose own thresholds differ: a threshold of 83.3 ms against
+    16 ms made 14 more findings of the same recordings, and read as worse.
+    """
+    if _same(before, after, cmp):
+        return ("Both sides are the same recordings, so whatever moved here is the tool's or the "
+                "config's, not the app's.")
+    unjudged = compare.unjudged(before, after)
+    if unjudged is compare.ALL:
+        return ("One of the two reports does not say which version of echolot wrote it, so a move here "
+                "may be the tool's.")
+    out: dict[str, list[str]] = {}
+    for did in unjudged:
+        out.setdefault(did, []).append(
+            "The two versions of echolot that wrote the reports read this check differently, so a move "
+            "here may be the tool's.")
+    for did, moved in compare.params_moved_by(before, after).items():
+        said = "; ".join(_threshold(*m) for m in moved)
+        out.setdefault(did, []).append(
+            f"Its thresholds changed between the two ({said}), so it did not count by the same measure "
+            "on both sides.")
+    return {did: " ".join(words) for did, words in out.items()} or None
+
+
 def _verdict(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
              ctx: _Ctx) -> dict[str, Any]:
     """Better, worse or no clear change, by the scenario's window; by the
     frames the app made late when the window runs to the end of the
-    recording and so cannot move (`FRAMES_FLOOR`)."""
+    recording and so cannot move (`FRAMES_FLOOR`). Not compared at all when
+    both sides are one set of recordings: nothing in the app moved (#713)."""
     b, a = _window_side(before), _window_side(after)
     out: dict[str, Any] = {"movement": NOT_COMPARED, "before_ms": b["ms"], "after_ms": a["ms"]}
     if not cmp.get("comparable", True):
@@ -438,6 +487,12 @@ def _verdict(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any],
         return {**out, "headline": "No time to compare",
                 "text": f"One of the two reports has no measured {ctx.noun}, so there are no two times to "
                         "hold against each other."}
+    same = _same(before, after, cmp)
+    if same:
+        return {**out, "headline": "The same recordings on both sides",
+                "text": f"Both sides are the same recordings: {same}. Nothing in the app can have moved "
+                        "between them, so no check below is called better or worse: what moved is the "
+                        "tool's or the config's."}
     measured = f"Measured on {ctx.a_side}."
     w = _by_window(b, a, ctx)
     out["by"] = "window"
@@ -629,6 +684,8 @@ def _sentence(movement: str, why: str, b: dict[str, Any], a: dict[str, Any],
     """What changed, in a sentence or two."""
     if movement == FINE_BOTH:
         return clean
+    if movement == NOT_COMPARED:
+        return f"{why} Added up, what it found was {_amount(b)} before and {_amount(a)} after."
     if movement == NOT_CHECKED:
         when = "either time" if b["blind"] and a["blind"] else "after" if a["blind"] else "before"
         reason = (a["reason"] if a["blind"] else None) or b["reason"] or plain._COULD_NOT
@@ -670,7 +727,8 @@ def _few(ctx: _Ctx) -> str:
 
 
 def _check(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
-           rows: list[dict[str, Any]], ctx: _Ctx) -> dict[str, Any]:
+           rows: list[dict[str, Any]], ctx: _Ctx, held: str | None = None) -> dict[str, Any]:
+    """`held` is why the check is not compared, though it looked both times."""
     b, a = _side(db, ctx.nb), _side(da, ctx.na)
     title, why_it_matters, clean = _texts(da if da is not None else db)
     found = _findings(rows)
@@ -679,6 +737,8 @@ def _check(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
         movement = NOT_CHECKED
     elif b["ms"] is None and a["ms"] is None:
         movement = FINE_BOTH
+    elif held:
+        movement, why = NOT_COMPARED, held
     else:
         moved, why = _moved(b, a, ctx)
         if not moved:
@@ -689,7 +749,7 @@ def _check(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
             movement = NEW if b["ms"] is None else WORSE
     text = _sentence(movement, why, b, a, found, clean, ctx)
     main = None
-    parts = _threads(did, db, da, ctx) if movement not in (NOT_CHECKED, FINE_BOTH) else None
+    parts = _threads(did, db, da, ctx) if movement not in (NOT_CHECKED, FINE_BOTH, NOT_COMPARED) else None
     if parts:
         mb, ma = parts["main"]["before"], parts["main"]["after"]
         if _moved(mb, ma, ctx)[0]:
@@ -713,7 +773,7 @@ def _check(did: str, db: dict[str, Any] | None, da: dict[str, Any] | None,
 
 # The order of a list: what got worse, what got better, what did not move,
 # and the checks with nothing to say. Gone is a kind of better, new of worse.
-_RANK = {WORSE: 0, NEW: 0, BETTER: 1, GONE: 1, NO_CHANGE: 2, FINE_BOTH: 3, NOT_CHECKED: 4}
+_RANK = {WORSE: 0, NEW: 0, BETTER: 1, GONE: 1, NO_CHANGE: 2, NOT_COMPARED: 2, FINE_BOTH: 3, NOT_CHECKED: 4}
 
 
 def _order(check: dict[str, Any], place: int) -> tuple:
@@ -754,9 +814,11 @@ def read(before: dict[str, Any], after: dict[str, Any], cmp: dict[str, Any]) -> 
     by_check: dict[Any, list[dict[str, Any]]] = {}
     for row in cmp.get("rows") or []:
         by_check.setdefault(row.get("detector"), []).append(row)
+    held = _held(before, after, cmp)
     checks = []
     for place, did in enumerate([*by_before, *(k for k in by_after if k not in by_before)]):
-        check = _check(str(did), by_before.get(did), by_after.get(did), by_check.get(did, []), ctx)
+        why = held if isinstance(held, str) or held is None else held.get(str(did))
+        check = _check(str(did), by_before.get(did), by_after.get(did), by_check.get(did, []), ctx, why)
         checks.append((_order(check, place), check))
     out["checks"] = [check for _, check in sorted(checks, key=lambda pair: pair[0])]
     return out

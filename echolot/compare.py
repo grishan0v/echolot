@@ -112,11 +112,9 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
                             f"gone or new.",
                 })
             if db is not None and da is not None:
-                state_changed.append({
-                    "id": det_id,
-                    "before": "failed" if _failed(db) else _state(rows_b),
-                    "after": "failed" if _failed(da) else _state(rows_a),
-                })
+                _state_change(state_changed, det_id,
+                              "failed" if _failed(db) else _state(rows_b),
+                              "failed" if _failed(da) else _state(rows_a))
             continue
 
         # A detector whose trace did not hold what it reads is as blind as one
@@ -130,13 +128,9 @@ def build(before: dict[str, Any], after: dict[str, Any], *,
                 "after": da["reason"] if needs_mod.could_not_run(da) else None,
             })
             if db is not None and da is not None:
-                state_changed.append({
-                    "id": det_id,
-                    "before": "not checked" if needs_mod.could_not_run(db)
-                    else _state(rows_b),
-                    "after": "not checked" if needs_mod.could_not_run(da)
-                    else _state(rows_a),
-                })
+                _state_change(state_changed, det_id,
+                              "not checked" if needs_mod.could_not_run(db) else _state(rows_b),
+                              "not checked" if needs_mod.could_not_run(da) else _state(rows_a))
             continue
 
         if db is not None and da is not None and bool(rows_b) != bool(rows_a):
@@ -835,6 +829,17 @@ def _tool_moved(before: dict, after: dict) -> tuple[list[dict[str, str]], frozen
     return out, unjudged
 
 
+def unjudged(before: dict, after: dict) -> frozenset[str] | set[str]:
+    """The detectors whose rows carry no verdict because the tool may have
+    moved them (`ALL` for every one), as `build` decides it."""
+    return _tool_moved(before, after)[1]
+
+
+def same_recordings(before: dict, after: dict) -> str | None:
+    """Why the two sides look like one set of recordings, or None."""
+    return _same_recordings(before, after)
+
+
 def _stamp(report: dict) -> str | None:
     """Which echolot wrote a report, or None when it does not say."""
     tc = report.get("toolchain")
@@ -1323,6 +1328,14 @@ def _params_moved(before: dict, after: dict) -> list[str]:
     while `main_thread_block.min_slice_ms 16 → 3089.5` explains the whole
     report on its own.
     """
+    return [f"`{det_id}.{key}` {was} → {now}"
+            for det_id, moved in params_moved_by(before, after).items()
+            for key, was, now in moved]
+
+
+def params_moved_by(before: dict, after: dict) -> dict[str, list[tuple[str, Any, Any]]]:
+    """The parameters that differ, by detector: `(key, before, after)` each.
+    `moves` says them of the one check they belong to (#713)."""
     # A failed side reports the shipped params, not the ones it would have
     # run with; set against the other side's calibrated ones, that read as a
     # threshold change nobody made.
@@ -1330,12 +1343,12 @@ def _params_moved(before: dict, after: dict) -> list[str]:
           if not _failed(d)}
     pa = {d["id"]: (d.get("params") or {}) for d in after.get("detectors", [])
           if not _failed(d)}
-    moved = []
+    moved: dict[str, list[tuple[str, Any, Any]]] = {}
     for det_id in sorted(set(pb) & set(pa)):
         for key in sorted(set(pb[det_id]) | set(pa[det_id])):
             was, now = pb[det_id].get(key), pa[det_id].get(key)
             if was != now:
-                moved.append(f"`{det_id}.{key}` {was} → {now}")
+                moved.setdefault(det_id, []).append((key, was, now))
     return moved
 
 
@@ -1369,6 +1382,14 @@ def _window(before: dict, after: dict) -> dict[str, Any]:
 
 def _state(rows: list[dict]) -> str:
     return "silent" if not rows else f"{len(rows)} row(s)"
+
+
+def _state_change(changed: list[dict[str, Any]], det_id: str, before: str, after: str) -> None:
+    """A detector's state on the two sides, when it differs. "not checked" on
+    both is the warning's to say, and was a row of this table that changed
+    nothing in every comparison of two recordings alike (#716)."""
+    if before != after:
+        changed.append({"id": det_id, "before": before, "after": after})
 
 
 def _failed(d: dict | None) -> bool:

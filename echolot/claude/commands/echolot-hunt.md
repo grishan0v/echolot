@@ -125,8 +125,9 @@ hand goes by hand. Outside gradle mode, build and install the app after that:
 A round recorded from it anyway gets a warning at the top of its report,
 naming the markers the traces hold and the code no longer has.
 
-**Thresholds.** Read `config` and `detectors[].params_source` in the last
-`report.json`, or the `Config:` line in `report.md`. If the thresholds were
+**Thresholds.** Read the `thresholds` column of `echolot report`, which is
+`detectors[].params_source`, and `config` in `echolot report --json` — not
+`report.json` whole. If the thresholds were
 calibrated on the very runs that hold the regression, the report is clean by
 construction. Say so, and pass the agent `--defaults` for its first look.
 

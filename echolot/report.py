@@ -788,7 +788,28 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
         if worst.get("stacks") is not None:
             row["stacks"] = worst["stacks"]
         out.append(row)
-    return sorted(out, key=_rank, reverse=True)
+    return sorted(out, key=standing, reverse=True)
+
+
+def standing(row: dict[str, Any]) -> tuple[float, float]:
+    """Where a row stands among its detector's: its median, times the share of
+    the repeats that found it; the median breaks a tie.
+
+    The median is over the repeats that found the row, so a row seen once has
+    that one value for a median, and ranked by it alone a 200 ms spike in one
+    repeat of five came before 60 ms in all five. A view shows the first rows
+    and says how many it left out (#495) — `report -d` five, the overview
+    one, the page's request to an agent four — and the first rows were the
+    spikes. Times its share, the spike counts for 40 ms and the steady row
+    for 60. A row every repeat found, and a row of one trace, which has no
+    `runs`, stand by the median as they always did.
+    """
+    try:
+        value = float(row.get(metric_of(row)) or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    part = short_runs(row.get("runs"))
+    return (value * part[0] / part[1] if part and part[1] else value, value)
 
 
 # What an open marker's number is raised to, to see whether a merged number
@@ -1987,6 +2008,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.extend(_window_warning_lines(w))
 
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
+    out.extend(recording_mod.header_lines(report.get("recording")))
     out.extend(_no_sources_lines(report.get("no_sources")))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
@@ -2365,6 +2387,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), bool(w.get("defined_by"))))
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
+    out.extend(recording_mod.header_lines(report.get("recording")))
     out.extend(_no_sources_lines(report.get("no_sources")))
     out.extend(_mapping_lines(report))
     out.extend(_retrace_lines(report.get("retrace")))
@@ -2456,7 +2479,8 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
     out.append(_table(shown))
     if len(rows) > top:
         out.append("")
-        out.append(f"_Showing {top} of {len(rows)}; `--top {len(rows)}` for all._")
+        out.append(f"_Showing {top} of {len(rows)};{_left_once(rows[top:])} "
+                   f"`--top {len(rows)}` for all._")
     legend = EVIDENCE_LEGEND.get(det_id)
     if legend:
         out.append("")
@@ -2469,6 +2493,27 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
         out.append("`--json` carries `stacks`: the ten methods that ran most often, and "
                    "the ten nearest frames of the project's own, with their shares.")
     return "\n".join(out)
+
+
+def _left_once(rows: list[dict[str, Any]]) -> str:
+    """How many of the rows a view left out one repeat alone found.
+
+    What the reader of a cut needs to judge it: on a large app's cold start
+    one detector had 38 rows over five repeats, and 15 of them were found in
+    one (#495). Rows ranked by `standing` put those last, so most of what a
+    cut leaves out is often them, and saying how many tells the reader whether
+    `--top` is worth a look. Empty for one trace, and when every row left out
+    was found more than once.
+    """
+    once = [r for r in rows if (short_runs(r.get("runs")) or (0, 0))[0] == 1]
+    if not once:
+        return ""
+    n = short_runs(once[0]["runs"])[1]
+    if len(rows) == 1:
+        return f" the one left was found in one run of {n}."
+    if len(once) == len(rows):
+        return f" all {len(rows)} left were found in one run of {n}."
+    return f" of the {len(rows)} left, {len(once)} were found in one run of {n}."
 
 
 def markers_view(report: dict[str, Any], top: int = 15) -> str:
@@ -2485,7 +2530,8 @@ def markers_view(report: dict[str, Any], top: int = 15) -> str:
                                 "lists nothing_"])
     out += _markers_lines({**m, "rows": rows[:top]})
     if len(rows) > top:
-        out.append(f"_Showing {top} of {len(rows)}; `--top {len(rows)}` for all._")
+        out.append(f"_Showing {top} of {len(rows)};{_left_once(rows[top:])} "
+                   f"`--top {len(rows)}` for all._")
     return "\n".join(out)
 
 

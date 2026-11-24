@@ -24,7 +24,7 @@ One file, nothing fetched, and the same comparison gives the same bytes.
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 from .. import compare as compare_mod
 from .. import moves, plain
@@ -45,7 +45,8 @@ PANEL_DETAIL = 160
 
 # What the filter above the table shows together: a movement's direction.
 GROUP = {moves.BETTER: "better", moves.GONE: "better", moves.WORSE: "worse", moves.NEW: "worse",
-         moves.NO_CHANGE: "same", moves.FINE_BOTH: "fine", moves.NOT_CHECKED: "unchecked"}
+         moves.NO_CHANGE: "same", moves.FINE_BOTH: "fine", moves.NOT_CHECKED: "unchecked",
+         moves.NOT_COMPARED: "uncompared"}
 _QUIET = (moves.FINE_BOTH, moves.NOT_CHECKED)
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -60,6 +61,60 @@ def has_reading(cmp: Any) -> bool:
     got = cmp.get("plain") if isinstance(cmp, dict) else None
     return (isinstance(got, dict) and isinstance(got.get("verdict"), dict)
             and isinstance(got.get("checks"), list) and isinstance(got.get("window"), dict))
+
+
+def misshapen(cmp: dict[str, Any]) -> str | None:
+    """The first part of a comparison's plain reading that does not hold
+    what `compare` writes there, in words, or None.
+
+    `compare` writes `plain.notes` and `plain.checks` as lists of objects,
+    each check's `before` and `after` as objects, `plain.window.before` and
+    `.after` as objects whose `runs` is a whole number, each `movement` and
+    `attention` as text, and `rows` as a list. Anything else came from a
+    hand edit or another tool, and ended the "After the fix" page of
+    `echolot ui` in a 500 (#733), as the same in report.json did the report
+    page (`state.misshapen`, #555). A field that is left out is no fault:
+    the page draws without it. `has_reading` is asked first."""
+    return next(_faults(cmp), None)
+
+
+def _faults(cmp: dict[str, Any]) -> Iterator[str]:
+    from ..state import kind_of
+
+    def odd(value: Any, want: type, name: str, what: str) -> Iterator[str]:
+        if value is not None and (not isinstance(value, want) or isinstance(value, bool)):
+            yield f"`{name}` is {kind_of(value)}, not {what}"
+
+    def leveled(item: dict[str, Any], name: str) -> Iterator[str]:
+        yield from odd(item.get("movement"), str, f"{name}.movement", "text")
+        yield from odd(item.get("attention"), str, f"{name}.attention", "text")
+
+    reading = cmp["plain"]
+    yield from leveled(reading["verdict"], "plain.verdict")
+    for key in ("notes", "checks"):
+        items = reading.get(key)
+        yield from odd(items, list, f"plain.{key}", "a list")
+        for i, item in enumerate(items if isinstance(items, list) else []):
+            name = f"plain.{key}[{i}]"
+            if not isinstance(item, dict):
+                yield f"`{name}` is {kind_of(item)}, not an object"
+                continue
+            yield from leveled(item, name)
+            for side in ("before", "after") if key == "checks" else ():
+                face = item.get(side)
+                yield from odd(face, dict, f"{name}.{side}", "an object")
+                if isinstance(face, dict):
+                    yield from leveled(face, f"{name}.{side}")
+    for side in ("before", "after"):
+        face = reading["window"].get(side)
+        yield from odd(face, dict, f"plain.window.{side}", "an object")
+        if isinstance(face, dict):
+            yield from odd(face.get("runs"), int, f"plain.window.{side}.runs", "a whole number")
+    rows = cmp.get("rows")
+    yield from odd(rows, list, "rows", "a list")
+    for i, row in enumerate(rows if isinstance(rows, list) else []):
+        if isinstance(row, dict):
+            yield from odd(row.get("change"), str, f"rows[{i}].change", "text")
 
 
 def _is_number(value: Any) -> bool:
@@ -299,12 +354,15 @@ _NO_SCRIPT = ("<noscript><div class=\"callout fig\"><p><b>Script is switched off
 
 
 def _views(checks: list[dict[str, Any]]) -> str:
-    count = {g: sum(1 for c in checks if c["group"] == g) for g in ("better", "same", "worse", "fine", "unchecked")}
+    count = {g: sum(1 for c in checks if c["group"] == g)
+             for g in ("better", "same", "worse", "uncompared", "fine", "unchecked")}
     items = [("all", "", "All", len(checks)),
              ("better", kit.move_icon(moves.BETTER), "Got better", count["better"]),
              ("same", kit.move_icon(moves.NO_CHANGE), "Did not change", count["same"])]
     if count["worse"]:
         items.append(("worse", kit.move_icon(moves.WORSE), "Got worse", count["worse"]))
+    if count["uncompared"]:
+        items.append(("uncompared", kit.move_icon(moves.NOT_COMPARED), "Not compared", count["uncompared"]))
     items += [("fine", kit.icon("green"), "Fine both times", count["fine"]),
               ("unchecked", kit.icon("grey"), "Not checked", count["unchecked"])]
     return kit.views(items)
@@ -321,6 +379,9 @@ def _rule(noun: str, plural: str) -> str:
         (moves.NO_CHANGE, "No change",
          f"The check found something on a side, and the change is smaller than that, or single {plural} of the two "
          f"sides overlap, or the {plural} are too few. Its sentence says which."),
+        (moves.NOT_COMPARED, "Not compared",
+         "The check ran both times, but not by one measure: its thresholds changed, the version of echolot "
+         "that read it did, or both sides are the same recordings. Its sentence says which."),
         (moves.FINE_BOTH, "Fine both times", "The check ran both times and found nothing above its limit."),
         (moves.NOT_CHECKED, "Not checked",
          "The check could not run on one side or on both, so there is nothing to compare."),
@@ -386,6 +447,9 @@ def render(cmp: dict[str, Any], *, steps: Sequence[tuple[str, str, bool]] = (),
     """
     if not has_reading(cmp):
         raise ValueError("this comparison carries no plain reading: write it with `echolot compare --html`")
+    wrong = misshapen(cmp)
+    if wrong:
+        raise ValueError(f"this comparison does not read: {wrong}; write it again with `echolot compare --html`")
     reading = cmp["plain"]
     w = reading["window"]
     noun, plural = _words(w.get("noun"))

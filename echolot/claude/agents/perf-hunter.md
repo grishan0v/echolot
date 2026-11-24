@@ -45,8 +45,8 @@ instrumentation:
   file into the window.
 - Budget: a handful of source reads per round. If you have read ten files
   and have no marker in yet, stop reading and instrument what you have.
-- The report is the primary source. `report.json`, `names`, `probe`,
-  `domains`, `mark` come before any file in `app/`.
+- The report is the primary source. `echolot report` and its views,
+  `names`, `probe`, `domains`, `mark` come before any file in `app/`.
 - Where `mark` says it cannot see (an Activity that inherits its `onCreate`
   from a base class, an ambiguity between modules), it says so; that note
   is where your one `grep -n` goes.
@@ -54,7 +54,8 @@ instrumentation:
 **Do not nudge thresholds until something fires.** An empty report is an
 answer. Thresholds are changed by `echolot calibrate` from healthy runs, not by
 you to taste. The one exception: when the report says the thresholds were
-calibrated (`detectors[].params_source` names `config` or `scenario`) and the runs they were
+calibrated (`detectors[].params_source` names `config` or `scenario`: the
+overview's `thresholds` column) and the runs they were
 calibrated on are the runs you are hunting in, the bar sits above the problem.
 Then look with `echolot analyze … --defaults` — the shipped numbers, the
 config untouched — and say in your conclusion that you did. Never write a
@@ -140,24 +141,38 @@ waiting for one.
 1. report = echolot analyze <traces> -c echolot.yml --hunt <n>
    what it prints is the overview `echolot report` prints: the window, its
    warnings, a line per detector — step 2 reads those warnings
-   read .echolot/out/report.json — the schema is what `echolot guide report`
-   prints, do not discover it by hand
-   report.markers.rows is every AGENTTMP_ name and every `domains` name,
-   medians per run with self time: the table for your own markers. Do not
-   rebuild it from `names` in a loop. A row with `unfinished: true` never
-   closed: its numbers are a floor, so pass them on as "at least".
+   then, one command each, the rows the overview points at:
+   echolot report -d <id>     for each detector that fired: five rows, by
+                              median × share of runs — a row in every run
+                              before a longer one found once — and how many
+                              it left out; `--top <k>` for more
+   echolot report --markers   every AGENTTMP_ name and every `domains` name,
+                              medians per run with self time: the table for
+                              your own markers. Do not rebuild it from
+                              `names` in a loop. A number marked ≥ never
+                              closed: it is a floor, so pass it on as
+                              "at least"
+   That is all step 1 reads. report.json is the file compare, the verdict
+   check and the `--json` views read, not you: never cat it, never cut it up
+   with jq or python. `echolot guide report` is its schema and every
+   detector at length — look one field up there when a `--json` view shows
+   it and nothing else explains it, not before the first hypothesis
 
-2. check the config before concluding anything:
-   window.start_anchor.matches == 0     → anchor missed, window is not the scenario
-     (window.end_anchor the same; with `before_start` it is there, but only
-     before the start: the anchors are swapped)
-   window.defined_by_runs present       → a launch window that closed two ways
-                                          across the repeats: two windows in one
-                                          set, and `compare` refuses it. Find the
-                                          repeat without `reportFullyDrawn`
-   window.process_alternatives present  → possibly the wrong process
-   config / params_source say calibrated on these very runs
-                                        → analyze --defaults before believing silence
+2. check the config before concluding anything. The overview says each of
+   these in a ⚠️ line; `echolot report --window --json` has the fields:
+   an anchor not found, 0 matches       → anchor missed, window is not the scenario
+     (window.start_anchor, window.end_anchor; found only before the start
+     anchor, `before_start`: the anchors are swapped)
+   the launch window did not close the  → two windows in one set, and `compare`
+     same way in every repeat             refuses it. Find the repeat without
+     (window.defined_by_runs)             `reportFullyDrawn`
+   other processes matched the mask, or → possibly the wrong process
+     the repeats measured different ones
+     (window.process_alternatives,
+     window.processes)
+   the `thresholds` column says config  → analyze --defaults before believing silence
+     or scenario, calibrated on these
+     very runs
    the warning that the app drew no frame  → the scenario did not reach its
                                           screen: look at the phone (network,
                                           an error screen, a dialog), fix that,
@@ -256,10 +271,13 @@ echolot analyze … --set main_thread_block.min_slice_ms=4
 echolot compare                                    the last two analyze runs that are rounds:
                                                    the previous one against this one, looks left out;
                                                    --hunt <n> for first against last
-echolot report                                     what fired, one line per detector
-echolot report -d monitor_contention --top 5       one detector's rows, evidence cut short;
-                                                   --window, --markers, --json for the rest —
-                                                   instead of jq over report.json
+echolot report                                     what fired, one line per detector: the
+                                                   overview analyze prints, read again
+echolot report -d monitor_contention --top 5       one detector's rows by median × share of
+                                                   runs, evidence cut short, and how many
+                                                   it left out; --window, --markers,
+                                                   --json for the rest — never jq over
+                                                   report.json
 echolot names <trace>                              slice names of project.process, one trace;
                                                    your AGENTTMP_ ones across every run are
                                                    report.markers, not this
@@ -401,7 +419,7 @@ Cleanup:       temporary instrumentation removed | none was added
 **`Evidence` is measured and `Mechanism` is usually not.** They sit next to
 each other and read alike, and a reader who takes both as measured has been
 misled by the form rather than by you. So keep `Evidence` to numbers that came
-out of `report.json` or off a marker you planted, and mark the steps of the
+out of the report or off a marker you planted, and mark the steps of the
 `Mechanism` you did not measure: `(inferred)` for a step you worked out,
 `(gap)` for one you could not check at all. One coherent story where half the
 links are reasoning is the easiest kind of wrong answer to act on.
@@ -544,9 +562,10 @@ staying quiet. Read the main thread's row first: when it says the app held
 its core, the device was busy with the app, and the cause is the app's own
 threads.
 
-Check that against `environment` in `report.json` rather than guessing at it.
-It carries the clock this app's own threads ran at, whether the kernel
-throttled, and how much memory was free. A duration is the work done divided
+Check that against the overview's `Device:` line rather than guessing at it,
+or against `environment` in `echolot report --window --json`. It carries the
+clock this app's own threads ran at, whether the kernel throttled, and how
+much memory was free. A duration is the work done divided
 by the speed the machine was doing it at, so a low `cpu.mean_mhz` or
 `thermal.throttled: true` is the device showing up in numbers that look like
 code.

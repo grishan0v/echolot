@@ -154,6 +154,32 @@ def test_a_file_that_is_no_comparison_is_no_page(project, text):
     check("it is not drawn, and the server goes on", get(site, "after").status == 404 and get(site).status == 200)
 
 
+def _all_strings(node):
+    """Every field of a check but its `id`, as text."""
+    return {k: (v if k == "id" else "zz") for k, v in node.items()}
+
+
+@pytest.mark.parametrize("change, said", [
+    (lambda p: p.update(notes="abc"), "`plain.notes` is text, not a list"),
+    (lambda p: p.update(checks=["x"]), "`plain.checks[0]` is text, not an object"),
+    (lambda p: p["checks"].__setitem__(0, _all_strings(p["checks"][0])), "`plain.checks[0].before` is text, not an object"),
+    (lambda p: p["window"].update(before="zz", after="zz"), "`plain.window.before` is text, not an object"),
+])
+def test_a_comparison_with_a_field_of_the_wrong_kind_says_it_does_not_read(project, change, said):
+    folder = compared(project.ready())
+    found = json.loads((folder / "comparison.json").read_text(encoding="utf-8"))
+    change(found["plain"])
+    (folder / "comparison.json").write_text(json.dumps(found), encoding="utf-8")
+    site = site_of(project)
+    reply = get(site, "after")
+    text = read(reply.body).text
+    check("it is no error, and the page says the comparison does not read and how to write it anew",
+          reply.status == 404 and "The comparison does not read" in text and "echolot compare --html" in text, reply.status)
+    check("naming what is wrong", said.replace("`", "") in text.replace("`", ""), text)
+    check("the start page still draws, with no step that leads there",
+          get(site).status == 200 and "After the fix" not in read(get(site).body).one("nav", "steps").text)
+
+
 def test_each_scenario_has_its_own(project):
     project.app().config(SEVERAL).agents().doctor()
     project.report(".echolot/out/coldStart")

@@ -38,6 +38,7 @@ from typing import Any, Sequence
 from .. import plain
 from .. import report as report_mod
 from .. import verdict as verdict_mod
+from .. import when as when_mod
 from . import kit, report_page
 from .kit import e
 
@@ -127,11 +128,17 @@ def _at(stamp: Any) -> datetime | None:
     return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
 
 
-def _stamp(stamp: Any) -> str:
-    """A moment as the record holds it, in the one zone that needs no clock of
-    this machine: the same file reads the same wherever the page is written."""
-    when = _at(stamp)
-    return when.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if when else _str(stamp)
+def _stamp(stamp: Any, local: bool = False) -> str:
+    """A moment as the record holds it. On a page `echolot ui` serves, in the
+    local time of this machine with its zone, as the start page and `hunt
+    --show` say the same moment (#734). In a file, in the one zone that needs
+    no clock of this machine: the same file reads the same wherever the page
+    is written."""
+    at = _at(stamp)
+    if at is None:
+        return _str(stamp)
+    return when_mod.local(at.isoformat(), seconds=False) if local else \
+        at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _between(start: Any, end: Any) -> float | None:
@@ -650,7 +657,8 @@ def _timeline(rounds: list[tuple[int, dict[str, Any] | None]], hunt: dict[str, A
             + "".join(_round(n, report, hunt.get("opened_at"), cited) for n, report in rounds) + "</ol>")
 
 
-def _about(hunt: dict[str, Any], rounds: list[tuple[int, dict[str, Any] | None]], is_open: bool) -> str:
+def _about(hunt: dict[str, Any], rounds: list[tuple[int, dict[str, Any] | None]], is_open: bool,
+           local: bool = False) -> str:
     rows = []
     if _str(hunt.get("question")):
         rows.append(("Asked", e(_str(hunt["question"]))))
@@ -659,12 +667,12 @@ def _about(hunt: dict[str, Any], rounds: list[tuple[int, dict[str, Any] | None]]
     if _str(hunt.get("scenario")):
         rows.append(("Scenario", f"<code>{e(_str(hunt['scenario']))}</code>"))
     if hunt.get("opened_at"):
-        rows.append(("Opened", e(_stamp(hunt["opened_at"]))))
+        rows.append(("Opened", e(_stamp(hunt["opened_at"], local))))
     if is_open and hunt.get("touched_at"):
-        rows.append(("Last worked on", e(_stamp(hunt["touched_at"]))))
+        rows.append(("Last worked on", e(_stamp(hunt["touched_at"], local))))
     if not is_open and hunt.get("closed_at"):
         took = _between(hunt.get("opened_at"), hunt["closed_at"])
-        rows.append(("Closed", e(_stamp(hunt["closed_at"])) + (f", after {e(_lasted(took))}" if took else "")))
+        rows.append(("Closed", e(_stamp(hunt["closed_at"], local)) + (f", after {e(_lasted(took))}" if took else "")))
     recordings = sum(_runs(report) for _, report in rounds if report is not None)
     work = _count(len(rounds), "round") + (f", {_count(recordings, 'recording')} in all" if recordings else "")
     filed = hunt.get("reports")
@@ -691,7 +699,7 @@ def _process(rounds: list[tuple[int, dict[str, Any] | None]]) -> Any:
 def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None = None,
            action_html: str = "", steps: Sequence[tuple[str, str, bool]] = (),
            crumb: str | Sequence[str] | None = None, policy: str | None = None,
-           agent: dict[str, Any] | None = None) -> str:
+           agent: dict[str, Any] | None = None, local_time: bool = False) -> str:
     """The page for an investigation, as one self-contained HTML document.
 
     `hunt` is its record as `hunt.json` holds it and `reports` are the
@@ -705,7 +713,9 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
     says the page is about in place of the process and the scenario: one
     string, or several. Both go to `kit.topbar` as they are. `policy` is
     the content policy of a served page (`kit.SERVED`), which lets the button
-    in `action_html` send its form.
+    in `action_html` send its form. `local_time` says each moment in the
+    local time of this machine, with its zone, as the start page does; a file
+    keeps UTC, which reads the same wherever it was written.
 
     `agent` is an agent the server started in this investigation
     (`pages/dig_page.panel`): `html`, drawn under the page's headline, with
@@ -776,7 +786,7 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
                            question or "An investigation with no answer", left))
         parts.append('<section class="stack gap-3"><h2 class="h2">The rounds it went through</h2>'
                      + _timeline(rounds, hunt, None) + "</section>")
-    folds.append(_about(hunt, rounds, is_open))
+    folds.append(_about(hunt, rounds, is_open, local_time))
     if agent and agent.get("html"):
         parts.insert(1, agent["html"])
 
