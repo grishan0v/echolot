@@ -34,6 +34,7 @@ refuses it with a sentence that names the command that writes it again.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Generic, Mapping, TypedDict, TypeVar, cast
@@ -106,8 +107,10 @@ class Kind(Shape):
 
 @dataclass(frozen=True)
 class Whole(Shape):
-    """A whole number, not true or false, from `low` up."""
+    """A whole number, not true or false, from `low` up, and up to `high`
+    where there is one."""
     low: int = 0
+    high: int | None = None
     what: str = "a whole number"
 
     def fault(self, value: Any, at: str) -> tuple[Any, str | None]:
@@ -115,6 +118,8 @@ class Whole(Shape):
             return value, _wrong(value, at, self.what)
         if value < self.low:
             return value, f"`{at}` is {value}, below {self.low}"
+        if self.high is not None and value > self.high:
+            return value, f"`{at}` is {value}, above {self.high}"
         return value, None
 
 
@@ -150,8 +155,12 @@ class Finite(Shape):
     def fault(self, value: Any, at: str) -> tuple[Any, str | None]:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return value, _wrong(value, at, self.what)
-        if value != value or value in (float("inf"), float("-inf")):
-            return value, f"`{at}` is {value}, not a finite number"
+        try:
+            finite = math.isfinite(value)
+        except OverflowError:   # a whole number too long to become a float
+            finite = False
+        if not finite:
+            return value, f"`{at}` is {'too long' if isinstance(value, int) else value}, not a finite number"
         return value, None
 
 
@@ -331,6 +340,71 @@ def load(path: Path) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# report.json, written by `echolot analyze` (`report.build`, `report.merge`)
+
+# 1 since the first release. It goes up when a field changes meaning: the
+# first such change is a detector's threshold becoming a flag on each row
+# rather than a filter (#832). Raising it is this one line, and either an
+# upgrade from 1 in `REPORT.upgrades` or none, which refuses a report of
+# schema 1 with a sentence that names `echolot analyze`.
+REPORT_SCHEMA = 1
+
+
+class Detector(TypedDict, total=False):
+    """One detector's result in a report: what it is, and its rows."""
+    id: str
+    rows: list[dict[str, Any]]
+
+
+class Report(TypedDict, total=False):
+    """report.json, as `analyze` writes it."""
+    schema: int
+    generated_at: str
+    trace: str
+    traces: list[Any]
+    scenario: str | None
+    budget_ms: float | None
+    toolchain: dict[str, Any]
+    window: dict[str, Any]
+    environment: dict[str, Any]
+    recording: dict[str, Any] | None
+    markers: dict[str, Any]
+    summary: dict[str, Any]
+    config: dict[str, Any]
+    detectors: list[Detector]
+
+
+# What `report`, `compare`, `status`, the start page and the report page read
+# off every report before anything else, and what they used to check each in
+# a place of its own (`state._as_written`, `state.misshapen`, #470, #555): a
+# summary that is a list, a count that is text or a `generated_at` that is a
+# number ended `status --next` and the start page in a traceback, and
+# `"detectors": "x"` read a letter as a detector. `"traces": "ab"` read as
+# two runs. A report is refused whole for any of them: what still reads of
+# it describes no analysis.
+REPORT: Spec[Report] = Spec(
+    name="report.json", schema=REPORT_SCHEMA, unnumbered=1,
+    shape=Obj({
+        "generated_at": may(TEXT),
+        "traces": may(Kind((list,), "a list")),
+        "summary": may(Obj({"detectors_run": may(WHOLE), "detectors_fired": may(WHOLE)})),
+        "config": may(Obj({"sha": may(TEXT), "defaults": may(FLAG)})),
+        "detectors": may(ListOf(Obj({"id": need(TEXT), "rows": need(ListOf(Obj({})))}))),
+        "markers": may(Obj({"rows": may(ListOf(Obj({}))), "absent": may(Kind((list,), "a list"))})),
+    }))
+
+
+def read_report(path: Path) -> Report | Refusal:
+    """report.json at `path`, or why it does not read."""
+    return REPORT.read(path)
+
+
+def check_report(data: Any) -> Report | Refusal:
+    """A report already in hand, or why it does not read as one."""
+    return REPORT.check(data)
+
+
+# ---------------------------------------------------------------------------
 # comparison.json, written by `echolot compare` (`compare.build`)
 
 # 2 since `overlap` gave way to `shift` and `holds`: a reader written for the
@@ -506,6 +580,100 @@ def read_hunt(path: Path) -> Hunt | Refusal:
 
 
 # ---------------------------------------------------------------------------
+# collect.json, the collect in flight (`runner.Progress`)
+
+# 1 from the first file that carried a number; one with none is of the same
+# shape, written before it was kept.
+COLLECT_SCHEMA = 1
+# The largest process id `os.kill` takes: it hands the number on as a C int.
+PID_MAX = 2**31 - 1
+
+
+class Collect(TypedDict, total=False):
+    """Where the last `collect` stands, as it wrote it while it ran."""
+    schema: int
+    started: float
+    finished: float | None
+    pid: int
+    done: int
+    exit: int
+    hunt: int
+    scenario: str
+    cooling: str
+    error: str
+    iterations: Any
+
+
+# Every echolot that writes this file, 0.8.0 on, writes these: the times from
+# `time.time()`, the process id from `os.getpid()`. Text in `started`, or in
+# `finished` with `exit` set, ended `echolot` and the start page of `echolot
+# ui` in a traceback, and so did `Infinity`, which Python's json reads and no
+# clock writes, and a whole number too long to become a float, which
+# `when.ago` subtracts from one. A pid past what `os.kill` takes ended
+# `status --next` as well, and 0 or -1 read as a collect still running, since
+# `os.kill` then asks the process's own group or every process (#474). Such a
+# file says nothing about a collect: the next `collect` writes it anew.
+# `iterations` is not held to a type: `collect` writes the count it was handed
+# before it checks it, so `runner.iterations: five` leaves `"five"` in a run
+# that failed at once, and the failure's line says why.
+COLLECT: Spec[Collect] = Spec(
+    name="collect.json", schema=COLLECT_SCHEMA, unnumbered=1,
+    shape=Obj({
+        "started": need(Finite()), "finished": may(Finite()),
+        "pid": may(Whole(1, PID_MAX)),
+        **{k: may(Kind((int,), "a whole number")) for k in ("done", "exit", "hunt")},
+        **{k: may(TEXT) for k in ("scenario", "cooling", "error")},
+    }))
+
+
+def read_collect(path: Path) -> Collect | Refusal:
+    """collect.json at `path`, or why it does not read."""
+    return COLLECT.read(path)
+
+
+# ---------------------------------------------------------------------------
+# a job's state, `.echolot/log/<name>.json` (`job.run`): check, setup, dig
+
+JOB_SCHEMA = 1
+
+
+class Job(TypedDict, total=False):
+    """A job the pages started: its steps, and where each stands."""
+    schema: int
+    job: str
+    pid: int
+    started: float
+    finished: float | None
+    what: dict[str, Any]
+    why: str
+    end: str
+    steps: list[dict[str, Any]]
+
+
+# The same rule as for collect.json: whoever reads a job does sums with the
+# times and asks the system about the process id, where text ends in a
+# traceback and 0 or -1 asks about this process's own group and reads as a
+# job that runs for ever. Each step is a name and a state, with times, an
+# exit code and text beside them.
+JOB: Spec[Job] = Spec(
+    name="job state", schema=JOB_SCHEMA, unnumbered=1,
+    shape=Obj({
+        "started": need(Finite()), "finished": may(Finite()),
+        "pid": may(Whole(1, PID_MAX)),
+        "what": may(Obj({})), "why": may(TEXT),
+        "steps": need(ListOf(Obj({
+            "id": need(TEXT), "status": need(TEXT), "started": may(Finite()), "finished": may(Finite()),
+            "exit": may(Kind((int,), "a whole number")), "log": may(TEXT), "shown": may(TEXT),
+        }))),
+    }))
+
+
+def read_job(path: Path) -> Job | Refusal:
+    """A job's state at `path`, or why it does not read."""
+    return JOB.read(path)
+
+
+# ---------------------------------------------------------------------------
 # runs.jsonl, the run log (`recorder.record`): one object per line
 
 # The log is appended to by every version that runs in the project, and each
@@ -573,7 +741,7 @@ def read_runs(path: Path) -> list[Run]:
 
 
 __all__ = [
-    "ANY", "COMPARISON", "COMPARISON_SCHEMA", "FLAG", "HUNT", "HUNT_SCHEMA", "NUMBER", "RUN", "TEXT", "WHOLE",
+    "ANY", "JOB", "JOB_SCHEMA", "Job", "read_job", "COLLECT", "COLLECT_SCHEMA", "Collect", "PID_MAX", "read_collect", "REPORT", "REPORT_SCHEMA", "Detector", "Report", "check_report", "read_report", "COMPARISON", "COMPARISON_SCHEMA", "FLAG", "HUNT", "HUNT_SCHEMA", "NUMBER", "RUN", "TEXT", "WHOLE",
     "ComparedSide", "Comparison", "Field", "Finite", "Hunt", "Kind", "ListOf", "Obj", "OneOf", "Refusal", "Row",
     "Run", "Shape", "Spec", "Whole", "check_comparison", "kind_of", "load", "may", "need", "read_comparison",
     "read_hunt", "read_runs",

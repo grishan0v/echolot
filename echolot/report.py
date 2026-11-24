@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any, Callable
 
+from . import files
 from . import launch as launch_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
@@ -234,7 +235,8 @@ def build(
     """
     fired = [r for r in results if r["rows"]]
     return {
-        "schema": 1,
+        # Shared with the reader, which says when it goes up (`files`).
+        "schema": files.REPORT_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "trace": trace,
         "scenario": scenario,

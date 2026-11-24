@@ -62,6 +62,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from . import files
+
 LOG_DIR = Path(".echolot") / "log"
 
 # How often a job asks whether it was told to stop, in seconds.
@@ -106,16 +108,15 @@ def read(project: Path, name: str, alive: Callable[[int], bool] | None = None) -
     there, `interrupted` when the file says it never finished and the process
     is gone, else how it ended: `done`, `failed`, `stopped`, `interrupted`.
 
-    A file that does not parse, or holds in a field what a job never writes
-    there (`_as_a_job_writes`), is no job: it was edited by hand or written
-    by something else under this name, and the next job writes it anew.
+    A file that does not read (`files.read_job`): one that does not parse,
+    or holds in a field what a job never writes there, is no job: it was
+    edited by hand or written by something else under this name, and the
+    next job writes it anew.
     """
-    try:
-        state = json.loads(state_path(project, name).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    got = files.read_job(state_path(project, name))
+    if isinstance(got, files.Refusal):
         return None
-    if not _as_a_job_writes(state):
-        return None
+    state = dict(got)
     if state.get("finished") is None:
         if alive is None:
             from .state import _alive
@@ -125,32 +126,6 @@ def read(project: Path, name: str, alive: Callable[[int], bool] | None = None) -
     else:
         state["status"] = state.get("end") if state.get("end") in (DONE, FAILED, STOPPED, INTERRUPTED) else FAILED
     return state
-
-
-def _as_a_job_writes(state: Any) -> bool:
-    """Whether a state file holds what a job writes, field by field: times
-    for `started` and `finished`, a process id that names one process, steps
-    that are each a name and a state with times, an exit code and text
-    beside them, and whatever it was handed as an object.
-
-    The same rule as for `collect`'s progress file, and its own checks
-    (`state._as_collect_writes`): whoever reads a job does sums with the
-    times and asks the system about the process id, where text ends in a
-    traceback and 0 or -1 asks about this process's own group and reads as a
-    job that runs for ever.
-    """
-    from .state import _PID_MAX, _holds, _moment
-    if not isinstance(state, dict) or not isinstance(state.get("steps"), list):
-        return False
-    pid = state.get("pid")
-    if not (_moment(state.get("started")) and (state.get("finished") is None or _moment(state["finished"]))
-            and (pid is None or (_holds(pid, int) and 0 < pid <= _PID_MAX))
-            and isinstance(state.get("what", {}), dict) and _holds(state.get("why"), str)):
-        return False
-    return all(isinstance(step, dict) and isinstance(step.get("id"), str) and isinstance(step.get("status"), str)
-               and all(step.get(key) is None or _moment(step[key]) for key in ("started", "finished"))
-               and _holds(step.get("exit"), int) and _holds(step.get("log"), str) and _holds(step.get("shown"), str)
-               for step in state["steps"])
 
 
 # How much of the end of a command's output is read to find its last lines.
@@ -596,7 +571,7 @@ def run(project: Path, name: str, plan: dict[str, Any], *,
             step["unset"] = [str(v) for v in given["unset"]]
         if given.get("tree") and isinstance(given.get("idle"), dict) and given["idle"].get("seconds"):
             step["idle"] = dict(given["idle"])
-    state: dict[str, Any] = {"job": name, "pid": os.getpid(), "started": clock(), "finished": None,
+    state: dict[str, Any] = {"schema": files.JOB_SCHEMA, "job": name, "pid": os.getpid(), "started": clock(), "finished": None,
                              "what": plan.get("what") or {}, "steps": steps}
     _write(path, state)
     ready()

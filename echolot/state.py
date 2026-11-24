@@ -13,13 +13,11 @@ building a project on disk for every case.
 
 from __future__ import annotations
 
-import json
-import math
 import os
 import shlex
 from pathlib import Path, PurePath
 
-from . import codex, hosts, layer, plugin, recorder, runner
+from . import codex, files, hosts, layer, plugin, recorder, runner
 from . import hunt as hunt_mod
 from .anchors import UNPICKED
 from .config import Config, ConfigError
@@ -191,20 +189,18 @@ def project_state(project: Path, config: str = "echolot.yml",
 def _report(rep: Path) -> dict | None:
     """What `status` says of a report.json: when, how many runs, what fired.
 
-    None when there is none; `error` when it is there and does not read.
-    That is a file that is no JSON; one that is JSON and no object, where
-    the first key read off a list, a number or a string ended `echolot` in a
-    traceback (#460); and one that holds, in a field read here, what
-    `analyze` never writes there (`_as_written`), or detectors and rows
-    that `report` and `compare` cannot read (`misshapen`, #555).
+    None when there is none; `error` when it is there and does not read
+    (`files.read_report`): a file that is no JSON; one that is JSON and no
+    object, where the first key read off a list, a number or a string ended
+    `echolot` in a traceback (#460); one that holds, in a field read here,
+    what `analyze` never writes there (#470), or detectors and rows that
+    `report` and `compare` cannot read (#555); and one of a schema this
+    echolot does not read.
     """
     if not rep.exists():
         return None
-    try:
-        r = json.loads(rep.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        r = None
-    if not isinstance(r, dict) or not _as_written(r) or ("detectors" in r and misshapen(r)):
+    r = files.read_report(rep)
+    if isinstance(r, files.Refusal):
         return {"path": rep, "error": "unreadable"}
     s, c = r.get("summary") or {}, r.get("config") or {}
     return {
@@ -289,78 +285,7 @@ def _old_report(project: Path, names: list[str]) -> dict | None:
     return rep
 
 
-def _as_written(r: dict) -> bool:
-    """Whether each field `_report` reads holds what `analyze` writes there,
-    or nothing: an object for `summary` and `config`, a list for `traces`,
-    text for `generated_at` and `config.sha`, a whole number for each count
-    of detectors, and true or false for `config.defaults`. Those are the
-    types it has written since the first release.
-
-    A summary that is a list, a count that is text, a `generated_at` that
-    is a number: each ended `echolot`, `status --next` or the start page of
-    `echolot ui` in a traceback (#470), and a file that got through printed
-    runs no analysis made: `"traces": "ab"` read as two. Such a file was
-    edited by hand or written by another tool under this name, and it is
-    said the way a file that is no JSON is: it does not read, run analyze
-    again. Nothing in it is shown, since what still reads describes no
-    analysis either.
-    """
-    s, c = r.get("summary"), r.get("config")
-    return (_holds(s, dict) and _holds(c, dict) and _holds(r.get("traces"), list)
-            and _holds(r.get("generated_at"), str)
-            and _holds((s or {}).get("detectors_fired"), int)
-            and _holds((s or {}).get("detectors_run"), int)
-            and _holds((c or {}).get("sha"), str)
-            and _holds((c or {}).get("defaults"), bool))
-
-
-def misshapen(data: dict) -> str | None:
-    """The first part of a report that does not hold what `analyze` writes
-    there, in words, or None.
-
-    `analyze` writes `detectors` as a list of objects, each with its `id` as
-    text and its `rows` as a list of objects, and `markers` as an object
-    whose `rows` and `absent` are lists. Anything else came from a hand edit
-    or another tool, and ended `report`, `report --html`, `compare` and the
-    report page of `echolot ui` in a traceback or a 500 (#555): `"detectors":
-    "x"` read a letter as a detector, `"rows": {"a": 1}` asked for row 0.
-    """
-    dets = data.get("detectors")
-    if not isinstance(dets, list):
-        return f"`detectors` is {kind_of(dets)}, not a list"
-    for i, d in enumerate(dets):
-        if not isinstance(d, dict):
-            return f"detector {i + 1} is {kind_of(d)}, not an object"
-        name = d.get("id")
-        if not isinstance(name, str):
-            return f"detector {i + 1} has no `id` as text"
-        rows = d.get("rows")
-        if not isinstance(rows, list):
-            return f"the rows of {name} are {kind_of(rows)}, not a list"
-        if not all(isinstance(r, dict) for r in rows):
-            return f"a row of {name} is not an object"
-    m = data.get("markers")
-    if m is None:
-        return None
-    if not isinstance(m, dict):
-        return f"`markers` is {kind_of(m)}, not an object"
-    for key in ("rows", "absent"):
-        if m.get(key) is not None and not isinstance(m[key], list):
-            return f"`markers.{key}` is {kind_of(m[key])}, not a list"
-    if not all(isinstance(r, dict) for r in m.get("rows") or []):
-        return "a row of `markers` is not an object"
-    return None
-
-
-def kind_of(value: object) -> str:
-    """What a JSON value is, in the words a reader of the file would use."""
-    if value is None:
-        return "missing"
-    if isinstance(value, bool):
-        return "true or false"
-    return {dict: "an object", list: "a list", str: "text", int: "a number",
-            float: "a number"}.get(type(value), type(value).__name__)
-
+kind_of = files.kind_of
 
 def _holds(value: object, kind: type) -> bool:
     """`value` is a `kind`, or there is none. True and false are no count,
@@ -428,20 +353,15 @@ def collect_state(project: Path) -> dict | None:
     interrupted — the terminal closed, the agent's harness killed it — and
     that reads differently from a failure that said why.
 
-    A file that does not parse, is no object, or holds in a field `status`
-    reads what `collect` never writes there (`_as_collect_writes`) is
-    nothing worth saying.
+    A file that does not read (`files.read_collect`): one that does not
+    parse, is no object, or holds in a field `status` reads what `collect`
+    never writes there (#474), is nothing worth saying.
     """
     from .runner import PROGRESS_FILE
-    path = project / PROGRESS_FILE
-    if not path.exists():
+    got = files.read_collect(project / PROGRESS_FILE)
+    if isinstance(got, files.Refusal):
         return None
-    try:
-        p = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(p, dict) or not _as_collect_writes(p):
-        return None
+    p = dict(got)
     if p.get("finished") is None:
         pid = p.get("pid")
         alive = isinstance(pid, int) and _alive(pid)
@@ -449,55 +369,6 @@ def collect_state(project: Path) -> dict | None:
     else:
         p["status"] = "failed" if p.get("exit") else "done"
     return p
-
-
-# The largest process id `os.kill` takes: it hands the number on as a C int.
-_PID_MAX = 2**31 - 1
-
-
-def _as_collect_writes(p: dict) -> bool:
-    """Whether each field read off the progress file holds what `collect`
-    writes there, or nothing: a time for `started`, which it always writes,
-    and for `finished` once the run ended; a process id for `pid`; a whole
-    number for `done` and `exit`, and for `hunt`, the investigation the run
-    was started inside; text for `scenario`, `cooling` and `error`. Every
-    echolot that writes this file, 0.8.0 on, writes those: the times from
-    `time.time()`, the process id from `os.getpid()`.
-
-    Text in `started`, or in `finished` with `exit` set, ended `echolot` and
-    the start page of `echolot ui` in a traceback, and so did `Infinity`,
-    which Python's json reads and no clock writes. A pid past what `os.kill`
-    takes ended `status --next` as well, and 0 or -1 read as a collect still
-    running, since `os.kill` then asks the process's own group or every
-    process (#474). Such a file was edited by hand or written by another
-    tool under this name. It says nothing about a collect, and it reads as
-    a file that does not parse does: as none. The next `collect` writes it
-    anew.
-
-    `iterations` is not held to a type: `collect` writes the count it was
-    handed before it checks it, so `runner.iterations: five` leaves `"five"`
-    in a run that failed at once, and the failure's line says why.
-    """
-    pid = p.get("pid")
-    return (_moment(p.get("started"))
-            and (p.get("finished") is None or _moment(p["finished"]))
-            and (pid is None or (_holds(pid, int) and 0 < pid <= _PID_MAX))
-            and _holds(p.get("done"), int) and _holds(p.get("exit"), int)
-            and _holds(p.get("hunt"), int)
-            and all(_holds(p.get(k), str) for k in ("scenario", "cooling", "error")))
-
-
-def _moment(value: object) -> bool:
-    """A time as `time.time()` gives it: a number of seconds a float holds.
-    Not true or false, which Python takes for numbers, nor what json reads
-    and no clock writes: `Infinity` and `NaN`, and a whole number too long
-    to become a float, which `when.ago` subtracts from one."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
 
 
 def _alive(pid: int) -> bool:
