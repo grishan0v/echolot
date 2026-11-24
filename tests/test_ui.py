@@ -809,6 +809,38 @@ def test_an_app_with_debug_builds_only(project):
     check("red: a debug build is not what a user gets", tone == "red" and "only debuggable builds" in text, text)
 
 
+SUFFIXED = GRADLE.replace("debug { isDebuggable = true }", 'debug { isDebuggable = true; applicationIdSuffix = ".debug" }')
+
+
+def test_a_config_that_measures_the_debug_build(project):
+    page = start(project.app(gradle=SUFFIXED).config(LAUNCH.replace(f"package: {APP}", f"package: {APP}.debug"))
+                 .agents().doctor())
+    tone, text = lines(page)["The app"]
+    check("red: the package is the debug build's, and the page never says it is the benchmark one (#812)",
+          tone == "red" and "is the debug build" in text and "benchmark build." not in text, text)
+    check("with the package of the build to measure instead",
+          f"project.package in echolot.yml to {APP}, the benchmark build's" in text, text)
+    check("All settings names the same build", setting(page, "Build to measure").text.startswith("debug."),
+          setting(page, "Build to measure").text)
+
+
+def test_a_config_whose_package_no_build_makes(project):
+    tone, text = lines(start(project.app(gradle=SUFFIXED).config(LAUNCH.replace(f"package: {APP}", "package: com.example.old"))
+                             .agents().doctor()))["The app"]
+    check("red: what answers to that name is not this code (#812)",
+          tone == "red" and "is not a package this project's build script makes" in text
+          and f"{APP}.debug" in text and "can be measured" not in text, text)
+
+
+def test_a_package_whose_suffix_is_not_read(project):
+    unread = GRADLE.replace('create("benchmark") { initWith(getByName("release")) }',
+                            'create("benchmark") { initWith(getByName("release")); applicationIdSuffix = Suffixes.BENCH }')
+    tone, text = lines(start(project.app(gradle=unread).agents()))["The app"]
+    check("green, and the name may be another build's on the phone (#812)", tone == "green"
+          and "can be measured on the benchmark build." in text
+          and f"adb shell pm list packages {APP} lists" in text, text)
+
+
 def test_a_config_whose_code_is_elsewhere(project):
     page = start(project.config().agents().doctor().report())
     tone, text = lines(page)["The app"]
