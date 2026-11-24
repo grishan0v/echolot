@@ -2163,6 +2163,20 @@ def _close_hunt(project: Path, config: str, text: Any, source: str | None) -> in
     last = _open_hunt(project)
     if last is None:
         return 1
+    # Nor while a collect records a round for it: closed under it, the round
+    # was no part of the conclusion, and its `analyze --hunt` was refused
+    # once it finished, so its report was filed nowhere (#840). The same
+    # wait `hunt "<q>"` has (#717); a collect outside it, or for another
+    # investigation, does not hold this one.
+    run = state.collect_state(project) or {}
+    if run.get("status") == "running" and str(run.get("hunt")) == str(last.get("n")):
+        said = (f"a collect is {state.collect_line({'collect': run})} for #{last['n']} — "
+                f"wait for it to finish (`echolot` says how far it got) and analyze its "
+                f"round into #{last['n']}, then close it")
+        print(f"error: {said}", file=sys.stderr)
+        print(f"#{last['n']} stays open.", file=sys.stderr)
+        recorder.failed(said)
+        return 2
 
     verdict = reports = left = None
     if source is not None:

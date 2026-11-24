@@ -645,6 +645,39 @@ def test_hunt_waits_for_a_running_collect(tmp_path: Path, monkeypatch, finished:
           sorted((project / ".echolot" / "traces").glob("*.perfetto-trace")) == loose)
 
 
+@pytest.mark.parametrize("case", ["for-it", "for-it-verdict", "for-another", "outside", "finished"])
+def test_hunt_done_waits_for_a_collect_recording_for_it(tmp_path: Path, monkeypatch,
+                                                        case: str) -> None:
+    """#840: --done waits for the round a collect records for the open one."""
+    project = _project(tmp_path)
+    monkeypatch.chdir(project)
+    _run("hunt", "cold start slow")
+    now = time.time()
+    progress = {"scenario": "coldStart", "pid": os.getpid(), "iterations": 5, "done": 2,
+                "finished": None, "started": now - 30,
+                "hunt": {"for-another": 7, "outside": None}.get(case, 1)}
+    if case == "finished":
+        progress.update(finished=now, exit=0)
+    (project / runner.PROGRESS_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (project / runner.PROGRESS_FILE).write_text(json.dumps(progress), encoding="utf-8")
+    if case == "for-it-verdict":
+        (project / "verdict.json").write_text("{}", encoding="utf-8")
+        code, out, err = _run("hunt", "--done", "--verdict", "verdict.json")
+    else:
+        code, out, err = _run("hunt", "--done", "found it")
+    h = hunt_mod.load(project)
+    if case.startswith("for-it"):
+        check("refused, saying the collect records for it", code == 2
+              and "a collect is running: coldStart, 2/5 iterations" in err
+              and "for #1" in err and "wait for it to finish" in err
+              and "#1 stays open" in err, err)
+        check("nothing said as concluded", "concluded" not in out, out)
+        check("the investigation stays open", h["status"] == "open" and h["n"] == 1, h)
+        return
+    check("closed as before", code == 0 and h["status"] != "open"
+          and 'concluded: "cold start slow"' in out, (code, out, err))
+
+
 @pytest.mark.parametrize("case", ["baseline-after-close", "own-round-before-close",
                                   "outside-while-open", "inside-while-open",
                                   "unsaid-after-close"])
