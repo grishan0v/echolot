@@ -114,7 +114,7 @@ pipx install echolot
 ### Песочница без сети
 
 По умолчанию песочница Codex блокирует даже `localhost`, который нужен
-`perfetto` и `adb`. Выход — разрешить команду `echolot` вне песочницы, либо
+`trace_processor` и `adb`. Выход — разрешить команду `echolot` вне песочницы, либо
 записать правило `.codex/rules/echolot.rules` через `echolot init` (для
 доверенного проекта или глобально в `~/.codex/rules/`). В Claude Code при
 включённой песочнице добавьте `"echolot *"` в `sandbox.excludedCommands`.

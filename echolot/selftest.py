@@ -4254,6 +4254,98 @@ def _(report):
         raise AssertionError(f"trace_processor {pid} is still running")
 
 
+# A trace_processor_shell that takes its time to listen, then answers its
+# /status: the wait measured is the start's, not this machine's.
+_SLOW_SHELL = """
+import sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+time.sleep(0.2)
+port = int(sys.argv[sys.argv.index("--http-port") + 1])
+class Status(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *_):
+        pass
+HTTPServer(("127.0.0.1", port), Status).serve_forever()
+"""
+
+
+@check("trace_processor: a shell that is not listening yet is asked again in 10 ms, not a second later")
+def _(report):
+    """perfetto asked a starting shell for its /status, and when nothing
+    listened yet it slept a whole second before asking again. A shell listens
+    in 20–30 ms, so every session but a process's first waited a second for
+    it: 34 of `doctor`'s 40 s, and a second per trace of `analyze -j 1`
+    (#487). The shell is started by echolot now and asked every 10 ms.
+
+    Held on a stand-in that listens after 0.2 s: asked once a second, it is
+    asked twice; every 10 ms, a dozen times and more. The bar is three, for a
+    machine under load.
+    """
+    import shlex
+    import sys
+    from . import tpshell
+
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "slow.py"
+        script.write_text(_SLOW_SHELL, encoding="utf-8")
+        binary = Path(tmp) / "trace_processor_shell"
+        binary.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} "
+                          f"{shlex.quote(str(script))} \"$@\"\n", encoding="utf-8")
+        binary.chmod(0o755)
+        shell = tpshell.Shell(str(binary))
+        try:
+            shell.wait()
+        finally:
+            shell.close()
+    assert shell.asked >= 3, f"asked {shell.asked} times in {shell.waited:.2f} s"
+    assert shell.waited is not None and shell.waited < 5, shell.waited
+    assert shell.pid is None, "the shell is still held after close()"
+
+
+@check("trace_processor: sessions opened side by side each get a shell and a port of their own, and read their own trace")
+def _(report):
+    """`analyze` reads the traces of a set side by side (#488), each in a
+    session of its own, and each session's shell is started on a port the
+    kernel names and lets go of first. A shell whose port another took in
+    between does not stop: it listens on [::1] alone, and the session would
+    read the other one's trace. Within a run a port handed to a shell is not
+    handed out again until that shell listens on it (tpshell.py, #487).
+    """
+    import threading
+    from .tp import TraceSession
+
+    with tempfile.TemporaryDirectory() as tmp:
+        traces = _two_fixtures(tmp) * 3
+        alone = {}
+        for trace in traces[:2]:
+            with TraceSession(trace, _binary) as tp:
+                alone[trace] = tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"]
+        assert len(set(alone.values())) == 2, f"the two fixtures read alike: {alone}"
+
+        both = threading.Barrier(len(traces))
+        seen: dict[int, tuple] = {}
+
+        def read(i: int, trace: Path) -> None:
+            both.wait(30)
+            with TraceSession(trace, _binary) as tp:
+                seen[i] = (tp._tp.shell.port,
+                           tp.query("SELECT COUNT(*) AS n FROM sched")[0]["n"])
+
+        workers = [threading.Thread(target=read, args=(i, t))
+                   for i, t in enumerate(traces)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(60)
+    assert len(seen) == len(traces), f"{len(traces) - len(seen)} sessions did not open"
+    ports = [port for port, _ in seen.values()]
+    assert len(set(ports)) == len(ports), f"two shells on one port: {sorted(ports)}"
+    wrong = [traces[i].name for i, (_, n) in seen.items() if n != alone[traces[i]]]
+    assert not wrong, f"read another session's trace: {wrong}"
+
+
 @check("reflect: a signal that broke is not checked, and does not read as checked")
 def _(report):
     """`skip` and not `info`, for the reason `skip` exists at all.

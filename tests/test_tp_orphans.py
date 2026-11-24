@@ -1,6 +1,6 @@
 """However echolot ends, the trace_processor it started ends with it (#570).
 
-perfetto starts trace_processor_shell, a server with no idle limit, in a
+echolot starts trace_processor_shell, a server with no idle limit, in a
 session of its own and stops it only in `close()`. SIGTERM, SIGHUP, SIGKILL,
 and Ctrl-C while the shell started or read its trace each left one running,
 re-parented to init, for good.
@@ -117,14 +117,14 @@ def test_a_signal_ends_the_child_too(trace: Path, signame: str, to_group: bool) 
 
 
 def test_ctrl_c_while_the_shell_starts(trace: Path, monkeypatch) -> None:
-    """Inside perfetto's wait for the shell to answer: the child is a local
-    of that call, and the interrupt used to leave it running."""
-    from perfetto.trace_processor import shell
+    """Inside the wait for the shell to answer. While perfetto started it,
+    the child was a local of that call, and the interrupt left it running."""
+    from echolot import tpshell
 
     def interrupted(*_a, **_k):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(shell.request, "urlretrieve", interrupted)
+    monkeypatch.setattr(tpshell, "_answers", interrupted)
     before = set(_my_live_children())
     with pytest.raises(KeyboardInterrupt):
         TraceSession(trace)

@@ -854,7 +854,8 @@ def render_sql(text: str, params: dict[str, Any]) -> str:
 
 
 class TraceSession:
-    """A thin wrapper over perfetto.trace_processor.TraceProcessor.
+    """A thin wrapper over perfetto.trace_processor.TraceProcessor, connected
+    to a trace_processor_shell started here (tpshell.py).
 
     `extra` is packets for trace_processor to read after the trace, as if the
     trace had carried them — the build's R8 mapping (mapping.py). They are
@@ -872,7 +873,6 @@ class TraceSession:
         try:
             from perfetto.trace_processor import (
                 TraceProcessor,
-                TraceProcessorConfig,
                 TraceProcessorException,
             )
         except ImportError as e:
@@ -895,10 +895,10 @@ class TraceSession:
                 + ("  (a glob that matches nothing is passed through as "
                    "written — is the directory empty?)" if "*" in str(path)
                    else ""))
-        # Read before trace_processor starts. perfetto starts it first and
-        # stops it only on its own parse error: a trace this process may not
-        # read raised past that, out of the CLI as a traceback, and left the
-        # shell running with init as its parent.
+        # Read before trace_processor starts. perfetto started it first and
+        # stopped it only on its own parse error: a trace this process may
+        # not read raised past that, out of the CLI as a traceback, and left
+        # the shell running with init as its parent.
         try:
             with path.open("rb") as f:
                 f.read(1)
@@ -924,13 +924,13 @@ class TraceSession:
                 f"gone with it, and a report on the rest reads as whole. Pull "
                 f"or copy it again, or leave it out and run again.")
 
-        # The binary is settled before perfetto is asked to start it, and
-        # handed over by path: left to perfetto, the pin would be downloaded
-        # deep inside the start, with none of what resolve_binary_path says.
+        # The binary is settled before the shell starts: left to perfetto,
+        # the pin would be downloaded deep inside its start, with none of
+        # what resolve_binary_path says.
         binary = resolve_binary_path(binary)
         if not Path(binary).is_file():
             # A path named by `--tp-binary` or `toolchain.tp_binary` that is
-            # not there. perfetto refuses it with a bare Exception, which came
+            # not there. perfetto refused it with a bare Exception, which came
             # out of `names` and `analyze` as a traceback.
             raise ConfigError(
                 f"no trace_processor at {binary} — the path given for it "
@@ -938,13 +938,18 @@ class TraceSession:
                 f"a file")
         # From here to close(), SIGTERM and SIGHUP unwind through close()
         # rather than end the process with trace_processor still running;
-        # and whatever perfetto has started is stopped if the start fails,
-        # an interrupt included. See orphans.py (#570).
+        # and the shell is stopped if the start fails, an interrupt
+        # included. See orphans.py (#570).
+        #
+        # The shell is started here and asked every 10 ms whether it
+        # listens; perfetto's client is given its address. perfetto, left to
+        # start it, waited a second for a shell that listens in 30 ms
+        # (tpshell.py, #487).
         self._signals = orphans.hold_signals()
         try:
             self._tp = orphans.open_processor(
-                TraceProcessor, TraceProcessorConfig(bin_path=binary),
-                lambda started: _then(path, extra, started))
+                binary, lambda address: TraceProcessor(
+                    trace=_then(path, extra), remote=address))
         except TraceProcessorException as e:
             self.close()
             # A file that is there and is not a trace: a capture cut short, a
@@ -964,11 +969,11 @@ class TraceSession:
                 f"leave it out and run again.") from e
         except OSError as e:
             self.close()
-            # Before trace_processor starts, perfetto binds a socket to find
-            # a free port for it. An agent's sandbox with no network refuses
-            # that, and it came out of `analyze` as a PermissionError
-            # traceback and out of `doctor` as "Operation not permitted" —
-            # both read as a broken install (#190).
+            # Before trace_processor starts, a socket is bound to find a
+            # free port for it (tpshell._free_port). An agent's sandbox with
+            # no network refuses that, and it came out of `analyze` as a
+            # PermissionError traceback and out of `doctor` as "Operation not
+            # permitted" — both read as a broken install (#190).
             if not sandbox.refused(e):
                 raise
             raise sandbox.trace_processor_refused(e) from e
@@ -1096,16 +1101,12 @@ def _is_gzip(path: Path) -> bool:
         return False
 
 
-def _then(path: Path, extra: bytes | None, started: Any = None):
-    """The trace's bytes, then `extra`; `started` called before the first.
+def _then(path: Path, extra: bytes | None):
+    """The trace's bytes, then `extra`.
 
     A trace is a run of packets, so packets added at its end are read as part
     of it — which is how Perfetto's own tools attach a deobfuscation map.
-    `started` is the first moment trace_processor's pid can be read (see
-    orphans.open_processor).
     """
-    if started is not None:
-        started()
     with path.open("rb") as trace:
         while chunk := trace.read(32 << 20):
             yield chunk

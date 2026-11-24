@@ -488,7 +488,7 @@ without the plugin may work from them.
 
 Codex runs every command in a sandbox, and by default the sandbox has no
 network. On macOS that takes localhost with it. echolot needs localhost twice:
-perfetto binds a free port before it starts trace_processor, and `collect`
+it binds a free port before it starts trace_processor, and `collect`
 reaches the phone through the adb server on port 5037. So in Codex, as it
 comes, `doctor`, `analyze` and `collect` all fail.
 
