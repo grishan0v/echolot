@@ -30,6 +30,8 @@ def home(monkeypatch, tmp_path) -> Path:
     h.mkdir()
     monkeypatch.setattr(plugin, "_home", lambda: h)
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    # Run from Claude Code, the suite would read as Claude Code (#740).
+    monkeypatch.delenv("CLAUDECODE", raising=False)
     monkeypatch.setenv("ECHOLOT_NO_RECORD", "1")
     return h
 
@@ -137,6 +139,57 @@ def test_the_plugin_copied_into_cursor(project, home):
     copy = plugin.cursor_copy(home)
     write(copy / ".cursor-plugin" / "plugin.json", {"name": "echolot"})
     says_plugin(project)
+
+
+def _in_cursor(home: Path) -> None:
+    write(plugin.cursor_copy(home) / ".cursor-plugin" / "plugin.json", {"name": "echolot"})
+
+
+def _in_codex(home: Path) -> None:
+    (home / ".codex" / "plugins" / "cache" / "echolot" / "echolot" / "0.17.0").mkdir(
+        parents=True)
+
+
+@pytest.mark.parametrize("where, title", [(_in_cursor, "Cursor"), (_in_codex, "Codex")])
+def test_in_claude_code_with_the_plugin_elsewhere_next_is_plain_init(
+        project, home, monkeypatch, where, title):
+    """`--for plugin` keeps .claude/ out, and a plugin in Cursor or Codex
+    brings Claude Code nothing: it was left with no skills (#740)."""
+    where(home)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    rows = status(project)
+    check("`next` is plain init, for Claude Code",
+          rows.get("next", "").startswith("echolot init — installs the .claude/ layer for "
+                                          "Claude Code") and "--for plugin" not in rows["next"]
+          and title in rows["next"], rows)
+    check("and the layer line says where the plugin is",
+          rows.get("layer") == f"none installed here, and Claude Code has no echolot plugin "
+          f"(it is in {title}) (`echolot init`)", rows)
+    code = main(["init", "--into", str(project), "--no-input", "--no-doctor"])
+    check("following it installs the layer", code == 0 and layer.audit(project) is not None,
+          code)
+
+
+def test_in_claude_code_with_its_own_plugin_next_is_still_the_plugins_init(
+        project, home, monkeypatch):
+    """#598 stands: Claude Code's plugin brings the skills."""
+    write(home / ".claude" / "settings.json", {"enabledPlugins": {"echolot@echolot": True}})
+    _in_cursor(home)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    says_plugin(project)
+    check("and names no other command", "In Claude Code" not in status(project)["next"],
+          status(project))
+
+
+def test_with_the_plugin_elsewhere_and_no_agent_known_next_names_both(project, home):
+    _in_cursor(home)
+    rows = status(project)
+    check("the plugin's init first", rows.get("next", "").startswith(
+        "echolot init --for plugin — the echolot plugin is in Cursor"), rows)
+    check("and plain init for Claude Code beside it",
+          "In Claude Code, which has no echolot plugin: `echolot init`" in rows["next"], rows)
+    check("the layer line says Claude Code is not one of them",
+          "echolot plugin is in Cursor, not Claude Code" in rows.get("layer", ""), rows)
 
 
 def test_without_a_plugin_found_next_names_both(project, home):

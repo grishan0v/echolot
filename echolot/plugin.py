@@ -205,14 +205,34 @@ def for_project(project: Path, home: Path | None = None) -> list[str]:
     return found
 
 
+def running_in() -> str | None:
+    """The agent this echolot runs under, where it says so: `claude` in
+    Claude Code, which sets CLAUDECODE=1 in every command it runs. None
+    where nothing says: a terminal, Cursor, Codex."""
+    return "claude" if os.environ.get("CLAUDECODE") == "1" else None
+
+
+def claude_left_out(project: Path, home: Path | None = None) -> bool:
+    """Whether the plugin is found here, and not in Claude Code.
+
+    `init --for plugin` keeps `.claude/` out because the plugin brings the
+    skills. A plugin in Cursor or Codex brings Claude Code nothing, so there
+    it left Claude Code with no skills at all (#740).
+    """
+    found = for_project(project, home)
+    return bool(found) and "claude" not in found
+
+
 def init_for(project: Path, home: Path | None = None) -> str | None:
     """The `init` a project with the plugin runs, or None when no plugin is found.
 
     The plugin's door says it: `--for plugin`, and in Codex `--for
     plugin,codex`, which writes the rule that lets echolot out of the sandbox.
+    None in Claude Code when its plugin is not found and another agent's is:
+    plain `init` installs the skills Claude Code reads (#740).
     """
     found = for_project(project, home)
-    if not found:
+    if not found or "claude" not in found and running_in() == "claude":
         return None
     return "echolot init --for plugin" + (",codex" if "codex" in found else "")
 
