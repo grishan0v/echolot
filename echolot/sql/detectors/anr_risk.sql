@@ -142,7 +142,9 @@ SELECT
     -- with no slices at all is uninstrumented work, and saying so is more
     -- use than leaving the row nameless.
     COALESCE((
-        SELECT sl.name FROM _slice_win sl
+        -- Under the fold every detector groups by (#831).
+        SELECT COALESCE(f.family, sl.name) FROM _slice_win sl
+        LEFT JOIN _name_family f ON f.name = sl.name
         WHERE sl.is_main_thread = 1 AND sl.depth >= 1
           AND sl.ts_win < s.ts_to AND sl.ts_win + sl.dur_win > s.ts_from
         ORDER BY sl.dur_win DESC LIMIT 1

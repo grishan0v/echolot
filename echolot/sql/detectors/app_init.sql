@@ -183,7 +183,8 @@ candidate AS (
 SELECT CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
               OR c.name GLOB 'VerifyClass *'
             THEN 'class initialization (ART)'
-            ELSE c.name
+            -- Under the fold every detector groups by (#831).
+            ELSE COALESCE(f.family, c.name)
        END AS location,
        c.ts,
        c.dur,
@@ -198,6 +199,7 @@ SELECT CASE WHEN (c.name GLOB 'L*;' AND c.name NOT GLOB '* *')
             ELSE 'a section under bindApplication, after makeApplication'
        END AS detail
 FROM candidate c
+LEFT JOIN _name_family f ON f.name = c.name
 WHERE c.name NOT IN (SELECT name FROM _claimed_name);
 
 WITH named AS (

@@ -49,11 +49,16 @@
 -- The children come from `_child_sum` (window.sql), which reads an open child
 -- the way `_slice_win` reads an open slice.
 WITH self AS (
-    SELECT s.name, s.thread_name, MAX(s.dur, 0) AS dur,
+    -- The names under the fold every detector groups by (#831).
+    SELECT COALESCE(fn.family, s.name) AS name,
+           COALESCE(ft.family, s.thread_name) AS thread_name,
+           MAX(s.dur, 0) AS dur,
            MAX(s.dur, 0) - COALESCE(CASE WHEN s.unfinished = 1 THEN c.ns_win
                                          ELSE c.ns END, 0) AS self_ns
     FROM _slice_win s
     LEFT JOIN _child_sum c ON c.parent_id = s.slice_id
+    LEFT JOIN _name_family fn ON fn.name = s.name
+    LEFT JOIN _name_family ft ON ft.name = s.thread_name
     WHERE s.is_main_thread = 1
 )
 SELECT
@@ -86,7 +91,10 @@ LIMIT 20;
 WITH named AS MATERIALIZED (
     SELECT s.slice_id, s.ts, s.ts + s.dur AS te
     FROM _slice_win s
-    JOIN _rows r ON r.location = s.name AND r.detail = s.thread_name
+    LEFT JOIN _name_family fn ON fn.name = s.name
+    LEFT JOIN _name_family ft ON ft.name = s.thread_name
+    JOIN _rows r ON r.location = COALESCE(fn.family, s.name)
+                AND r.detail = COALESCE(ft.family, s.thread_name)
     CROSS JOIN _window w
     WHERE s.is_main_thread = 1 AND s.dur > 0
       AND NOT (s.ts <= w.ts_start AND s.ts + s.dur >= w.ts_end)
