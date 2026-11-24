@@ -718,9 +718,10 @@ tests. `values` holds one entry per repeat the row was **found in**, which is
 what `runs` counts: a `3/5` row has three. Absent when `analyze` ran on a
 single trace — there is nothing to spread.
 
-`resolves_ms` is the smallest move of this row a later `compare` could call
-real, against as many runs spread the same way; `resolves_pct` is the same
-against the median. A move smaller than that cannot hold, so it is the number
+`resolves_ms` is how far this row's strays reach against as many runs spread
+the same way; `resolves_pct` is the same against the median. A later
+`compare` calls a move real when it is larger than the row's floor (5 ms or a
+tenth of the row) and this together, so it is the number
 to read before promising anyone a comparison: the row above resolves nothing
 under 215 ms, because one run in five went slow. It shrinks with the square
 root of the runs, four times the runs for half the move. Absent below four
@@ -1052,7 +1053,8 @@ echolot compare old.json new.json    # or name them
                   "detail": "com.example.app" },
       "delta_ms": 871.3, "ratio": 73.01,
       "shift": { "ms": 871.3, "low_ms": 831.3, "high_ms": 911.3,
-                 "resolves_ms": 40.0, "runs_needed": null },
+                 "floor_ms": 5.0, "resolves_ms": 40.0, "runs_needed": null,
+                 "more_runs": null },
       "holds": true, "detail": "com.example.app" }
   ]
 }
@@ -1065,24 +1067,31 @@ dropped silently.
 
 **`holds`** answers whether the repeats support calling it a change. `shift`
 is the move with the range it lies in, 95% sure, worked out from every run
-after paired with every run before. `true` means the range is on one side of
-zero: the move survives a re-record, and the end nearer zero is the least it
-moved. `false` means the range runs through zero, so the runs disagree among
-themselves by more than the row moved: record another round before
-concluding. `null` in both means there was nothing to test: the row is on one
+after paired with every run before. `true` means the whole range is past
+`shift.floor_ms` — the floor that listed the row, 5 ms or a tenth of the
+before value — on one side: the move survives a re-record, and the end nearer
+zero is the least it moved. Not zero: a comparison judges about two hundred
+rows at once, and against zero one build set against itself held four of them
+a comparison; against the floor, half a row (`holds_against: "floor"` at the
+top says so). `false` means the range reaches into the floor or runs through
+zero, so the runs cannot tell the move from the floor or from nothing: record
+another round before concluding. `null` in both means there was nothing to test: the row is on one
 side only — every `appeared` and `vanished` row — or the row has too few runs
 to be 95% sure. The count is the row's own: a row found in `2/5` runs has two
 values, and gets `null` with no warning above it, while `before.runs` and
 `after.runs` say why. For the report as a whole four repeats a side are always
 enough, and below that the `single` or `few` warning says so.
 
-`shift.resolves_ms` is the smallest move of the medians these two sets could
-call real, in the direction this one went: `holds` is `true` exactly when the
-move is larger. When it is not, `shift.runs_needed` says about how many runs a
-side would settle a move this size, by the square root of the runs and
-assuming the next runs stray as much as these did. A handful more is another
-round; hundreds means more rounds will not settle it — say the move is below
-what this scenario can resolve, or bring the spread down first.
+`shift.resolves_ms` is how far these two sets' strays reach in the direction
+this move went: `holds` is `true` exactly when the medians moved further than
+the floor and that together. When they did not, `shift.runs_needed` says about
+how many runs a side would settle a move this size, by the square root of the
+runs and assuming the next runs stray as much as these did — an order of
+magnitude, not a count — and `shift.more_runs` the fewest more on each side,
+`{"before": 0, "after": 1}`: with fifteen runs before and four after, more
+after alone is often the cheaper round. `null` with `runs_needed` over a
+hundred means more rounds will not settle it — say the move is below what
+this scenario can resolve, or bring the spread down first.
 
 **`count` before and after** separates "called more often" from "became slower
 inside". `inflate` at 12 → 31 occurrences and `loadAll` growing 73× at one
