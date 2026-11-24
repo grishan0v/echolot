@@ -1201,13 +1201,15 @@ the repeats where it cleared the bar, the cell says so: `5/5, over the bar in
 1`, with `fired: "1/5"` in `report.json`. The median and spread cover every
 repeat it happened in.
 
-A row is matched across repeats by its name, with the numbers the runtime
-picks anew in each run left out: a lock owner's tid
-(`Lock contention on a monitor lock (owner tid: #)`), a frame's number
-(`Choreographer#doFrame #`), the number of a pool or unnamed thread
-(`Thread-#`, `pool-#-thread-#`). One wait seen in every run is then one row,
-`3/3`, and the names as each trace had them are kept in the row's `variants`
-in `report.json`. Line numbers in a lock note, and the project's own markers,
+A row is named with the numbers the runtime picks anew in each run left
+out: a lock owner's tid (`Lock contention on a monitor lock (owner tid: #)`),
+a frame's number (`Choreographer#doFrame #`), the number of a pool or
+unnamed thread (`Thread-#`, `pool-#-thread-#`). Every detector folds a name
+this one way before it adds anything up, so a pool's workers are one row
+with all of them counted in `Threads`, in a report of one recording as in a
+set, and one wait seen in every run is one row, `3/3`. The names the trace
+had under a folded one, up to twenty, are kept in the row's `variants` in
+`report.json`. Line numbers in a lock note, and the project's own markers,
 keep their digits.
 
 Two warnings come out of merging:

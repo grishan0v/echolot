@@ -247,11 +247,11 @@ def test_a_repeat_whose_sampler_lost_the_process_does_not_speak_for_the_row():
     lost = {"samples": 200, "with_stack": 0, "leaf": [], "ours": []}
     named = {"samples": 40, "with_stack": 40, "leaf": [
         {"frame": "okio.GzipSink.write", "samples": 40, "pct": 100.0}], "ours": []}
-    runs = [one([row("pool-3-thread-1", count=0, total_ms=1100.0,
+    runs = [one([row("pool-#-thread-#", count=0, total_ms=1100.0,
                      detail="99.0% · 200 samples, none with a stack", stacks=lost)]),
-            one([row("pool-3-thread-1", count=0, total_ms=900.0,
+            one([row("pool-#-thread-#", count=0, total_ms=900.0,
                      detail="98.0% · 40 stacks: GzipSink.write 100%", stacks=named)]),
-            one([row("pool-3-thread-1", count=0, total_ms=700.0,
+            one([row("pool-#-thread-#", count=0, total_ms=700.0,
                      detail="97.0% · 38 stacks: GzipSink.write 100%", stacks=named)])]
     got = merged_rows(runs)["pool-#-thread-#"]
     check("the worst of the repeats with stacks gives the evidence",
