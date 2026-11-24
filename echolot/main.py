@@ -1783,6 +1783,7 @@ def _setup_context(tp, cfg: Config, upid: int,
     _claim_names(tp, cfg.detector_overrides if mask_overrides is None
                  else mask_overrides)
     _own_composables(tp, cfg)
+    _name_families(tp, cfg)
     return bounds
 
 
@@ -1831,6 +1832,34 @@ def _own_composables(tp, cfg: Config) -> None:
     if own:
         rows = ", ".join(f"('{sql_value(n)}')" for n in own)
         tp.exec_script(f"INSERT INTO _compose_own (name) VALUES {rows};")
+
+
+def _name_families(tp, cfg: Config) -> None:
+    """`_name_family` — the main thread's slice names in the window whose
+    numbers the runtime chose, each with them folded to `#`.
+
+    `Choreographer#doFrame 55112` is the next frame's vsync id, and
+    `owner tid: 15427` the thread that held a lock this time: the same work
+    under a new name on every call. Grouped by the raw name, each frame was
+    a group of one, so `main_thread_outlier` never had five of a name to
+    take a median of and never flagged a frame (#728). The folding is the
+    merge's own, `report.runtime_name`, so a family here is the row the
+    merge makes of it; the project's markers keep their digits. Only the
+    names it changes are listed, and a name not listed is its own family.
+    """
+    from .mark import DEFAULT_PREFIX
+    keep = str(cfg.get("instrumentation.temp_prefix") or DEFAULT_PREFIX)
+    tp.exec_script("DROP TABLE IF EXISTS _name_family;")
+    tp.exec_script("CREATE TABLE _name_family (name TEXT PRIMARY KEY, family TEXT);")
+    names = [r["name"] for r in tp.query(
+        "SELECT DISTINCT name FROM _slice_win "
+        "WHERE is_main_thread = 1 AND name GLOB '*[0-9]*'")]
+    pairs = [(n, f) for n in names
+             if (f := report_mod.runtime_name(n, keep=keep)) != n]
+    for at in range(0, len(pairs), 500):
+        rows = ", ".join(f"('{sql_value(n)}', '{sql_value(f)}')"
+                         for n, f in pairs[at:at + 500])
+        tp.exec_script(f"INSERT INTO _name_family (name, family) VALUES {rows};")
 
 
 def _claim_names(tp, overrides: dict) -> None:
