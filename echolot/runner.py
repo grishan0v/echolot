@@ -1636,7 +1636,9 @@ def collect(package: str, out_dir: Path, iterations: int,
     # Nothing is said here: a scale of 0 is how UI tests run on purpose, and
     # "Don't keep activities" changes little in a cold start. The report says
     # it where it matters.
-    device_settings = recording.settings(dev, _run)
+    # The same read says whether the build on the phone is debuggable, which
+    # the trace does not say (#925).
+    device_settings = recording.settings(dev, _run, package)
 
     # Every recording, in the order made: the set's, and those set aside as
     # not cold (`aside`), which the caller counts and leaves out.

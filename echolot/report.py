@@ -393,6 +393,7 @@ def _merge_environment(reports: list[dict[str, Any]]) -> dict[str, Any]:
     out["sampling"] = _merge_sampling([e.get("sampling") for e in envs])
     out["compose_names"] = _merge_compose_names([e.get("compose_names") for e in envs])
     out["compile"] = _merge_compile([e.get("compile") for e in envs])
+    out["debuggable"] = _merge_debuggable([e.get("debuggable") for e in envs])
     out["missing"] = sorted(k for k in ("cpu", "thermal", "memory")
                             if out[k] is None)
     return out
@@ -492,6 +493,15 @@ def _merge_compile(blocks: list[dict[str, Any] | None]) -> dict[str, Any] | None
                      "main_ms": mid("verified", "main_ms")},
         "runs": f"{len(known)}/{len(blocks)}",
     }
+
+
+def _merge_debuggable(values: list[Any]) -> dict[str, int] | None:
+    """How many repeats ran a debuggable build, of those that said:
+    `{"repeats": k, "of": n}`; None when none of them said (#925)."""
+    said = [v for v in values if isinstance(v, bool)]
+    if not said:
+        return None
+    return {"repeats": sum(said), "of": len(said)}
 
 
 def short_runs(runs: Any) -> tuple[int, int] | None:
@@ -1615,7 +1625,7 @@ def _environment_lines(env: dict[str, Any], unbuilt: bool = False) -> list[str]:
         bits.append(f"{memory['available_mb_min']:.0f} MB free at the low point")
     if bits:
         out.append("Device: " + ", ".join(bits))
-    out.extend(_compile_lines(env.get("compile")))
+    out.extend(_compile_lines(env.get("compile"), env.get("debuggable")))
 
     if thermal and thermal.get("throttled"):
         out.append(_throttled_line(thermal, env.get("cooldown")))
@@ -1662,16 +1672,32 @@ UNCOMPILED_FILTERS = frozenset({
 })
 
 
-def _compile_lines(c: dict[str, Any] | None) -> list[str]:
+def _compile_lines(c: dict[str, Any] | None, debuggable: Any = None) -> list[str]:
     """How the app was compiled, under the clock: the other half of the machine it ran on.
 
     One line while the app ran compiled. A warning when it ran compiled from
     nothing, since that is not how a user who installed it gets it, and one
     when the repeats disagree, since the set is then two measurements.
+
+    `debuggable` is the merged `environment.debuggable`: a debuggable build
+    is warned of first, and its compile filter is not blamed, since nothing
+    compiles it ahead of time whatever its profile (#925).
     """
-    if not c:
-        return []
+    # One recording's is its own `true`/`false`; a set's is merged.
+    debug = (debuggable if isinstance(debuggable, dict)
+             else _merge_debuggable([debuggable]) or {})
     out: list[str] = []
+    if debug.get("repeats"):
+        k, n = debug["repeats"], debug.get("of") or debug["repeats"]
+        out.append(
+            "> ⚠️ This is a debuggable build"
+            + (f" in {k} of {n} repeats" if k < n else "")
+            + ": ART runs it interpreted and with the JIT alone, whatever its "
+              "profile, so these numbers are not what users get, and a baseline "
+              "profile cannot change them. Measure a release-like build: one that "
+              "is not debuggable, and is profileable, as a `benchmark` build type is.")
+    if not c:
+        return out
     filters = (c.get("filter") or "").split(" and ") if c.get("filter") else []
     if filters:
         bit = f"Compiled: **{c['filter']}**"
@@ -1702,7 +1728,9 @@ def _compile_lines(c: dict[str, Any] | None) -> list[str]:
               "below mix two measurements. Record the set again on one build, "
               "installed one way.")
     bare = [f for f in filters if f in UNCOMPILED_FILTERS]
-    if bare:
+    # A debuggable build in every repeat is not compiled whatever its profile:
+    # the advice to record one compiled from it cannot be followed (#925).
+    if bare and not (debug.get("repeats") and debug["repeats"] == debug.get("of")):
         some = len(bare) < len(filters)
         out.append(
             f"> ⚠️ The app ran with `filter={'`, `filter='.join(bare)}`"

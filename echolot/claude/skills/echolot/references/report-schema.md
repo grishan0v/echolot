@@ -47,6 +47,7 @@ produce. The keys only a merged report has are named under the block.
                                 "jit": { "methods": 7, "ms": 97.0 },
                                 "verified": { "classes": 9, "ms": 68.0, "main_ms": 5.3 },
                                 "runs": "5/5" },
+                   "debuggable": { "repeats": 0, "of": 5 },
                    "missing": [] },
   "recording": { "runner": "launch", "reset_policy": "force-stop",
                  "app_at_stop": "running",

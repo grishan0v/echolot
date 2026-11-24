@@ -1096,6 +1096,16 @@ numbers are slower than what most users see. On the SM-A515F a large app's
 launch took ~1.4 s on its benchmark build and ~8.8 s on a debuggable build of
 it that nothing had compiled. `compare` warns when two rounds differ in it.
 
+A debuggable build is said before that line, and its filter is not blamed:
+ART runs a debuggable app interpreted and with the JIT alone whatever its
+profile, so the advice to record a build compiled from its baseline profile
+cannot help it (#925). The trace says so when it recorded the package list
+(`android.packages_list`, which a Macrobenchmark's config holds); otherwise
+`collect` reads the package's flags once a round, in the same call that reads
+the device's settings, and keeps `debuggable` beside each trace.
+`environment.debuggable` is `true` or `false` for one recording, and
+`{"repeats": k, "of": n}` for a set, n counting the repeats that said.
+
 ## The whole trace as the window
 
 A recording made outside the config's scenarios — a scroll recorded by hand,

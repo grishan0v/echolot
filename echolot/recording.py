@@ -222,8 +222,10 @@ _FROM_COLLECT = tuple(c.key for c in CONDITIONS if c.source == "collect")
 # the repeat started and what `collect` said under it (#619, see
 # `runner.launch_record`); `battery_level`, the charge in percent before the
 # repeat (#524); `scenario`, the scenario of the config the repeat was
-# recorded as, which `analyze` measures it as when not told otherwise (#815).
-_ALSO = ("cooldown", "markers_in_build", "launch", "battery_level", "scenario")
+# recorded as, which `analyze` measures it as when not told otherwise (#815);
+# `debuggable`, whether the build on the phone was, from `dumpsys package`
+# once a round (#925).
+_ALSO = ("cooldown", "markers_in_build", "launch", "battery_level", "scenario", "debuggable")
 
 # What a detector's `@needs` source is fed by in the recording's config, so
 # that a difference there names the detectors that read it. Composable names
@@ -312,16 +314,45 @@ _AM_HEADER = "RUNNING PROCESSES"
 _AM_ALWAYS_FINISH = "mAlwaysFinishActivities=true"
 
 
-def settings(device: str, run: Callable[..., str]) -> dict[str, Any]:
+def settings(device: str, run: Callable[..., str],
+             package: str | None = None) -> dict[str, Any]:
     """The device's animation scales and "Don't keep activities", as
     `collect` keeps them beside each trace of a round. A device that does
     not answer leaves both unknown and the collect going: a repeat is not
-    worth losing for a sentence in the report."""
+    worth losing for a sentence in the report.
+
+    With `package`, the same call reads the package's flags, and
+    `debuggable` is kept too when they say (#925): ART runs a debuggable
+    app interpreted and with the JIT alone, whatever its profile, and the
+    trace does not say so unless it recorded the package list. A large
+    app's debug build took about 11 s to its first frame, and its report
+    blamed the compile filter instead.
+    """
+    script = SETTINGS_SCRIPT
+    if package:
+        script += f"; dumpsys package {package} | grep -e 'lags=\\['; true"
     try:
-        text = run(["adb", "-s", device, "shell", SETTINGS_SCRIPT], timeout=30)
+        text = run(["adb", "-s", device, "shell", script], timeout=30)
     except Exception:  # whatever adb did, the recording does not depend on it
         text = ""
-    return parse_settings(text)
+    out = parse_settings(text)
+    debuggable = parse_debuggable(text) if package else None
+    if debuggable is not None:
+        out["debuggable"] = debuggable
+    return out
+
+
+# `dumpsys package <pkg>`: the package's flags, one line of words in
+# brackets, `flags=[ DEBUGGABLE HAS_CODE … ]` (`pkgFlags=` before Android 9).
+# `privateFlags=[…]` is another line, and not this one.
+_FLAGS = re.compile(r"^\s*(?:pkgF|f)lags=\[([^\]]*)\]", re.MULTILINE)
+
+
+def parse_debuggable(text: str) -> bool | None:
+    """`DEBUGGABLE` among the words of the first `flags=[…]` line, or None
+    when there is no such line."""
+    m = _FLAGS.search(str(text or ""))
+    return None if m is None else "DEBUGGABLE" in m.group(1).split()
 
 
 def parse_settings(text: str) -> dict[str, Any]:

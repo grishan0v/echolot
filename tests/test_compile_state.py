@@ -99,6 +99,50 @@ def test_a_process_already_running_says_so() -> None:
     check("nothing recorded, nothing said", report._compile_lines(None) == [])
 
 
+# --- a debuggable build (#925) ---------------------------------------------------
+
+def test_a_debuggable_build_is_said_and_not_sent_to_a_baseline_profile() -> None:
+    every = report._merge_debuggable([True, True, None])
+    check("counted over the repeats that said", every == {"repeats": 2, "of": 2}, every)
+    lines = report._compile_lines(NOTHING, every)
+    check("said first, as a debuggable build",
+          lines[0].startswith("> ⚠️ This is a debuggable build: ART runs it interpreted"), lines)
+    check("and no advice to record a build compiled from its profile",
+          not any("baseline profile;" in x or "Record again on a build compiled" in x
+                  for x in lines), lines)
+    some = report._compile_lines(NOTHING, report._merge_debuggable([True, False, False]))
+    check("some repeats: how many, and the filter's advice kept for the rest",
+          some[0].startswith("> ⚠️ This is a debuggable build in 1 of 3 repeats")
+          and any("Record again on a build compiled" in x for x in some), some)
+    check("said without a compile state too",
+          report._compile_lines(None, every)[0].startswith("> ⚠️ This is a debuggable build"))
+    check("a build that is not: nothing more",
+          report._compile_lines(COMPILED, report._merge_debuggable([False]))
+          == report._compile_lines(COMPILED))
+    check("nobody said: nothing", report._merge_debuggable([None, None]) is None)
+
+
+def test_collect_reads_the_flags_in_the_settings_call() -> None:
+    from echolot import recording
+    asked = []
+
+    def run(argv, timeout):
+        asked.append(argv[-1])
+        return ("animator_duration_scale=1.0\n"
+                "    flags=[ DEBUGGABLE HAS_CODE ALLOW_CLEAR_USER_DATA ALLOW_BACKUP ]\n"
+                "    privateFlags=[ PRIVATE_FLAG_ACTIVITIES_RESIZE_MODE_RESIZEABLE ]\n")
+    got = recording.settings("R58M123ABC", run, "com.example.app")
+    check("one call, the package's flags in it", len(asked) == 1
+          and "dumpsys package com.example.app" in asked[0], asked)
+    check("debuggable kept", got.get("debuggable") is True, got)
+    check("pkgFlags of an older Android",
+          recording.parse_debuggable("  pkgFlags=[ HAS_CODE ALLOW_BACKUP ]") is False)
+    check("no flags line: unknown", recording.parse_debuggable("privateFlags=[ DEBUGGABLE ]")
+          is None)
+    check("and without a package, nothing asked of it",
+          "debuggable" not in recording.settings("R58M123ABC", run))
+
+
 # --- compare ------------------------------------------------------------------------
 
 def rep(block) -> dict:
@@ -169,3 +213,28 @@ def test_compare_warns_about_a_side_whose_repeats_disagree() -> None:
     warned = compare._compile_moved(rep(mixed), rep(mixed))
     check("each mixed side, by name", [w["text"].split("'")[0] for w in warned] == [
         "The before side", "The after side"], warned)
+
+
+def test_analyze_says_a_debuggable_build_collect_kept(tmp_path: Path) -> None:
+    """The trace does not say it; the account `collect` kept beside it does."""
+    import contextlib
+    import io
+    import json
+
+    from echolot import fixture, recorder, recording
+    from echolot.main import main
+    trace = tmp_path / "coldStart_iter000.perfetto-trace"
+    trace.write_bytes(fixture.build())
+    recording.write(trace, {"runner": "launch", "debuggable": True})
+    config = tmp_path / "echolot.yml"
+    config.write_text("project:\n  package: com.example.app\n  process: com.example.app\n",
+                      encoding="utf-8")
+    out, err = io.StringIO(), io.StringIO()
+    with recorder.isolated(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(["analyze", str(trace), "-c", str(config), "-o", str(tmp_path / "out")])
+    check("exit 0", code == 0, err.getvalue()[-400:])
+    rep = json.loads((tmp_path / "out/report.json").read_text(encoding="utf-8"))
+    check("in the json", rep["environment"]["debuggable"] is True,
+          rep["environment"].get("debuggable"))
+    md = (tmp_path / "out/report.md").read_text(encoding="utf-8")
+    check("and in the header", "This is a debuggable build" in md, md[:2000])
