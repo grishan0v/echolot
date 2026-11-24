@@ -2015,56 +2015,16 @@ def _hunt_config(project: Path, config: str) -> Config | None:
     return Config.load(path)
 
 
-def _project_and_config(args) -> tuple[Path, str]:
-    """The project `-c` names and the config's own path, for `hunt` and `status`.
-
-    The config's directory when `-c` names a file that is there, as for
-    `collect`, `analyze` and the run log; the working directory otherwise.
-    Read from the working directory, `hunt -c ../echolot.yml` opened a second
-    investigation in a subdirectory and `status -c` showed the project's
-    config beside a build directory's empty state.
-
-    With no `-c` and no `echolot.yml` here, the nearest folder above that
-    holds one is the project, the way git finds `.git`: `hunt "<q>"` from
-    `app/` opened a second investigation in `app/.echolot/`, beside the
-    project's own one that stayed open (#721). Found nowhere, the working
-    directory is a project not set up yet.
-    """
-    config = getattr(args, "config", "echolot.yml")
-    if Path(config).is_file():
-        path = Path(config).resolve()
-        return path.parent, str(path)
-    if config == "echolot.yml":
-        above = _config_above(Path.cwd())
-        if above is not None:
-            return above.parent, str(above)
-    return Path.cwd(), config
-
-
-def _config_above(here: Path) -> Path | None:
-    """The `echolot.yml` of the nearest folder above `here` that holds one."""
-    try:
-        start = here.resolve()
-    except OSError:
-        return None
-    for folder in start.parents:
-        found = folder / "echolot.yml"
-        with contextlib.suppress(OSError):
-            if found.is_file():
-                return found
-    return None
-
-
 def _named_config_missing(args) -> bool:
     """`-c` names a file that is not there: said as `analyze` says it, and the
     command stops. Shown the working directory instead, `ui -c ../nope.yml`
     served another project's start page, and `status` said "no echolot.yml
     here" about a folder nobody asked about (#556). The default name, not
     there, is a project not set up yet, and is not this."""
-    config = getattr(args, "config", "echolot.yml")
-    if config == "echolot.yml" or Path(config).is_file():
+    found = _where(args)
+    if not found.named or found.set_up:
         return False
-    said = f"config not found: {Path(config).resolve()}"
+    said = f"config not found: {found.config}"
     print(f"error: {said}", file=sys.stderr)
     recorder.failed(said)
     return True
@@ -2364,7 +2324,7 @@ def cmd_hunt(args) -> int:
     of traces aside, says what the last one left behind — and names the half
     it cannot: the loop needs an agent. `/echolot hunt <q>` does both.
     """
-    project, config = _project_and_config(args)
+    project, config = _where(args).folder, str(_where(args).config)
     question = " ".join(args.question) if args.question else None
     conclusion = args.done
 
@@ -2424,7 +2384,7 @@ def cmd_hunt(args) -> int:
             print("Nothing was opened and no traces were moved aside.", file=sys.stderr)
             return 2
         if not (project / config).is_file():
-            said = (f"no echolot.yml in {Path.cwd()} or in a folder above it — run "
+            said = (f"no echolot.yml in {_where(args).here} or in a folder above it — run "
                     f"`echolot hunt` from the project's folder, or name its config "
                     f"with -c; a project not set up yet: `echolot init`, then "
                     f"`echolot` says the next step")
@@ -2574,7 +2534,7 @@ def cmd_hunt(args) -> int:
         # Inside the investigation just opened: a line without `--hunt` runs
         # outside it, and files nothing for `compare` to read (#498). With
         # the config given and from where this ran (#719).
-        shown = state.shown_from(project, config, Path.cwd())
+        shown = state.shown_from(project, config, _where(args).here)
         print(f"By hand: {state.collect_line_for(named, runner, h['n'], shown=shown)}, then "
               + state.analyze_line(files, named, h["n"], shown=shown), file=sys.stderr)
         return 0
@@ -2619,9 +2579,9 @@ def cmd_status(args) -> int:
     """
     if _named_config_missing(args):
         return 2
-    project, config = _project_and_config(args)
+    project, config = _where(args).folder, str(_where(args).config)
     # The lines to run by hand are run from here, where this was run (#719).
-    st = state.project_state(project, config, here=Path.cwd())
+    st = state.project_state(project, config, here=_where(args).here)
     if getattr(args, "next", False):
         # One word for the skill to switch on; the prose is for people.
         print(state.next_kind(st))
@@ -2646,7 +2606,8 @@ def cmd_status(args) -> int:
         lines.append(("cursor", st["cursor_line"]))
     cfg = st["config"]
     if cfg is None:
-        lines.append(("config", "none — no echolot.yml here"))
+        lines.append(("config", "none — no echolot.yml here or in a folder above it, "
+                                "up to the top of the checkout"))
     elif cfg.get("error"):
         lines.append(("config", f"{Path(cfg['path']).name} does not load: {cfg['error']}"))
     else:
@@ -2658,7 +2619,9 @@ def cmd_status(args) -> int:
         if cfg.get("local"):
             bits.append("local.yml applied")
         # The file given: `-c perf.yml` read as a project's echolot.yml (#719).
-        lines.append(("config", f"{Path(cfg['path']).name} · " + " · ".join(bits)))
+        # And where it was found: from `app/`, the project's one above (#830).
+        lines.append(("config", f"{_where(args).shown(Path(cfg['path']))} · "
+                      + " · ".join(bits)))
         lines += [("anchor", f"! {said}") for said in _anchor_lines(loaded, st)]
     recap = state.next_kind(st) == "resume-or-new"
     lines.append(("hunt", hunt_mod.summary_line(st.get("hunt"), st)))
@@ -4998,7 +4961,7 @@ def cmd_ui(args) -> int:
 
     if _named_config_missing(args):
         return 2
-    project, config = _project_and_config(args)
+    project, config = _where(args).folder, str(_where(args).config)
     return ui.serve(project, config, port=args.port, open_browser=not args.no_open,
                     tp_binary=getattr(args, "tp_binary", None))
 

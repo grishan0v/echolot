@@ -152,7 +152,7 @@ def test_the_config_is_shown_as_typed_from_here(tree: Path) -> None:
     got = project_mod.resolve(None, here=tree / "proj")
     check("in the project: its name", got.shown() == "echolot.yml", got.shown())
     got = project_mod.resolve(None, here=tree / "proj/app")
-    check("below it: absolute", got.shown() == str((tree / "proj/echolot.yml").resolve()))
+    check("below it: the way up", got.shown() == "../echolot.yml", got.shown())
 
 
 @pytest.fixture
@@ -209,3 +209,24 @@ def test_reflect_from_a_subfolder_reads_the_project_s_log(logged: Path, monkeypa
     check("the project's sitting is listed, with the one run in it",
           code == 0 and len(rows) == 1 and rows[0][1] == "recorder" and rows[0][5] == "1", out)
     check("and nothing under app/", not (logged / "proj/app/.echolot").exists())
+
+
+def test_status_says_which_project_and_config_it_found(tree: Path, monkeypatch,
+                                                       capsys) -> None:
+    """`echolot` from `app/` names the project and the config above it, so a
+    run from a subfolder shows which project it works on."""
+    monkeypatch.chdir(tree / "proj/app")
+    with recorder.isolated():
+        main([])
+    out = capsys.readouterr().out
+    head, config = out.splitlines()[0], next(
+        line for line in out.splitlines() if line.startswith("config"))
+    check("the project's folder in the first line", head.endswith(str((tree / "proj").resolve())),
+          head)
+    check("and its config, as typed from here", config.split()[1] == "../echolot.yml", config)
+    monkeypatch.chdir(tree / "above/nested/sub")
+    with recorder.isolated():
+        main([])
+    out = capsys.readouterr().out
+    check("a config above the checkout is not this project's",
+          "none — no echolot.yml here or in a folder above it" in out, out)
