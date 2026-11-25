@@ -40,6 +40,7 @@ from . import scan_cache
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
 from .config import PACKAGE
 from .pages import report_page
+from .words import counted_in_words as _counted
 
 GREEN, RED, GREY = "green", "red", "grey"
 # A tone is never colour alone: what it means, in words.
@@ -567,10 +568,6 @@ def _ago(epoch: float | None) -> str | None:
     """`when.ago` in words: "96 days ago". None for a time that is not known."""
     said = when.ago(epoch)
     return f"{_spelled(said[:-4])} ago" if said.endswith(" ago") else None
-
-
-def _counted(n: int, one: str, many: str) -> str:
-    return f"one {one}" if n == 1 else f"{n} {many}"
 
 
 def _times(n: int) -> str:

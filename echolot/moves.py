@@ -56,7 +56,6 @@ for a terminal: `echolot compare --plain`.
 
 from __future__ import annotations
 
-import copy
 import shutil
 import textwrap
 from statistics import median
@@ -65,6 +64,9 @@ from typing import Any
 from . import compare, plain, stats
 from . import launch as launch_mod
 from .report import metric_of
+from .files import runs as _runs
+from .plain import with_reading as _read
+from .words import counted as _counted
 
 BETTER, WORSE, NO_CHANGE, GONE, NEW, FINE_BOTH, NOT_CHECKED = (
     "better", "worse", "no_change", "gone", "new", "fine_both", "not_checked")
@@ -155,21 +157,6 @@ _UNLIKE = {
 
 # ---------------------------------------------------------------------------
 # reading the two reports
-
-
-def _read(report: dict[str, Any]) -> dict[str, Any]:
-    """The report with its plain reading. One written before those keys gets
-    them worked out on a copy, as `plain.render` does."""
-    if plain.is_read(report):
-        return report
-    return plain.annotate(copy.deepcopy(report))
-
-
-def _runs(report: dict[str, Any]) -> int:
-    n = report.get("runs")
-    if isinstance(n, int) and not isinstance(n, bool) and n > 0:
-        return n
-    return len(report.get("traces") or []) or 1
 
 
 def _number(value: Any) -> float | None:
@@ -767,7 +754,7 @@ def _one_side_runs(rows: list[dict[str, Any]], side: str,
     every launch after, or all but one," with each name that missed one
     said `in 4 of 5`. A row with no `runs` is of a report from one run, in
     every one of them."""
-    seen = [plain._seen(r) for r in rows]
+    seen = [plain.found_in(r) for r in rows]
     short = [s for s in seen if s is not None and s[0] < s[1]]
     if not short:
         return f"In every {ctx.noun} {side}", {}
@@ -802,10 +789,6 @@ def _moved(b: dict[str, Any], a: dict[str, Any], ctx: _Ctx) -> tuple[bool, str]:
     if not lower.get("high_ms", 0.0) < higher.get("low_ms", 0.0):
         return False, "overlap"
     return True, ""
-
-
-def _counted(n: int, one: str, many: str) -> str:
-    return f"{n} {one if n == 1 else many}"
 
 
 def _findings(rows: list[dict[str, Any]]) -> dict[str, int]:

@@ -49,8 +49,12 @@ reference measured the same scenario as the rows it is set against.
 from __future__ import annotations
 
 import json
-import math
 from typing import Any
+
+from .words import as_dict as _dict
+from .words import as_list as _list
+from .words import figure as _num
+from .words import is_ms as _ms
 
 CONFIDENCE = ("high", "medium", "low")
 
@@ -92,11 +96,6 @@ def _text(value: Any) -> bool:
 
 def _int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
-
-
-def _ms(value: Any) -> bool:
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(value) and value >= 0)
 
 
 def _unknown(obj: dict[str, Any], allowed: tuple[str, ...], where: str,
@@ -181,10 +180,6 @@ class _Index:
         if n not in self._cache:
             self._cache[n] = _rows_of(self.reports[n] or {})
         return self._cache[n]
-
-
-def _list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
 
 
 def _locations(rows: Any) -> list[str]:
@@ -542,10 +537,6 @@ def _indented(text: Any, pad: str) -> str:
     return ("\n" + pad).join(str(text).strip().splitlines()) or ""
 
 
-def _num(value: float) -> str:
-    return f"{value:g}"
-
-
 def _ms_text(value: Any, about: str = "") -> str | None:
     """A figure in milliseconds as text; `about` stands before a single number."""
     if _ms(value):
@@ -582,10 +573,6 @@ def _cite_text(entry: Any) -> str:
         bits.append(str(entry["detector"]))
     bits.append(str(entry.get("location")))
     return " · ".join(bits)
-
-
-def _dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
 
 
 def _count(value: Any) -> int:

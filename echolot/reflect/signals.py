@@ -49,6 +49,7 @@ from .facts import (
 )
 from .facts import SEGMENT as _SEGMENT
 from .facts import expand_vars as _expand_vars
+from .facts import short_path as _short
 from .model import BRIEFS, MAIN, TOOLS, Session, strip_heredocs, ts_to_epoch
 
 
@@ -104,12 +105,6 @@ _ENV_KINDS = [
 ]
 _DETECTOR_VALUE = re.compile(r"\b((?:min|max)_[a-z_]+)\s*:\s*([^\s#,}\]]+)")
 _YAML_REDIRECT = re.compile(r">>?\s*[\"']?([^\s\"'<>|;&]+\.ya?ml)")
-
-
-def _short(path: str | None, keep: int = 3) -> str:
-    if not path:
-        return ""
-    return "/".join(Path(path).parts[-keep:])
 
 
 def _t(ts: str) -> str:

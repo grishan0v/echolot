@@ -58,6 +58,7 @@ from typing import Any, Callable
 from . import launch as launch_mod
 from .report import metric_of
 from .tp import load_detectors
+from .words import counted as _count
 
 NEEDS_ATTENTION = "needs_attention"
 WORTH_A_LOOK = "worth_a_look"
@@ -360,7 +361,7 @@ def _value(row: dict[str, Any]) -> float:
         return 0.0
 
 
-def _seen(row: dict[str, Any]) -> tuple[int, int] | None:
+def found_in(row: dict[str, Any]) -> tuple[int, int] | None:
     """`(k, n)` from a row's `runs` — found in k of n recordings. None for a row
     of a report from one recording, which has none."""
     try:
@@ -371,12 +372,12 @@ def _seen(row: dict[str, Any]) -> tuple[int, int] | None:
 
 
 def _every_run(row: dict[str, Any]) -> bool:
-    seen = _seen(row)
+    seen = found_in(row)
     return seen is None or seen[0] == seen[1]
 
 
 def _runs(row: dict[str, Any], ctx: _Ctx) -> str:
-    seen = _seen(row)
+    seen = found_in(row)
     if seen is None or seen[1] <= 1:
         return ""
     k, n = seen
@@ -428,10 +429,6 @@ def _share(ms: float, ctx: _Ctx, lead: str = "That is") -> str:
 
 def _name(text: Any) -> str:
     return "`" + str(text).replace("`", "'") + "`"
-
-
-def _count(n: int, one: str, many: str) -> str:
-    return f"{n} {one if n == 1 else many}"
 
 
 # ---------------------------------------------------------------------------
@@ -761,7 +758,7 @@ def _f_init(rows, ctx):
     v = _value(top)
     # Every row is a piece of one stretch, and the stretch took long in the
     # launches where any piece was reported: as many as the most-seen piece.
-    seen = max(rows, key=lambda r: (_seen(r) or (1, 1))[0])
+    seen = max(rows, key=lambda r: (found_in(r) or (1, 1))[0])
     out = _sentence("The setup before the first screen was created took long",
                     _runs(seen, ctx))
     which = "Its only piece" if len(rows) == 1 else f"The largest of its {len(rows)} pieces"
@@ -1042,6 +1039,16 @@ def annotate(report: dict[str, Any]) -> dict[str, Any]:
     return report
 
 
+def with_reading(report: dict[str, Any]) -> dict[str, Any]:
+    """The report with its plain reading. One written before those keys gets
+    them worked out on a copy: the file is not touched. `render`, the report
+    page and `moves` read a report through this, so a report written by an
+    older version reads the same in each (#994)."""
+    if is_read(report):
+        return report
+    return annotate(copy.deepcopy(report))
+
+
 # ---------------------------------------------------------------------------
 # for a terminal
 
@@ -1056,10 +1063,8 @@ def render(report: dict[str, Any], width: int | None = None) -> str:
     """The report as a list a person reads: the verdict, what needs a look
     first, and the rest as a count. A report that already carries the reading
     is read as it says; an older one gets it worked out here."""
+    report = with_reading(report)
     dets = report.get("detectors") or []
-    if not is_read(report):
-        report = annotate(copy.deepcopy(report))
-        dets = report["detectors"]
     width = width or max(60, min(100, shutil.get_terminal_size((100, 24)).columns))
 
     def wrap(text: str, first: str, rest: str) -> list[str]:

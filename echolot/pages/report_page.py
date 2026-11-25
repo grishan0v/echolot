@@ -20,7 +20,6 @@ is read and nothing is numbered at random.
 
 from __future__ import annotations
 
-import copy
 import functools
 import re
 from typing import Any, Sequence
@@ -31,6 +30,10 @@ from .. import report as report_mod
 from ..tp import load_detectors
 from . import kit, md
 from .kit import e
+from ..files import runs as _runs
+from ..plain import found_in as _seen
+from ..plain import with_reading as _read
+from ..words import is_number as _is_number
 
 CSS = ("base.css", "table.css", "picks.css", "report.css")
 JS = ("base.js", "picks.js", "table.js")
@@ -51,14 +54,6 @@ _FIRST_SENTENCE = re.compile(r"(.+?[.!?])\s+(.+)", re.S)
 # reading the report
 
 
-def _read(report: dict[str, Any]) -> dict[str, Any]:
-    """The report with its plain reading. One written before those keys gets
-    them worked out on a copy, as `plain.render` does: the file is not touched."""
-    if plain.is_read(report):
-        return report
-    return plain.annotate(copy.deepcopy(report))
-
-
 def _value(row: dict[str, Any]) -> float:
     try:
         return float(row.get(report_mod.metric_of(row)) or 0.0)
@@ -66,30 +61,10 @@ def _value(row: dict[str, Any]) -> float:
         return 0.0
 
 
-def _seen(row: dict[str, Any]) -> tuple[int, int] | None:
-    """`(k, n)` from a row's `runs`: found in k of n recordings."""
-    try:
-        k, n = (int(x) for x in str(row["runs"]).split("/"))
-    except (KeyError, ValueError):
-        return None
-    return k, n
-
-
-def _runs(report: dict[str, Any]) -> int:
-    n = report.get("runs")
-    if isinstance(n, int) and not isinstance(n, bool) and n > 0:
-        return n
-    return len(report.get("traces") or []) or 1
-
-
 def _number(value: Any) -> str:
     """A number as the report holds it, without the `.0` of a whole float."""
     text = str(value)
     return text[:-2] if isinstance(value, float) and text.endswith(".0") else text
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 # ---------------------------------------------------------------------------

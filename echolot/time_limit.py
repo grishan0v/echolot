@@ -56,7 +56,6 @@ which needs no phone.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import re
 import tempfile
@@ -68,6 +67,8 @@ from yaml.nodes import MappingNode, ScalarNode
 
 from . import check, files, job, plain, project_setup
 from .config import Config, ConfigError
+from .files import text_sha256 as _digest
+from .words import counted as _counted
 
 CONFIG = project_setup.CONFIG
 LOCAL = "local.yml"
@@ -124,10 +125,6 @@ WHY = {
 
 # ---------------------------------------------------------------------------
 # the file, as the page sees it
-
-
-def _digest(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _lines(text: str) -> list[tuple[int, int, int, str]]:
@@ -365,10 +362,10 @@ def _again(project: Path, st: dict[str, Any], scenario: str | None) -> dict[str,
     if run is not None and run["status"] == job.RUNNING:
         why = "Not now: a check is running. The start page shows how far it is."
     if choice.get("unread"):
-        said = (f"{check._counted(n, 'recording waits', 'recordings wait')} to be read, newer than the report. "
+        said = (f"{_counted(n, 'recording waits', 'recordings wait')} to be read, newer than the report. "
                 f"Reading {'it' if n == 1 else 'them'} takes {check.about(n * check.READ_S)}.")
     else:
-        said = (f"The {check._counted(n, 'recording', 'recordings')} that {'is' if n == 1 else 'are'} here "
+        said = (f"The {_counted(n, 'recording', 'recordings')} that {'is' if n == 1 else 'are'} here "
                 f"{'is' if n == 1 else 'are'} read again: {check.about(n * check.READ_S)}.")
     return {"n": n, "what": f"{check.READ}:{choice['name']}", "why": why, "hint": f"{said} The phone is not needed."}
 

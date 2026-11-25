@@ -49,6 +49,7 @@ from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
 from .runner import DURATION_MS, ITERATIONS, MODE
 from .stabilize import COOLDOWN
 from .pages import compare_page, report_page
+from .words import counted as _counted
 
 JOB = "check"
 RECORD, READ = "record", "read"
@@ -103,10 +104,6 @@ def about(seconds: float) -> str:
     if whole == 1:
         return "about a minute and a half" if half else "about a minute"
     return f"about {whole} and a half minutes" if half else f"about {whole} minutes"
-
-
-def _counted(n: int, one: str, many: str) -> str:
-    return f"{n} {one if n == 1 else many}"
 
 
 def _whole(value: Any) -> int | None:

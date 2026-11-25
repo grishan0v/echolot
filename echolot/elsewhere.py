@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import check, job, project_setup, ready, state, when
+from .words import counted_in_words as _counted
 
 SUFFIXES = (".perfetto-trace", ".pftrace", ".trace")
 SAID_SUFFIXES = "`.perfetto-trace`, `.pftrace` or `.trace`"
@@ -71,10 +72,6 @@ INSIDE = 40
 _NAME = re.compile(r"^(?P<name>.+?)_iter(?P<i>\d+)(?:_(?P<date>\d{4}-\d{2}-\d{2}-\d{6}))?"
                    r"\.(?:perfetto-trace|pftrace|trace)$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-
-
-def _counted(n: int, one: str, many: str) -> str:
-    return f"one {one}" if n == 1 else f"{n} {many}"
 
 
 def _size(n: int) -> str:

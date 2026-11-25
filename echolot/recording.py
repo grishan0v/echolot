@@ -69,6 +69,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .words import is_number as _number
+
 # Beside the trace, under its whole name: `startup_iter000.perfetto-trace`
 # gets `startup_iter000.perfetto-trace.recording.json`. A glob for traces
 # does not match it, and a trace moved with its sidecar keeps its account.
@@ -119,10 +121,6 @@ SCALES = (("window", "window_animation_scale"),
           ("transition", "transition_animation_scale"),
           ("animator", "animator_duration_scale"))
 DONT_KEEP = '"Don\'t keep activities"'
-
-
-def _number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _is_scales(value: Any) -> bool:

@@ -56,6 +56,19 @@ def source_files(root: Path, *, under_src: bool = False) -> list[Path]:
     return _walk(root, lambda n: n.endswith(SOURCE_EXT), under_src=under_src)
 
 
+def source_index(root: Path) -> dict[str, list[Path]]:
+    """Every Kotlin and Java source under the root, by file name.
+
+    `anr` and `place` both look a frame's file up by name in it. It lives
+    here, beside the walk, so neither imports the other and the import graph
+    stays a tree: `domains` imports nothing of ours.
+    """
+    found: dict[str, list[Path]] = {}
+    for path in source_files(root):
+        found.setdefault(path.name, []).append(path)
+    return found
+
+
 def files_named(root: Path, name: str) -> list[Path]:
     """Every file with this name, from the same pruned walk.
 

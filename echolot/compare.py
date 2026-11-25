@@ -60,6 +60,7 @@ from . import report as report_mod
 from . import files, plain, stats, table
 from .names import across_builds
 from .report import identity_of, metric_of, short_runs
+from .files import runs as _runs
 
 # What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
 # on a 6 ms slice is not "×1.7 slower"; relative floor second, so a 40 ms move
@@ -1426,10 +1427,6 @@ def params_moved_by(before: dict, after: dict) -> dict[str, list[tuple[str, Any,
             if was != now:
                 moved.setdefault(det_id, []).append((key, was, now))
     return moved
-
-
-def _runs(report: dict) -> int:
-    return int(report.get("runs") or len(report.get("traces") or []) or 1)
 
 
 def _side(report: dict, path: str) -> dict[str, Any]:

@@ -30,7 +30,6 @@ is read and no path of this machine is written.
 
 from __future__ import annotations
 
-import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Sequence
@@ -41,6 +40,11 @@ from .. import verdict as verdict_mod
 from .. import when as when_mod
 from . import kit, report_page
 from .kit import e
+from ..files import runs as _runs
+from ..words import as_dict as _dict
+from ..words import as_list as _list
+from ..words import counted as _count
+from ..words import is_ms as _ms
 
 CSS = ("base.css", "table.css", "answer.css")
 JS = ("base.js", "table.js", "answer.js")
@@ -62,21 +66,8 @@ _CONFIDENCE = {"high": "High", "medium": "Medium", "low": "Low"}
 # wrong kind is left out and the page is written without it
 
 
-def _list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
 def _str(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
-
-
-def _ms(value: Any) -> bool:
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(value) and value >= 0)
 
 
 def _span(value: Any) -> tuple[float, float] | None:
@@ -114,10 +105,6 @@ def _expected(span: tuple[float, float] | None) -> str:
 def _said(text: str) -> str:
     """The agent's words as markup: a name in backticks is code, a line stays a line."""
     return "<br>".join(kit.prose(line) for line in text.splitlines() if line.strip())
-
-
-def _count(n: int, one: str, many: str | None = None) -> str:
-    return f"{n} {one if n == 1 else (many or one + 's')}"
 
 
 def _at(stamp: Any) -> datetime | None:
@@ -166,15 +153,6 @@ def _ctx(report: dict[str, Any]) -> Any:
     is not one reads as none."""
     window = _dict(report.get("window"))
     return plain._Ctx({"window": {**window, "duration_ms": window["duration_ms"] if _ms(window.get("duration_ms")) else 0}})
-
-
-def _runs(report: dict[str, Any]) -> int:
-    """How many recordings a report is of: what it says, else the traces it
-    lists, else one."""
-    n = report.get("runs")
-    if isinstance(n, int) and not isinstance(n, bool) and n > 0:
-        return n
-    return len(_list(report.get("traces"))) or 1
 
 
 def _rounds(reports: verdict_mod.Reports) -> list[tuple[int, dict[str, Any] | None]]:

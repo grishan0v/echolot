@@ -34,7 +34,6 @@ them on purpose.
 from __future__ import annotations
 
 import errno
-import hashlib
 import os
 import re
 import textwrap
@@ -42,6 +41,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from . import sandbox
+from .files import text_sha256 as _sha
 
 KEY = "codex"
 RULE_PATH = Path(".codex") / "rules" / "echolot.rules"
@@ -111,10 +111,6 @@ _EARLIER: frozenset[str] = frozenset({
 
 # What an investigation runs outside the sandbox, as the rules name each.
 COMMANDS = ("echolot", "./gradlew", "adb")
-
-
-def _sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def rule_state(project: Path) -> str:

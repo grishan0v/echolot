@@ -51,7 +51,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -74,6 +74,7 @@ from .model import (
     epoch_to_ts,
     ts_to_epoch,
 )
+from .claude_code import jsonl_rows as _rows
 
 AGENT_NAME = "codex"
 __all__ = ["AGENT_NAME", "SessionRef", "echolot_subcommands", "involves_echolot",
@@ -98,20 +99,6 @@ class SessionRef:
 def sessions_root(env: Mapping[str, str] | None = None) -> Path:
     env = os.environ if env is None else env
     return Path(env.get("CODEX_HOME") or Path.home() / ".codex") / "sessions"
-
-
-def _rows(path: Path) -> Iterable[dict[str, Any]]:
-    with path.open(encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, dict):
-                yield row
 
 
 def _meta(path: Path) -> dict[str, Any]:
