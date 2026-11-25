@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, mark, recorder, scan, selftest  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.main import _markers_against_code, main  # noqa: E402
 from tests.support import check  # noqa: E402
@@ -329,19 +330,19 @@ def test_the_views_say_it_where_the_markers_are_looked_for() -> None:
     rep = _report([])
     rep["markers"]["unbuilt"] = {"names": ["AGENTTMP_a"], "files": ["A.kt"], "mode": "command",
                                  "install": [":app:installBenchmark", ":app:installRelease"]}
-    view = report_mod.markers_view(rep)
+    view = render_mod.markers_view(rep)
     check("`report --markers`, above the line that says there are none",
           view.index("Build and install the app with `./gradlew :app:installBenchmark` "
                      "(or `:app:installRelease`, whichever is on the phone)")
           < view.index("_no markers"), view)
     check("`report`, in its header", "is in the code and not in these traces"
-          in report_mod.overview(rep), report_mod.overview(rep))
+          in render_mod.overview(rep), render_mod.overview(rep))
     check("and `report --json`", report_mod.select(rep, [], None, False, False)["markers"][
         "unbuilt"]["names"] == ["AGENTTMP_a"])
     rep["markers"]["unbuilt"]["install"] = []
     check("no task, the words alone",
-          "Build and install the app, then record again." in report_mod.markers_view(rep),
-          report_mod.markers_view(rep))
+          "Build and install the app, then record again." in render_mod.markers_view(rep),
+          render_mod.markers_view(rep))
 
 
 # The markers the fixture's trace holds besides the one each test puts in it.

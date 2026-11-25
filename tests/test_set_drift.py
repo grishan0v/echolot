@@ -22,6 +22,7 @@ from tests.test_compare import compare, det, report, warned  # noqa: E402
 from echolot import compare as compare_mod  # noqa: E402
 from echolot import drift  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 
 
 def runs_of(seed: int, n: int, rows: int = 30, slope: float = 0.0,
@@ -150,7 +151,7 @@ def test_merging_repeats_writes_the_block_and_the_report_says_it() -> None:
 
     rep = report_mod.aggregate([run(i) for i in range(10)])
     check("report.json carries the block", rep["drift"]["drifts"] is True, rep.get("drift"))
-    whole, overview = report_mod.to_markdown(rep), report_mod.overview(rep)
+    whole, overview = report_mod.to_markdown(rep), render_mod.overview(rep)
     check("report.md says it above the findings",
           "> ⚠️ The runs drift from the first to the last" in whole.split("## ")[0], whole)
     check("so does the overview", "The runs drift from the first to the last" in overview,

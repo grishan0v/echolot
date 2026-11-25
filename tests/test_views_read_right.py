@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, recorder  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
-from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.main import main  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -65,8 +65,8 @@ def test_report_names_the_report_analyze_wrote_elsewhere(tmp_path: Path, demo_re
 # --- 2. report --window --------------------------------------------------------
 
 def test_the_window_view_is_the_windows_numbers_not_the_header_again(demo_report) -> None:
-    view = report_mod.window_view(demo_report)
-    head = report_mod._header_lines(demo_report)
+    view = render_mod.window_view(demo_report)
+    head = render_mod._header_lines(demo_report)
     repeated = [ln for ln in view.splitlines() if ln.strip() and ln in head]
     check("no line of the overview's header", repeated == [], repeated)
     for word in ("pid 12903", "on the trace's clock", "Frames: 19 (repeats", "sleeping 553.6 ms"):
@@ -80,13 +80,13 @@ def test_the_startup_names_each_plain_reason_once() -> None:
     startup = {"type": "cold", "dur_ms": 100.0,
                "reasons": {"inflate": 1.79, "R": 1.62, "D": 1.58, "R+": 0.7,
                            "verify_class": 0.03}}
-    view = report_mod.window_view({"window": {"startup": startup}})
+    view = render_mod.window_view({"window": {"startup": startup}})
     line = next(ln for ln in view.splitlines() if ln.startswith("Startup:"))
     check("once, the two added", line.count("waiting for a CPU") == 1
           and "waiting for a CPU 2.32 ms" in line, line)
     check("longest first", line.index("waiting for a CPU") < line.index("inflate")
           < line.index("blocked in the kernel"), line)
-    text = "\n".join(report_mod._startup_lines(startup))
+    text = "\n".join(render_mod._startup_lines(startup))
     check("and report.md says it once too", text.count("waiting for a CPU") == 1, text)
 
 
@@ -103,7 +103,7 @@ def test_frame_jank_says_what_max_and_longest_are() -> None:
     rep = {"detectors": [{"id": "frame_jank", "title": "Frame jank", "rows": [
         {"location": "Buffer Stuffing", "count": 3, "total_ms": 1600.0, "max_ms": 1572.0,
          "detail": "Buffer Stuffing · 3 of 40 frames · longest 89.1 ms"}]}]}
-    view = report_mod.detector_view(rep, "frame_jank", top=5)
+    view = render_mod.detector_view(rep, "frame_jank", top=5)
     check("a legend under the table", "Evidence:" in view and "past each frame's deadline" in view, view)
 
 

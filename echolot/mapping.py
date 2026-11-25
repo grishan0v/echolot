@@ -539,7 +539,7 @@ def map_id(file: str | None) -> str | None:
 # the other frame, in a class of the same kind, came back right (#913). Over
 # two frames that one was half of them. So one frame without a place is no
 # sign of anything, and from two a tenth of the frames is a warning, as it is
-# for the sampled methods (`report.MINIFIED_SHARE`). A frame named after the
+# for the sampled methods (`render.MINIFIED_SHARE`). A frame named after the
 # mapping it is read with, `r8-map-id-<id>` and its `pg_map_id`, settles it
 # the other way: the mapping is that build's, whatever its ranges miss.
 OUTSIDE_SHARE = 0.10

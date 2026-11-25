@@ -62,7 +62,7 @@ from . import check as check_mod
 from . import files as files_mod
 from . import hunt as hunt_mod
 from . import job, state
-from . import report as report_mod
+from . import render as render_mod
 from . import when as when_mod
 from .check import Refusal, _stops_recording
 from .config import DEFAULT_PREFIX, Config, ConfigError
@@ -584,7 +584,7 @@ def _worse_line(row: dict[str, Any], runs: int, new_counts: bool, prefix: str) -
     else:
         return None
     if row.get("detail"):
-        bits.append(report_mod.clip(str(row["detail"]), report_page.REQUEST_DETAIL))
+        bits.append(render_mod.clip(str(row["detail"]), report_page.REQUEST_DETAIL))
     return f"- {mark}: " + " · ".join(b for b in bits if b)
 
 

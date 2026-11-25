@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from echolot import main as main_mod  # noqa: E402
 from echolot import recorder  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.main import main  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -108,7 +109,7 @@ def test_the_overview_keeps_every_warning_about_the_window(marker_report):
     w["start_anchor"] = {**(w.get("start_anchor") or {}), "glob": "AppStart",
                          "matches": 1, "missed": "2/5"}
     rep["same_recording"] = [["a.perfetto-trace", "b.perfetto-trace"]]
-    whole, overview = report_mod.to_markdown(rep), report_mod.overview(rep)
+    whole, overview = report_mod.to_markdown(rep), render_mod.overview(rep)
     for words in ("Repeat windows diverged 4.5x", "was not found in 2 of 5 repeats",
                   "The repeats measured different processes",
                   "The window opened with the main thread already blocked",

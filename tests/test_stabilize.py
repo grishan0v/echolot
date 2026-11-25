@@ -477,12 +477,12 @@ def test_collect_keeps_the_cooldown_and_each_repeats_temperature_beside_the_set(
 
 
 def _throttled(cooldown) -> str:
-    from echolot import report
+    from echolot import render
     env = {"thermal": {"max_celsius": 83.0, "throttled": True,
                        "throttle_device": "thermal-cpufreq-1", "throttled_runs": "4/4"}}
     if cooldown is not None:
         env["cooldown"] = cooldown
-    return "\n".join(report._environment_lines(env))
+    return "\n".join(render._environment_lines(env))
 
 
 def test_the_throttle_warning_follows_how_the_set_was_cooled() -> None:

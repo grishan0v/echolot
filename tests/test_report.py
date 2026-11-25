@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from tests.support import check  # noqa: E402
 
 
@@ -239,7 +240,7 @@ def test_what_the_samples_named_goes_with_the_evidence_that_quotes_it():
     check("the heavier repeat's evidence", got["detail"].endswith("deflate 100%"), got)
     check("and its stacks, not the lighter one's", got["stacks"] == heavy, got)
     check("json bookkeeping is not a column",
-          "stacks" not in report_mod._table([got]).splitlines()[0], report_mod._table([got]))
+          "stacks" not in render_mod._table([got]).splitlines()[0], render_mod._table([got]))
 
 
 def test_a_repeat_whose_sampler_lost_the_process_does_not_speak_for_the_row():

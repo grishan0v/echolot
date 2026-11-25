@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import place  # noqa: E402
-from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from tests import lockapp  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -204,7 +204,7 @@ def test_annotate_places_both_sides_and_a_class_location(tmp_path):
     check("a slice name is not a class", "places" not in block[2], block[2])
 
     # And the markdown shows the column, before the evidence.
-    text = report_mod._table(rep["detectors"][0]["rows"])
+    text = render_mod._table(rep["detectors"][0]["rows"])
     head = text.splitlines()[0]
     check("the column is there", "In the code" in head, head)
     check("before the evidence", head.index("In the code") < head.index("Evidence"), head)
@@ -354,7 +354,7 @@ def test_another_builds_mapping_is_told_by_the_frames_it_has_no_place_for(tmp_pa
           (owner["symbol"], owner["line"], owner.get("retraced"))
           == ("com.example.locks.Holder.run", None, True), owner)
     check("counted", rep["retrace"] == {"frames": 2, "outside": 2}, rep.get("retrace"))
-    text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
+    text = "\n".join(render_mod._retrace_lines(rep["retrace"]))
     check("and the header says check the mapping", text.startswith("> ⚠️")
           and "2 of the 2 frames" in text and "another build" in text, text)
 
@@ -382,7 +382,7 @@ def test_one_frame_the_right_mapping_has_no_place_for_is_not_a_warning(tmp_path)
               "com.example.locks.MainActivity$$ExternalSyntheticLambda0.run", None), roles)
     check("counted, half of the frames", rep["retrace"] == {"frames": 2, "outside": 1},
           rep.get("retrace"))
-    text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
+    text = "\n".join(render_mod._retrace_lines(rep["retrace"]))
     check("said, not warned about: one frame says nothing about the build",
           not text.startswith(">") and "1 had no place in it and keeps" in text
           and "says nothing about the build" in text and "another build's" not in text, text)
@@ -396,35 +396,35 @@ def test_frames_named_after_the_mapping_are_its_builds_whatever_it_misses(tmp_pa
     check("counted, with the id the frames and the mapping share",
           rep["retrace"] == {"frames": 2, "outside": 1, "matched_map_id": mine},
           rep.get("retrace"))
-    text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
+    text = "\n".join(render_mod._retrace_lines(rep["retrace"]))
     check("the header says it is this build's, by its id",
           not text.startswith(">") and "1 had no place in it" in text
           and "`4393c57b0c71…`, so it is this build's" in text, text)
     # Both frames in a hole would be a warning from a mapping with no id.
     both = {"frames": 2, "outside": 2}
     check("the id settles it however many it misses",
-          not report_mod._retrace_lines({**both, "matched_map_id": mine})[0].startswith(">")
-          and report_mod._retrace_lines(both)[0].startswith("> ⚠️"))
+          not render_mod._retrace_lines({**both, "matched_map_id": mine})[0].startswith(">")
+          and render_mod._retrace_lines(both)[0].startswith("> ⚠️"))
 
 
 def test_the_header_says_what_the_mapping_made_of_the_lock_frames():
     check("nothing without a mapping, or with nothing R8 wrote",
-          report_mod._retrace_lines(None) == []
-          and report_mod._retrace_lines({"frames": 0, "outside": 0}) == [])
-    lines = report_mod._retrace_lines({"frames": 4, "outside": 0})
+          render_mod._retrace_lines(None) == []
+          and render_mod._retrace_lines({"frames": 0, "outside": 0}) == [])
+    lines = render_mod._retrace_lines({"frames": 4, "outside": 0})
     check("one plain line: why `code` and the evidence name it differently",
           len(lines) == 1 and not lines[0].startswith(">")
           and "named back the 4 frames" in lines[0] and "as recorded" in lines[0], lines)
-    lines = report_mod._retrace_lines({"frames": 40, "outside": 2})
+    lines = render_mod._retrace_lines({"frames": 40, "outside": 2})
     check("a frame or two out of many is said, not warned about",
           len(lines) == 1 and not lines[0].startswith(">") and "2 had no place" in lines[0],
           lines)
     for frames in (1, 2, 10):
         check(f"one frame of {frames} is never a warning",
-              not report_mod._retrace_lines({"frames": frames, "outside": 1})[0].startswith(">"))
+              not render_mod._retrace_lines({"frames": frames, "outside": 1})[0].startswith(">"))
     check("two, and a tenth, are",
-          report_mod._retrace_lines({"frames": 20, "outside": 2})[0].startswith("> ⚠️")
-          and report_mod._retrace_lines({"frames": 2, "outside": 2})[0].startswith("> ⚠️"))
+          render_mod._retrace_lines({"frames": 20, "outside": 2})[0].startswith("> ⚠️")
+          and render_mod._retrace_lines({"frames": 2, "outside": 2})[0].startswith("> ⚠️"))
 
 
 # --- a mapping and a build that is not its own (#342) --------------------------
@@ -484,7 +484,7 @@ def test_frames_named_after_another_mapping_stay_as_recorded(tmp_path):
         "map_id": {"frames": lockapp.MAP_ID.removeprefix("r8-map-id-"),
                    "mapping": "c2d66c23dd18be785acf86ecf50d8d7c1abe10b6de3a101cc4f3f25f7dff18b6"}},
           rep["retrace"])
-    text = "\n".join(report_mod._retrace_lines(rep["retrace"]))
+    text = "\n".join(render_mod._retrace_lines(rep["retrace"]))
     check("and the header warns, with ids a reader can compare",
           text.startswith("> ⚠️") and "`4393c57b0c71…`" in text and "`c2d66c23dd18…`" in text, text)
 
@@ -600,7 +600,7 @@ def test_a_config_away_from_its_sources_says_nothing_was_placed(tmp_path: Path, 
           "No Kotlin or Java sources under" in err and "1 row name code and none was placed" in err
           and "--root" in err and "project.root" in err, err)
     check("and the report keeps it", rep.get("no_sources", {}).get("rows") == 1, rep.get("no_sources"))
-    md = "\n".join(report_mod._no_sources_lines(rep["no_sources"]))
+    md = "\n".join(render_mod._no_sources_lines(rep["no_sources"]))
     check("for its header", "No Kotlin or Java sources under" in md and "none was placed" in md, md)
 
     (tmp_path / "checkout").mkdir()

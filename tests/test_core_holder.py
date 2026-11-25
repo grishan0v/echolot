@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import compare as compare_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_compare import compare, det, report, row  # noqa: E402
 
@@ -76,22 +77,22 @@ def test_crowding_merges_by_median_and_counts_its_repeats() -> None:
 
 
 def test_the_header_speaks_of_the_crowd_only_when_there_was_one() -> None:
-    lines = report_mod._crowding_lines({"threads": 135, "cores": 8, "peak": 27,
+    lines = render_mod._crowding_lines({"threads": 135, "cores": 8, "peak": 27,
                                         "above_cores_ms": 244.51})
     check("one line, the peak, the cores and how long",
           len(lines) == 1 and lines[0].startswith(
               "App threads: up to 27 running or ready at once on 8 cores, more than 8 "
               "for 245 ms of the window."), lines)
     check("never more than the cores, nothing said",
-          report_mod._crowding_lines({"threads": 13, "cores": 9, "peak": 5,
+          render_mod._crowding_lines({"threads": 13, "cores": 9, "peak": 5,
                                       "above_cores_ms": 0.0}) == [])
-    check("not recorded, nothing said", report_mod._crowding_lines(None) == [])
+    check("not recorded, nothing said", render_mod._crowding_lines(None) == [])
     check("more than the cores for under a millisecond, nothing said (#711)",
-          report_mod._crowding_lines({"threads": 40, "cores": 8, "peak": 9,
+          render_mod._crowding_lines({"threads": 40, "cores": 8, "peak": 9,
                                       "above_cores_ms": 0.02}) == [])
     check("a millisecond is a line",
-          "for 1 ms of the window" in report_mod._crowding_lines(
+          "for 1 ms of the window" in render_mod._crowding_lines(
               {"threads": 40, "cores": 8, "peak": 9, "above_cores_ms": 1.0})[0])
     check("12.4 ms is still 12",
-          "for 12 ms of the window" in report_mod._crowding_lines(
+          "for 12 ms of the window" in render_mod._crowding_lines(
               {"threads": 40, "cores": 8, "peak": 9, "above_cores_ms": 12.4})[0])

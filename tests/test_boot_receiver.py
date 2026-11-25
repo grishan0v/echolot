@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, recorder  # noqa: E402
-from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.main import _boot_said, _scenario_ran, main  # noqa: E402
 from tests.support import check  # noqa: E402
@@ -78,7 +78,7 @@ def test_the_report_names_the_receiver_with_its_time_over_the_set(tmp_path: Path
     check("report.md says it, as the reset's work", said in md
           and "it is the reset's work, not the start's" in md, md[:2000])
     check("and so does the overview analyze prints outside a terminal",
-          said in overview and said in report_mod.overview(rep), overview[:1500])
+          said in overview and said in render_mod.overview(rep), overview[:1500])
 
 
 def test_an_anchored_window_that_holds_it_says_it_too(tmp_path: Path) -> None:

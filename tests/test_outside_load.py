@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import fixture, report, selftest  # noqa: E402
+from echolot import fixture, render, report, selftest  # noqa: E402
 from echolot import compare as compare_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.analyze import analyze_trace  # noqa: E402
@@ -76,15 +76,15 @@ def test_the_crowding_line_puts_the_wait_behind_them_too() -> None:
     crowd = {"threads": 80, "cores": 8, "peak": 83, "above_cores_ms": 5844.0,
              "outside": {"pct": 80.0, "top": [{"name": "sh", "uid": 2000,
                                                "processes": 8, "pct": 68.0}]}}
-    line = report._crowding_lines(crowd)[0]
+    line = render._crowding_lines(crowd)[0]
     check("the waits are behind other processes too",
           "other processes', which took 80% of the CPUs' time" in line, line)
     quiet = dict(crowd, outside={"pct": 12.0, "top": []})
     check("and only the app's own work on a quiet device",
-          "waits behind the app's own work, and" in report._crowding_lines(quiet)[0])
+          "waits behind the app's own work, and" in render._crowding_lines(quiet)[0])
     check("the warning names eight sh of the shell user as one load",
-          "`sh` (8 processes, uid 2000, 68%)" in report._outside_lines(crowd)[0],
-          report._outside_lines(crowd))
+          "`sh` (8 processes, uid 2000, 68%)" in render._outside_lines(crowd)[0],
+          render._outside_lines(crowd))
 
 
 def test_repeats_carry_the_median_and_the_worst_names(reports) -> None:
@@ -119,7 +119,7 @@ def test_repeats_name_the_process_that_took_most_across_them() -> None:
           next(p for p in top if p["name"] == "com.other.app")["pct"] == 4.0, top)
     check("the worst repeat's share is still kept", merged["outside"]["pct_max"] == 61.0,
           merged["outside"])
-    line = report._outside_lines(merged)[0]
+    line = render._outside_lines(merged)[0]
     check("the sentence names it, with that share",
           "most of it `system_server` (uid 1000, 18%)" in line, line)
 

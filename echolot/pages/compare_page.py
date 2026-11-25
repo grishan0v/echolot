@@ -28,7 +28,8 @@ from typing import Any, Sequence
 
 from .. import compare as compare_mod
 from .. import files, moves, plain
-from .. import report as report_mod
+from .. import merge as merge_mod
+from .. import render as render_mod
 from . import kit, md
 from .kit import e
 
@@ -209,7 +210,7 @@ def _said(face: Any, lane: dict[str, Any] | None, when: str, noun: str, plural: 
     text = f"{when}: {kit.exact(lane['value'])} ms"
     if len(lane["dots"]) > 1:
         text += f" · each {noun}: " + " · ".join(kit.exact(v) for v in lane["dots"])
-    runs = report_mod.short_runs(face.get("runs")) if isinstance(face, dict) else None
+    runs = merge_mod.short_runs(face.get("runs")) if isinstance(face, dict) else None
     if runs:
         text += f" · in {runs[0]} of {runs[1]} {plural}"
     return text
@@ -242,11 +243,11 @@ def _evidence(row: dict[str, Any]) -> str | None:
     """What tells this row from its twins, or what the detector said of it on
     the side that has it."""
     if row.get("detail"):
-        return report_mod.clip(row["detail"], PANEL_DETAIL)
+        return render_mod.clip(row["detail"], PANEL_DETAIL)
     for side in ("after", "before"):
         face = row.get(side)
         if isinstance(face, dict) and face.get("detail"):
-            return report_mod.clip(face["detail"], PANEL_DETAIL)
+            return render_mod.clip(face["detail"], PANEL_DETAIL)
     return None
 
 

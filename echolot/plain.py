@@ -56,7 +56,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import launch as launch_mod
-from .report import metric_of
+from .merge import metric_of
 from .tp import load_detectors
 
 NEEDS_ATTENTION = "needs_attention"

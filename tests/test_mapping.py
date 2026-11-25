@@ -23,6 +23,7 @@ from perfetto.protos.perfetto.trace import perfetto_trace_pb2 as pb  # noqa: E40
 
 from echolot import fixture, mapping  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.config import Config, ConfigError  # noqa: E402
 from echolot.tp import _then  # noqa: E402
 from tests import lockapp  # noqa: E402
@@ -275,16 +276,16 @@ def test_the_packet_follows_the_trace_byte_for_byte(tmp_path: Path) -> None:
 
 def test_the_header_says_how_the_apps_methods_came_back() -> None:
     check("a build that kept its names and has no mapping: nothing",
-          report_mod._names_lines({"methods": 8, "minified": 0}) == [])
-    lines = report_mod._names_lines({"methods": 8, "minified": 8})
+          render_mod._names_lines({"methods": 8, "minified": 0}) == [])
+    lines = render_mod._names_lines({"methods": 8, "minified": 8})
     check("a minified build without one: the warning, and the key that helps",
           len(lines) == 1 and lines[0].startswith("> ⚠️ 8 of the app's 8")
           and "`project.mapping`" in lines[0], lines)
-    lines = report_mod._names_lines({"methods": 8, "minified": 0, "renamed": 8})
+    lines = render_mod._names_lines({"methods": 8, "minified": 0, "renamed": 8})
     check("a mapping that named them all: one plain line",
           lines == ["`project.mapping` named 8 of the app's 8 sampled methods back, "
                     "and none reads as minified."], lines)
-    lines = report_mod._names_lines({"methods": 8, "minified": 7, "renamed": 1})
+    lines = render_mod._names_lines({"methods": 8, "minified": 7, "renamed": 1})
     check("one from another build: what it renamed, what it missed, and the doubt",
           len(lines) == 1 and "7 of the app's 8" in lines[0] and "renamed 1" in lines[0]
           and "another build" in lines[0], lines)
@@ -294,13 +295,13 @@ def test_code_that_arrived_minified_is_no_warning() -> None:
     # A build that kept its names, on a phone: 38 of 3,309 methods read as
     # minified, all of them from SDKs that ship that way.
     check("no mapping, and too few to be the build's: nothing",
-          report_mod._names_lines({"methods": 3309, "minified": 38}) == [])
-    lines = report_mod._names_lines({"methods": 3309, "minified": 38, "renamed": 3200})
+          render_mod._names_lines({"methods": 3309, "minified": 38}) == [])
+    lines = render_mod._names_lines({"methods": 3309, "minified": 38, "renamed": 3200})
     check("a mapping that named the rest says so, and says what it could not",
           len(lines) == 1 and not lines[0].startswith(">")
           and "38 still read as minified" in lines[0] and "SDKs" in lines[0], lines)
     check("and a tenth is where the warning starts",
-          report_mod._names_lines({"methods": 100, "minified": 10})[0].startswith("> ⚠️"))
+          render_mod._names_lines({"methods": 100, "minified": 10})[0].startswith("> ⚠️"))
 
 
 def test_repeats_keep_the_most_minified_methods_any_of_them_saw() -> None:
@@ -505,15 +506,15 @@ def test_a_retracer_is_read_again_once_the_mapping_changes(tmp_path: Path) -> No
 def test_a_mapping_not_built_yet_is_said_once_at_the_top() -> None:
     unbuilt = {"config": {"mapping": {"path": "/p/app/build/outputs/mapping/benchmark/mapping.txt",
                                       "found": False}}}
-    lines = report_mod._mapping_lines(unbuilt)
+    lines = render_mod._mapping_lines(unbuilt)
     check("a warning naming the file and what writes it", len(lines) == 1
           and lines[0].startswith("> ⚠️") and "/p/app/build/outputs/mapping/benchmark/mapping.txt"
           in lines[0] and "built" in lines[0], lines)
     check("nothing when it was there, or when none is named",
-          report_mod._mapping_lines({"config": {"mapping": {"path": "/m", "found": True}}}) == []
-          and report_mod._mapping_lines({"config": {"mapping": None}}) == []
-          and report_mod._mapping_lines({}) == [])
-    lines = report_mod._names_lines({"methods": 8, "minified": 8}, unbuilt=True)
+          render_mod._mapping_lines({"config": {"mapping": {"path": "/m", "found": True}}}) == []
+          and render_mod._mapping_lines({"config": {"mapping": None}}) == []
+          and render_mod._mapping_lines({}) == [])
+    lines = render_mod._names_lines({"methods": 8, "minified": 8}, unbuilt=True)
     check("the minified-names warning does not ask for a key that is set",
           len(lines) == 1 and lines[0].startswith("> ⚠️") and "Set `project.mapping`" not in lines[0],
           lines)
@@ -610,11 +611,11 @@ def test_the_map_id_in_a_files_name(file, map_id) -> None:
 
 
 def test_a_mapping_that_named_back_nothing_is_called_out() -> None:
-    lines = report_mod._names_lines({"methods": 3309, "minified": 38, "renamed": 0})
+    lines = render_mod._names_lines({"methods": 3309, "minified": 38, "renamed": 0})
     check("the build kept its names, or the mapping is another's",
           len(lines) == 1 and lines[0].startswith("> ⚠️") and "keeps its names" in lines[0],
           lines)
-    check("a mapping that named most of them back is a plain line", not report_mod._names_lines(
+    check("a mapping that named most of them back is a plain line", not render_mod._names_lines(
         {"methods": 3309, "minified": 38, "renamed": 3200})[0].startswith(">"))
 
 

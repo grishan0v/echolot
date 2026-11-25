@@ -23,6 +23,7 @@ from tests.support import check  # noqa: E402
 
 from echolot import fixture, runner, selftest  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.analyze import analyze_trace  # noqa: E402
 
@@ -98,7 +99,7 @@ def test_a_sampler_that_never_ran_is_said(tmp_path) -> None:
     s = analyze_trace(trace, Config(selftest.FIXTURE_CONFIG))["environment"]["sampling"]
     check("asked at 100 Hz, and nothing arrived",
           s == {"hz": 100, "started": False, "samples": 0, "with_stack": 0}, s)
-    lines = report_mod._sampling_lines(s)
+    lines = render_mod._sampling_lines(s)
     check("the report says the sampler did not run, and that nothing was slowed",
           len(lines) == 1 and "did not run" in lines[0] and "not slowed" in lines[0],
           lines)
@@ -110,31 +111,31 @@ def one(samples: int, with_stack: int, **more) -> dict:
 
 
 def test_each_way_of_coming_back_has_its_own_sentence() -> None:
-    check("nothing sampled, nothing said", report_mod._sampling_lines(None) == [])
+    check("nothing sampled, nothing said", render_mod._sampling_lines(None) == [])
 
-    line = report_mod._sampling_lines(one(30, 28))
+    line = render_mod._sampling_lines(one(30, 28))
     check("a sampled round is one line, with its share of stacks and its cost",
           len(line) == 1 and not line[0].startswith(">")
           and "30 samples" in line[0] and "93% with a stack" in line[0]
           and "same rate" in line[0], line)
 
-    unwound = report_mod._sampling_lines(one(30, 0))
+    unwound = render_mod._sampling_lines(one(30, 0))
     check("none with a stack: the manifest is named, and so is a start the sampler lost",
           unwound[0].startswith("> ⚠️") and "profileable" in unwound[0]
           and "lost the process as it started" in unwound[0], unwound)
 
-    missed = report_mod._sampling_lines(one(0, 0))
+    missed = render_mod._sampling_lines(one(0, 0))
     check("no samples of ours: the filter that misses a starting process is named",
           missed[0].startswith("> ⚠️") and "zygote" in missed[0], missed)
 
 
 def test_a_share_is_not_rounded_to_all_or_nothing() -> None:
     check("999 of 1000 is not 100%",
-          "99% with a stack" in report_mod._sampling_lines(one(1000, 999))[0])
+          "99% with a stack" in render_mod._sampling_lines(one(1000, 999))[0])
     check("1 of 1000 is not 0%",
-          "1% with a stack" in report_mod._sampling_lines(one(1000, 1))[0])
+          "1% with a stack" in render_mod._sampling_lines(one(1000, 1))[0])
     check("all of them is said so",
-          "all with a stack" in report_mod._sampling_lines(one(1000, 1000))[0])
+          "all with a stack" in render_mod._sampling_lines(one(1000, 1000))[0])
 
 
 def test_repeats_merge_to_medians_and_a_count() -> None:
@@ -147,7 +148,7 @@ def test_repeats_merge_to_medians_and_a_count() -> None:
 
     half = report_mod._merge_sampling([one(30, 28), None])
     check("half a set sampled is counted as half", half["runs"] == "1/2", half)
-    line = report_mod._sampling_lines(half)[0]
+    line = render_mod._sampling_lines(half)[0]
     check("and the report says the repeats were not recorded alike",
           "in 1 of 2 repeats" in line and "not recorded alike" in line, line)
 
@@ -166,10 +167,10 @@ def test_a_repeat_without_stacks_is_not_hidden_by_the_median() -> None:
         [one(2335, 2335), one(2306, 2306), one(2276, 0), one(2331, 2331),
          one(2347, 2347), one(2156, 2156)])
     check("five of the six got stacks", merged["runs_with_stack"] == "5/6", merged)
-    line = report_mod._sampling_lines(merged)[0]
+    line = render_mod._sampling_lines(merged)[0]
     check("the line says so, and gives no share a median would have made up",
           "in 5 of 6 repeats" in line and "%" not in line
           and "all with a stack" not in line, line)
     none = report_mod._merge_sampling([one(30, 0), one(40, 0)])
     check("no repeat with a stack is the warning",
-          report_mod._sampling_lines(none)[0].startswith("> ⚠️"), none)
+          render_mod._sampling_lines(none)[0].startswith("> ⚠️"), none)

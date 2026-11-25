@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import compare, report  # noqa: E402
+from echolot import compare, merge, render, report  # noqa: E402
 from tests.support import check  # noqa: E402
 
 
@@ -65,7 +65,7 @@ def test_a_trace_without_the_slice_counts_as_not_holding_it() -> None:
 # --- the header -------------------------------------------------------------------
 
 def test_a_compiled_app_is_one_line() -> None:
-    lines = report._compile_lines(state("speed-profile", classes=402, verify_ms=316.0,
+    lines = render._compile_lines(state("speed-profile", classes=402, verify_ms=316.0,
                                         main_ms=12.0))
     check("one line, no warning", len(lines) == 1, lines)
     check("the state, the JIT and the verification",
@@ -75,51 +75,51 @@ def test_a_compiled_app_is_one_line() -> None:
 
 
 def test_an_app_nothing_compiled_is_warned_about() -> None:
-    lines = report._compile_lines(NOTHING)
+    lines = render._compile_lines(NOTHING)
     check("the line, then the warning", len(lines) == 2
           and lines[1].startswith("> ⚠️ The app ran with `filter=run-from-apk`")
           and "dumpsys package dexopt" in lines[1], lines)
-    verified = report._compile_lines(state("verify", "install"))
+    verified = render._compile_lines(state("verify", "install"))
     check("verified only is no better", any("`filter=verify`" in x for x in verified),
           verified)
 
 
 def test_repeats_on_two_states_are_warned_about() -> None:
-    lines = report._compile_lines(report._merge_compile([COMPILED, NOTHING]))
+    lines = render._compile_lines(report._merge_compile([COMPILED, NOTHING]))
     check("mixed repeats warn, and the uncompiled half warns too",
           any(x.startswith("> ⚠️ The repeats ran on different compile states") for x in lines)
           and any("`filter=run-from-apk` in some repeats" in x for x in lines), lines)
 
 
 def test_a_process_already_running_says_so() -> None:
-    lines = report._compile_lines(state(None, methods=3, jit_ms=12.0))
+    lines = render._compile_lines(state(None, methods=3, jit_ms=12.0))
     check("no state, said in words, the JIT still counted",
           lines == ["Compiled: not in this trace, the process was already running "
                     "when it began · JIT 3 methods, 12 ms"], lines)
-    check("nothing recorded, nothing said", report._compile_lines(None) == [])
+    check("nothing recorded, nothing said", render._compile_lines(None) == [])
 
 
 # --- a debuggable build (#925) ---------------------------------------------------
 
 def test_a_debuggable_build_is_said_and_not_sent_to_a_baseline_profile() -> None:
-    every = report._merge_debuggable([True, True, None])
+    every = merge._merge_debuggable([True, True, None])
     check("counted over the repeats that said", every == {"repeats": 2, "of": 2}, every)
-    lines = report._compile_lines(NOTHING, every)
+    lines = render._compile_lines(NOTHING, every)
     check("said first, as a debuggable build",
           lines[0].startswith("> ⚠️ This is a debuggable build: ART runs it interpreted"), lines)
     check("and no advice to record a build compiled from its profile",
           not any("baseline profile;" in x or "Record again on a build compiled" in x
                   for x in lines), lines)
-    some = report._compile_lines(NOTHING, report._merge_debuggable([True, False, False]))
+    some = render._compile_lines(NOTHING, merge._merge_debuggable([True, False, False]))
     check("some repeats: how many, and the filter's advice kept for the rest",
           some[0].startswith("> ⚠️ This is a debuggable build in 1 of 3 repeats")
           and any("Record again on a build compiled" in x for x in some), some)
     check("said without a compile state too",
-          report._compile_lines(None, every)[0].startswith("> ⚠️ This is a debuggable build"))
+          render._compile_lines(None, every)[0].startswith("> ⚠️ This is a debuggable build"))
     check("a build that is not: nothing more",
-          report._compile_lines(COMPILED, report._merge_debuggable([False]))
-          == report._compile_lines(COMPILED))
-    check("nobody said: nothing", report._merge_debuggable([None, None]) is None)
+          render._compile_lines(COMPILED, merge._merge_debuggable([False]))
+          == render._compile_lines(COMPILED))
+    check("nobody said: nothing", merge._merge_debuggable([None, None]) is None)
 
 
 def test_collect_reads_the_flags_in_the_settings_call() -> None:
