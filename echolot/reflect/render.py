@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .. import table
+# Written the way the Marker Report is (#992).
+from ..render import to_json as to_json
 from .facts import Facts, size_text
 from .model import Session
 from .signals import Signal
@@ -74,10 +76,6 @@ def build(session: Session, facts: Facts, signals: list[Signal]) -> dict[str, An
         "runs_by": facts.runs_by,
         "notes": session.notes,
     }
-
-
-def to_json(report: dict[str, Any]) -> str:
-    return json.dumps(report, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------- markdown

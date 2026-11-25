@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import analyze, fixture, report, selftest  # noqa: E402
+from echolot import analyze, fixture, render, report, selftest  # noqa: E402
 from echolot import compare as compare_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from tests.support import check  # noqa: E402
@@ -59,7 +59,7 @@ def test_the_drawing_processes_are_counted_apart(reports) -> None:
 
 def test_another_app_beside_them_is_still_a_busy_device(reports) -> None:
     busy = reports[1]["window"]["crowding"]["outside"]
-    check("the loops are other load", busy["pct"] >= report.OUTSIDE_PCT, busy)
+    check("the loops are other load", busy["pct"] >= render.OUTSIDE_PCT, busy)
     check("the drawing processes are still apart", 10 < busy["platform_pct"] < 40, busy)
     text = report.to_markdown(reports[1])
     check("and the header warns, naming the app",

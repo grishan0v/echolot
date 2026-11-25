@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.main import main  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -73,7 +74,7 @@ def run(*argv: str) -> tuple[int, str, str]:
 # --- the views, as functions --------------------------------------------------
 
 def test_the_overview_names_every_detector_with_what_it_found():
-    text = report_mod.overview(sample())
+    text = render_mod.overview(sample())
     check("the window is on the first lines", "window **1005.0 ms**" in text, text[:300])
     check("a missed anchor is shouted", "⚠️ 0 matches" in text, text[:400])
     check("a detector with rows shows its count and its top row",
@@ -85,19 +86,19 @@ def test_the_overview_names_every_detector_with_what_it_found():
 
 
 def test_a_detector_view_cuts_the_rows_and_the_evidence_and_says_so():
-    text = report_mod.detector_view(sample(), "monitor_contention", top=3)
+    text = render_mod.detector_view(sample(), "monitor_contention", top=3)
     check("the title and the params", "Monitor contention" in text and "min_block_ms" in text, text)
     check("three rows", text.count("| slice_") == 3, text)
     check("the evidence is cut", "…" in text and "Store.get()(:-1)" not in text, text)
     check("and the cut is announced", "_Showing 3 of 8; `--top 8` for all._" in text, text)
     check("places are pointed at", "`--json` carries `places`" in text, text)
-    wide = report_mod.detector_view(sample(), "monitor_contention", top=1, wide=True)
+    wide = render_mod.detector_view(sample(), "monitor_contention", top=1, wide=True)
     check("--wide keeps the evidence whole", "Store.get()(:-1)" in wide, wide)
 
 
 def test_the_evidence_column_of_main_thread_block_is_explained():
     """`m.example.app` in a column called Evidence reads as a lost name."""
-    text = report_mod.detector_view(sample(), "main_thread_block")
+    text = render_mod.detector_view(sample(), "main_thread_block")
     check("the legend is under the table",
           "Evidence: the thread's comm" in text and "15 characters" in text, text)
 
@@ -115,7 +116,7 @@ def test_a_blind_spot_with_samples_behind_it_says_what_its_evidence_means():
                   "detail": "100.0% of CPU outside slices · 28 stacks: GzipSink.write 54%, "
                             "ReadBarrier::Mark 21% · ours: Store.save 36%, cut 29%"}],
     }]}
-    text = report_mod.detector_view(rep, "uninstrumented_cpu")
+    text = render_mod.detector_view(rep, "uninstrumented_cpu")
     check("the legend explains `ours:`, `none` and `cut`",
           "Evidence: the share of the thread's CPU time" in text and "`none` where" in text
           and "`cut` where" in text, text)
@@ -126,8 +127,8 @@ def test_a_blind_spot_with_samples_behind_it_says_what_its_evidence_means():
 
 
 def test_a_silent_detector_and_an_unknown_one_read_differently():
-    check("silent", "_silent" in report_mod.detector_view(sample(), "gc_pressure"), "")
-    text = report_mod.detector_view(sample(), "nothing")
+    check("silent", "_silent" in render_mod.detector_view(sample(), "gc_pressure"), "")
+    text = render_mod.detector_view(sample(), "nothing")
     check("unknown names what there is",
           "no detector `nothing`" in text and "monitor_contention" in text, text)
 

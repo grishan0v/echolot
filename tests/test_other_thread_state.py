@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.support import check  # noqa: E402
 
 from echolot import fixture, place  # noqa: E402
-from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.analyze import analyze_trace  # noqa: E402
 from echolot.config import Config  # noqa: E402
 
@@ -150,14 +150,14 @@ def test_an_owner_the_trace_has_no_state_for_is_unknown(tmp_path: Path) -> None:
 
 
 def test_a_view_that_cuts_the_evidence_keeps_the_shares(tmp_path: Path) -> None:
-    view = report_mod.detector_view(_report(tmp_path), "monitor_contention")
+    view = render_mod.detector_view(_report(tmp_path), "monitor_contention")
     line = next(ln for ln in view.splitlines() if ln.startswith("| DefaultDispatch"))
     check("the slice's name gives way, the owner's state stays",
           line.endswith(f"| monitor contention with …{OWNED} |"), line)
     check("evidence with nothing at its end is cut as before",
-          report_mod.clip_evidence("x" * 120, 100) == "x" * 99 + "…")
+          render_mod.clip_evidence("x" * 120, 100) == "x" * 99 + "…")
     check("and short evidence is left whole",
-          report_mod.clip_evidence("blocked in a · its thread: running 100%", 100)
+          render_mod.clip_evidence("blocked in a · its thread: running 100%", 100)
           == "blocked in a · its thread: running 100%")
 
 

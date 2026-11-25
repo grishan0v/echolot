@@ -29,7 +29,7 @@ from echolot import analyze as analyze_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.analyze import DETECTOR_DIR, _in_rows  # noqa: E402
-from echolot.report import metric_of  # noqa: E402
+from echolot.merge import metric_of  # noqa: E402
 from echolot.tp import _LIMIT_TAIL, Detector, load_detectors  # noqa: E402
 
 MAIN = fixture.THREADS[fixture.TID_MAIN]

@@ -19,6 +19,7 @@ from tests.support import check  # noqa: E402
 
 from echolot import needs as needs_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 
 
 # --- a set of repeats ------------------------------------------------------------------
@@ -163,15 +164,15 @@ def test_a_report_with_nothing_unchecked_has_no_such_line() -> None:
 
 def test_the_views_say_not_checked_where_they_said_silent() -> None:
     rep = _two()
-    overview = report_mod.overview(rep)
+    overview = render_mod.overview(rep)
     check("the table row", "not checked" in overview and "silent" not in overview.split("\n\n")[1],
           overview)
     check("and the line under it", "could not run" in overview, overview)
-    view = report_mod.detector_view(rep, "io_wait")
+    view = render_mod.detector_view(rep, "io_wait")
     check("the detector's own view gives the reason",
           "not checked: The recording does not carry the phone's own state." in view, view)
     check("and does not call it silent", "_silent" not in view, view)
-    quiet = report_mod.detector_view(rep, "gc_pressure")
+    quiet = render_mod.detector_view(rep, "gc_pressure")
     check("a detector that looked and found nothing is still silent", "_silent" in quiet, quiet)
     summary = report_mod.select(rep, [], None, False, False)["detectors"]
     check("the json summary carries the flag",

@@ -30,6 +30,7 @@ from . import place as place_mod
 from . import recording as recording_mod
 from . import names as names_mod
 from . import report as report_mod
+from . import merge as merge_mod
 from . import stacks as stacks_mod
 from .config import LAUNCH, NO_ANCHOR, PACKAGE, WHOLE, Config, ConfigError
 from .tp import TraceSession, load_detectors, render_sql, sql_value, toolchain_info
@@ -342,7 +343,7 @@ def _over_bar(rows: list[dict]) -> tuple[list[dict], list[dict]]:
         row = dict(raw)
         if row.pop("over_bar", None):
             shown.append(row)
-        elif float(row.get(report_mod.metric_of(row)) or 0.0) >= report_mod.FLOOR_MS:
+        elif float(row.get(merge_mod.metric_of(row)) or 0.0) >= report_mod.FLOOR_MS:
             under.append(row)
     return shown, under
 

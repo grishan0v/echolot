@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from echolot import __version__, fixture, runner, selftest  # noqa: E402
 from echolot import recording as recording_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.analyze import DETECTOR_DIR  # noqa: E402
 from echolot.main import _report_text  # noqa: E402
@@ -180,11 +181,11 @@ def test_another_pid_or_another_window_is_another_recording(change):
 def test_a_report_from_another_minor_version_says_so_and_a_patch_release_does_not():
     minor = __version__.rsplit(".", 1)[0]
     check("another minor version", "Written by echolot 0.7.0 (12 detectors)"
-          in (report_mod.written_by("0.7.0", 12) or ""), report_mod.written_by("0.7.0", 12))
+          in (render_mod.written_by("0.7.0", 12) or ""), render_mod.written_by("0.7.0", 12))
     check("no version at all", "from before reports named their version"
-          in (report_mod.written_by(None, 12) or ""))
+          in (render_mod.written_by(None, 12) or ""))
     check("a patch release of this one says nothing",
-          report_mod.written_by(f"{minor}.99", 12) is None)
+          render_mod.written_by(f"{minor}.99", 12) is None)
 
 
 def test_status_and_the_report_view_say_it(tmp_path):
@@ -195,7 +196,7 @@ def test_status_and_the_report_view_say_it(tmp_path):
           in line, line)
     old = side(BEFORE, echolot="0.7.0")
     check("the report's header", f"⚠️ Written by echolot 0.7.0 (2 detectors); this is "
-          f"{__version__}" in report_mod.overview(old), report_mod.overview(old)[:600])
+          f"{__version__}" in render_mod.overview(old), render_mod.overview(old)[:600])
 
 
 # --- how the traces were recorded (#533) ----------------------------------------

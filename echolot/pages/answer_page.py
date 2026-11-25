@@ -36,7 +36,8 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from .. import plain
-from .. import report as report_mod
+from .. import merge as merge_mod
+from .. import render as render_mod
 from .. import verdict as verdict_mod
 from .. import when as when_mod
 from . import kit, report_page
@@ -281,7 +282,7 @@ def _evidence(c: dict[str, Any], cited: _Cited) -> str:
         many = _runs(report) > 1
         for det_id, row in rows:
             subs = [f"round {n} · {_source(report, det_id, entry['location'])}",
-                    report_mod.clip(row.get("detail"), PANEL_DETAIL)]
+                    render_mod.clip(row.get("detail"), PANEL_DETAIL)]
             # A marker is drawn by the time between its two ends, which is the
             # number an agent reads off it; a detector's row by the column
             # the report judges it by.
@@ -472,7 +473,7 @@ def _piece(verdict: dict[str, Any], cited: _Cited) -> str:
     n, location = inside["report"], inside["location"]
     report = cited.reports[n] or {}
     row = rows[0][1]
-    value = row.get("total_ms") if _ms(row.get("total_ms")) else row.get(report_mod.metric_of(row))
+    value = row.get("total_ms") if _ms(row.get("total_ms")) else row.get(merge_mod.metric_of(row))
     window = _dict(report.get("window")).get("duration_ms")
     # A piece of the window is less than the window. Time summed over several
     # threads can pass it, and is no part of it to draw.
@@ -854,7 +855,7 @@ def render(hunt: dict[str, Any], reports: verdict_mod.Reports, again: str | None
         [crumb] if isinstance(crumb, str) else list(crumb)
     body = (f'<div class="page">{kit.topbar(crumbs, steps)}{main}</div>'
             + (kit.peek("row", "Back to the answer") if rows else ""))
-    title = "echolot answer" + (f": {report_mod.clip(question, 80)}" if question else "")
+    title = "echolot answer" + (f": {render_mod.clip(question, 80)}" if question else "")
     extra = agent or {}
     return kit.document(title, body, css=CSS + tuple(extra.get("css") or ()), js=JS + tuple(extra.get("js") or ()),
                         policy=policy, head_html=extra.get("head") or "")

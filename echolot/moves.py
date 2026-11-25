@@ -64,7 +64,7 @@ from typing import Any
 
 from . import compare, plain, stats
 from . import launch as launch_mod
-from .report import metric_of
+from .merge import metric_of
 
 BETTER, WORSE, NO_CHANGE, GONE, NEW, FINE_BOTH, NOT_CHECKED = (
     "better", "worse", "no_change", "gone", "new", "fine_both", "not_checked")

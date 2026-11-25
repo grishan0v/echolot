@@ -86,7 +86,8 @@ def of(report: dict[str, Any]) -> dict[str, Any] | None:
     Works on any merged report, old ones included: it reads nothing but
     the rows' `spread` values.
     """
-    from .report import identity_of, metric_of
+    from .merge import metric_of
+    from .report import identity_of
 
     runs = report.get("runs")
     if not isinstance(runs, int) or isinstance(runs, bool):

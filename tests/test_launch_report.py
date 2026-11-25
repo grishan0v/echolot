@@ -26,6 +26,7 @@ from tests.test_report_page import read  # noqa: E402
 from echolot import fixture, recorder, selftest  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.analyze import _startup_info, analyze_trace  # noqa: E402
 from echolot.main import main  # noqa: E402
 from echolot.pages import report_page  # noqa: E402
@@ -45,24 +46,24 @@ BUDGET = {"on_cpu": 400.0, "waiting_for_cpu": 50.0, "in_kernel": 20.0, "sleeping
 
 
 def test_the_launch_delay_is_a_share_of_the_window_and_not_a_warning() -> None:
-    plain = report_mod._budget_lines(dict(BUDGET))
+    plain = render_mod._budget_lines(dict(BUDGET))
     check("86% accounted with nothing to explain it warns, as it always did",
           len(plain) == 2 and plain[1].startswith("> ⚠️ Only 86% of the window")
           and "the process started inside the window" in plain[1], plain)
-    lines = report_mod._budget_lines({**BUDGET, "before_process_ms": 80.0})
+    lines = render_mod._budget_lines({**BUDGET, "before_process_ms": 80.0})
     check("with the 80 ms before the process started, one line and no warning",
           lines == ["Main thread: 65% on a CPU · 8% waiting for a CPU · 3% blocked in the "
                     "kernel · 10% sleeping · 13% before the process started"], lines)
 
 
 def test_a_hole_beyond_the_launch_delay_still_warns() -> None:
-    lines = report_mod._budget_lines({**BUDGET, "accounted_ms": 430.0, "accounted_pct": 69.8,
+    lines = render_mod._budget_lines({**BUDGET, "accounted_ms": 430.0, "accounted_pct": 69.8,
                                       "on_cpu": 300.0, "before_process_ms": 80.0})
     check("70% and 13% leave 17% with no state: the recording has a hole",
           lines[-1].startswith("> ⚠️ Only 83% of the window is accounted for on the main "
                                "thread, the 80 ms before its process started included")
           and "the recording has a hole there" in lines[-1], lines)
-    warm = report_mod._budget_lines({**BUDGET, "before_process_ms": 0.0})
+    warm = render_mod._budget_lines({**BUDGET, "before_process_ms": 0.0})
     check("a process that was already there has no such share, and the old warning stands",
           warm[-1].startswith("> ⚠️ Only 86% of the window")
           and "before the process started" not in warm[0], warm)
@@ -87,7 +88,7 @@ def test_the_report_says_what_bounds_a_launch_window(tmp_path: Path) -> None:
     check("and the startup line sets the launch against the window it built",
           "the startup began with the window, and ended 55 ms before it closed."
           in said["app"], said["app"][:900])
-    view = report_mod.window_view(_fixture(tmp_path, fully_drawn="app"))
+    view = render_mod.window_view(_fixture(tmp_path, fully_drawn="app"))
     check("`report --window` says it where it names anchors for the others",
           head in view and "Anchors:" not in view, view)
 
@@ -111,10 +112,10 @@ def test_the_startup_line_says_it_is_the_launch_the_window_was_built_from() -> N
     window = {"ts_start": 100 * MS, "ts_end": 1100 * MS}
     built = _startup_info(_Startups([_startup(1, 100, 400), _startup(2, 450, 1000)]),
                           window, APP, {"startup_id": 1})
-    line = report_mod._startup_lines({**built, "reasons": {}}, True)[0]
+    line = render_mod._startup_lines({**built, "reasons": {}}, True)[0]
     check("one of the two in the trace, and which",
           "(one of 2 in the trace: the launch the window is built from)" in line, line)
-    by_overlap = report_mod._startup_lines({**built, "reasons": {}})[0]
+    by_overlap = render_mod._startup_lines({**built, "reasons": {}})[0]
     check("where an anchored window's says it was picked by overlap",
           "that shares the most with the window" in by_overlap, by_overlap)
 
