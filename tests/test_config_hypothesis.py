@@ -14,12 +14,13 @@ import copy
 import sys
 from pathlib import Path
 
+import pytest
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot.config import Config, merge  # noqa: E402
+from echolot.config import DECLARED_SECTIONS, Config, declaration, merge  # noqa: E402
 
 leaf = st.one_of(st.none(), st.booleans(), st.integers(), st.text(max_size=10))
 key = st.text(alphabet=st.characters(categories=("Ll",)), min_size=1,
@@ -118,15 +119,29 @@ def test_config_get_of_missing_key_is_the_default(missing_key):
 
 @given(st.lists(key, min_size=2, max_size=4, unique=True), leaf)
 @example(["scenario", "start", "name"], None)
+# A declared section and a key nobody declared: refused, leaf or not (#1019).
+@example(["project", "a"], None)
+# A declared key that runs past a leaf: the default.
+@example(["project", "package"], "a string, not a mapping")
 def test_config_get_stops_at_a_leaf_instead_of_walking_into_it(path_parts, value):
     """A dotted path that runs past the end of the tree is a miss, not a
     crash: `get("scenario.start.name")` on a `scenario.start` that is a
-    plain string returns the default rather than raising.
+    plain string returns the default rather than raising. A reader asks for
+    a path and decides what to do from what comes back.
 
-    `_anchor` depends on this — it asks for a path and decides what to do
-    from what comes back.
+    Only a path `get` reads at all. A key of a declared section that nobody
+    declared is refused before the tree is walked, whatever the tree holds:
+    reading it is a mistake in the code, not something a config can say
+    (#828). The keys drawn here are any lowercase words, `project` among
+    them now and then, and `project.a` failed `main` when the test expected
+    the default for it (#1019).
     """
     head, rest = path_parts[0], path_parts[1:]
-    cfg = Config({head: "a string, not a mapping"})
+    dotted = ".".join([head, *rest])
+    cfg = Config({head: value})
     sentinel = object()
-    assert cfg.get(".".join([head, *rest]), sentinel) is sentinel
+    if head in DECLARED_SECTIONS and declaration(dotted) is None:
+        with pytest.raises(KeyError, match="is read but not declared"):
+            cfg.get(dotted, sentinel)
+        return
+    assert cfg.get(dotted, sentinel) is sentinel

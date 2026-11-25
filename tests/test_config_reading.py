@@ -290,6 +290,10 @@ def test_a_key_nobody_declared_cannot_be_read(tmp_path: Path) -> None:
     cfg = Config.load(_config(tmp_path, BASE))
     with pytest.raises(KeyError, match="runner.nosuch is read but not declared"):
         cfg.get("runner.nosuch")
+    # Whatever the config holds there: a section that is a leaf hides no
+    # mistake in the code (#1019).
+    with pytest.raises(KeyError, match="project.a is read but not declared"):
+        Config({"project": "a string, not a mapping"}).get("project.a", "default")
     check("a declared one reads", cfg.get("project.package") == "com.example.app")
     check("a section reads", cfg.get("scenario.name") == "fixture")
 
