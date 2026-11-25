@@ -3511,6 +3511,90 @@ def _(report):
     assert report["window"]["frames"] == {"count": 24, "late": 5}, report["window"]["frames"]
 
 
+# What the report says of the surface `fixture.build(surface=…)` plants.
+_UNJUDGED_SAID = (
+    f"> ⚠️ `frame_jank` judged the 24 frames the frame timeline holds of the app. The "
+    f"app also presented 60 frames on `{fixture.SURFACE}` with `QueuePresentKHR` on "
+    f"`Thread-7`, and the timeline holds none of those: whether that surface moved "
+    f"smoothly is not in `frame_jank`'s rows, silent or not.")
+
+
+@check("frame_jank: frames a thread of the app presents on a surface the timeline "
+       "does not hold are counted and said, by surface, thread and call")
+def _(report):
+    """A map drawn by Vulkan into a `SurfaceView` from a native thread: 1000
+    presents in a pan-and-zoom, none of them in the frame timeline, which
+    held the 321 frames of the app's window; the report said "Hardly any
+    frame came late" of a map `frame_jank` never saw (#1011). Here 60 such
+    presents in the window and 3 after it, the RenderThread's 5 frames of the
+    window beside them, and the timeline's 24: the surface is listed with
+    the 60 of the window, its thread and its call, and said in the full
+    report, the overview, the window, `frame_jank`'s own view and its plain
+    reading. The window's own queue is not a surface the timeline misses,
+    and a surface whose frames the timeline holds (40 of 60) is not listed
+    at all, nor is anything in the fixture without one.
+    """
+    from . import plain
+    from . import render as render_mod
+    from . import report as report_mod
+    got = _recorded(surface="unjudged")
+    frames = got["window"]["frames"]
+    assert frames == {"count": 24, "late": 5, "unjudged": [
+        {"surface": fixture.SURFACE, "thread": "Thread-7", "call": "QueuePresentKHR",
+         "presents": 60, "judged": 0}]}, frames
+    assert _UNJUDGED_SAID in report_mod.to_markdown(got), "in the full report"
+    for view in (render_mod.overview(got), render_mod.window_view(got),
+                 render_mod.detector_view(got, "frame_jank")):
+        assert _UNJUDGED_SAID in view, view[:1500]
+    det = next(d for d in plain.annotate(got)["detectors"] if d["id"] == "frame_jank")
+    assert det["plain"]["also"] == (
+        f"This checked the 24 frames of the app's windows. The app drew 60 more on a "
+        f"surface of its own (`{fixture.SURFACE}`), and none of those were checked, so "
+        f"this says nothing about whether it moved smoothly."), det["plain"]
+    held = _recorded(surface="judged")["window"]["frames"]
+    assert held == {"count": 64, "late": 5}, held
+    assert "unjudged" not in report["window"]["frames"], report["window"]["frames"]
+    assert not any("judged the" in line for line in report_mod.to_markdown(report).splitlines())
+
+
+@check("frame_jank: over repeats a surface the timeline does not hold keeps each run's "
+       "presents, and a fine check still says what it did not see")
+def _(report):
+    """Merged, the presents are the median with each repeat's in `values`,
+    none in a repeat that did not list the surface, and the sentence says in
+    how many repeats it was there. When `frame_jank` found nothing, the page
+    and `report --plain` say its clean sentence with what it did not see,
+    rather than calling the frames fine and stopping there (#1011).
+    """
+    import copy
+
+    from . import plain
+    from . import render as render_mod
+    from . import report as report_mod
+    from .pages import report_page
+    one = _recorded(surface="unjudged")
+    runs = [copy.deepcopy(one) for _ in range(3)]
+    del runs[2]["window"]["frames"]["unjudged"]
+    merged = report_mod.aggregate(runs)
+    listed = merged["window"]["frames"]["unjudged"]
+    assert listed == [{"surface": fixture.SURFACE, "thread": "Thread-7",
+                       "call": "QueuePresentKHR", "presents": 60, "values": [60, 60, 0],
+                       "judged": 0, "runs": "2/3"}], listed
+    said = render_mod.overview(merged)
+    assert (f"60 frames on `{fixture.SURFACE}` with `QueuePresentKHR` on `Thread-7`, "
+            f"in 2 of 3 repeats, and the timeline holds none of those") in said, said[:1500]
+    quiet = copy.deepcopy(one)
+    jank = next(d for d in quiet["detectors"] if d["id"] == "frame_jank")
+    jank["rows"] = []
+    plain.annotate(quiet)
+    assert jank["attention"] == plain.FINE, jank["attention"]
+    shown = next(c for c in report_page._checks(quiet) if c["id"] == "frame_jank")["said"]
+    assert shown == f"{jank['plain']['clean']} {jank['plain']['also']}", shown
+    lines = plain.render(quiet, width=100)
+    assert " ok Frames that came late" in lines and "Hardly any frame came late. This " \
+        "checked the 24 frames" in lines.replace("\n    ", " "), lines
+
+
 def _drag(variant: dict) -> dict:
     """The fixture recorded three times the way `variant` says, with no end
     anchor: a drag recorded for a fixed time, whose window runs to the end

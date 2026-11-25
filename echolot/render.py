@@ -164,6 +164,32 @@ def _undrawn_lines(report: dict[str, Any]) -> list[str]:
             f"from {them} are not about the scenario."]
 
 
+def _unjudged_lines(w: dict[str, Any]) -> list[str]:
+    """What `frame_jank` did not judge: the frames the app presented on a
+    surface the frame timeline does not hold, a `SurfaceView` a renderer
+    draws into from a thread of its own (#1011). Silent or not, its rows
+    are about the app's windows only."""
+    frames = w.get("frames")
+    surfaces = frames.get("unjudged") if isinstance(frames, dict) else None
+    if not surfaces:
+        return []
+    each = []
+    for s in surfaces:
+        k, _, n = str(s.get("runs") or "").partition("/")
+        where = f", in {k} of {n} repeats" if n and k != n else ""
+        each.append(f"{s.get('presents')} frames on `{s.get('surface')}` with "
+                    f"`{s.get('call')}` on `{s.get('thread')}`{where}")
+    judged = sum(s.get("judged") or 0 for s in surfaces)
+    held = "none" if not judged else f"only {judged:g}"
+    them = "that surface" if len(surfaces) == 1 else "those surfaces"
+    return [f"> ⚠️ `frame_jank` judged the {frames.get('count')} frames the frame "
+            f"timeline holds of the app. The app also presented {'; '.join(each)}, and "
+            f"the timeline holds {held} of those: whether {them} moved smoothly is not in "
+            f"`frame_jank`'s rows, silent or not. The times of those presents are in the "
+            f"trace; the app sets their pace itself, so a long gap between two may be a "
+            f"pause rather than a late frame."]
+
+
 
 def to_json(report: dict[str, Any]) -> str:
     return json.dumps(report, ensure_ascii=False, indent=2)
@@ -1017,6 +1043,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     out.extend(_startup_lines(w.get("startup"), launch_mod.is_launch(w)))
     out.extend(_window_warning_lines(w))
     out.extend(_drift_lines(report))
+    out.extend(_unjudged_lines(w))
 
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(recording_mod.header_lines(report.get("recording")))
@@ -1448,6 +1475,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), launch_mod.is_launch(w)))
+    out.extend(_unjudged_lines(w))
     out.extend(_environment_lines(report.get("environment") or {}, _unbuilt(report)))
     out.extend(recording_mod.header_lines(report.get("recording")))
     out.extend(_no_sources_lines(report.get("no_sources")))
@@ -1521,6 +1549,8 @@ def detector_view(report: dict[str, Any], det_id: str, top: int = 5,
     unseen = needs_mod.could_not_run(d)
     if unseen:
         out.append(f"⚠️ not checked: {d['reason']}")
+    if det_id == "frame_jank":
+        out.extend(_unjudged_lines(report.get("window") or {}))
     out.append("")
     rows = d.get("rows") or []
     if not rows:
@@ -1662,6 +1692,7 @@ def window_view(report: dict[str, Any]) -> str:
         if frames.get("values"):
             line += " (repeats " + ", ".join(str(v) for v in frames["values"]) + ")"
         out.append(line)
+        out.extend(_unjudged_lines(w))
     crowd = w.get("crowding")
     if isinstance(crowd, dict) and crowd.get("cores"):
         out.append(f"Threads ready at once: at most {crowd.get('peak')} on {crowd['cores']} cores, "

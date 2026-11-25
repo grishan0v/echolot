@@ -434,6 +434,12 @@ Frames it tags `Buffer Stuffing` only waited in a queue behind the frame
 before: they reach the screen late and smoothly, so their row counts them
 with nothing past the deadline, after every late frame.
 Android 12 and up — see [requirements](../README.md#requirements).
+It judges the frames of the app's windows, the ones the timeline holds. A
+map, a game or a video a thread of the app draws into a `SurfaceView` with
+Vulkan or GL has none there, and the report says so above the findings: how
+many frames went to that surface, from which thread and with which call
+(`QueuePresentKHR`, `eglSwapBuffers…`), and that `frame_jank` did not judge
+them, silent or not.
 
 ## Your own names, measured every time
 

@@ -87,6 +87,13 @@ frames in it, so work done once a frame shrinks with them. `late` is how many
 of them the app made late — the frames `frame_jank`'s rows tag `Self Jank` —
 with each run's in `late_values`; `compare --plain` judges a window that runs
 to the end of the recording by their share, since its length cannot move.
+`unjudged`, when there is one, is a surface a thread of the app presented
+frames on that the timeline does not hold — a `SurfaceView` a map or a game
+draws into with Vulkan or GL — none of which `count`, `late` or `frame_jank`
+judged: `surface`, `thread`, `call` (what the thread presented with,
+`QueuePresentKHR` or `eglSwapBuffers…`), `presents`, and `judged`, how many of
+them the timeline holds; merged, the medians, each run's presents in `values`
+and `runs`, the repeats that listed it.
 
 **`window.drawn`** — how many frames the app's threads drew in the window, by
 their `DrawFrame` and `Choreographer#doFrame` slices (`count`; merged, the

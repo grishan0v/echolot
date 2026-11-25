@@ -85,6 +85,9 @@ def _checks(report: dict[str, Any]) -> list[dict[str, Any]]:
         # may not keep: a row in every repeat before a longer one seen once.
         rows = sorted(det.get("rows") or [], key=merge_mod.standing, reverse=True)
         said = words.get("found") or (words.get("clean") if level == plain.FINE else words.get("reason")) or ""
+        # What the check did not see is said beside what it found, or beside
+        # "fine": `frame_jank` sees no frame of a map's `SurfaceView` (#1011).
+        said = " ".join(t for t in (said, words.get("also")) if t)
         kind = kit.tone(level)
         out.append({
             "det": det, "id": did, "rows": rows, "level": level, "kind": kind,

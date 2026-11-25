@@ -830,6 +830,28 @@ def _frames_of(row: dict[str, Any], ctx: _Ctx) -> str:
     return f"{count} of {drawn} frames" if drawn else _count(count, "frame", "frames")
 
 
+def unjudged_said(report: dict[str, Any]) -> str | None:
+    """What frames the check did not see, beside whatever it says of the rest:
+    the ones the app drew on a surface of its own, a map or a game in a
+    `SurfaceView`, that the frame timeline does not hold (#1011). Without
+    it, "hardly any frame came late" was said of a map that `frame_jank`
+    never looked at. None when there are none."""
+    frames = (report.get("window") or {}).get("frames")
+    surfaces = frames.get("unjudged") if isinstance(frames, dict) else None
+    if not surfaces:
+        return None
+    one = len(surfaces) == 1
+    names = ", ".join(_name(s.get("surface")) for s in surfaces)
+    drawn = sum(float(s.get("presents") or 0) for s in surfaces)
+    judged = sum(float(s.get("judged") or 0) for s in surfaces)
+    held = "none of those were" if not judged else f"only {round(judged)} of those were"
+    return (f"This checked the {round(float(frames.get('count') or 0))} frames of the "
+            f"app's windows. The app drew {round(drawn)} more on "
+            f"{'a surface' if one else 'surfaces'} of its own ({names}), and {held} "
+            f"checked, so this says nothing about whether {'it' if one else 'they'} "
+            f"moved smoothly.")
+
+
 def _f_jank(rows, ctx):
     # The frames that missed a deadline first, and those that only waited in
     # a queue after them, whatever either measures: a report written before
@@ -1035,6 +1057,9 @@ def annotate(report: dict[str, Any]) -> dict[str, Any]:
         det["attention"] = level
         det["plain"] = {"title": title, "why": why, "clean": clean,
                         "found": text, "reason": reason}
+        also = unjudged_said(report) if det.get("id") == "frame_jank" else None
+        if also:
+            det["plain"]["also"] = also
     report["verdict"] = verdict(report, ctx)
     return report
 
@@ -1082,7 +1107,14 @@ def render(report: dict[str, Any], width: int | None = None) -> str:
         lines.append("")
     for d in listed:
         lines.append(f" {_MARK[d['attention']]}  {d['plain']['title']}")
-        lines += wrap(d["plain"]["found"] or "", "    ", "    ")
+        lines += wrap(" ".join(t for t in (d["plain"]["found"], d["plain"].get("also")) if t),
+                      "    ", "    ")
+    # A fine check that did not see everything says what it did not see,
+    # rather than being only counted among the fine (#1011).
+    for d in dets:
+        if d["attention"] == FINE and d["plain"].get("also"):
+            lines += ["", f" ok {d['plain']['title']}"]
+            lines += wrap(f"{d['plain']['clean']} {d['plain']['also']}", "    ", "    ")
     fine = sum(1 for d in dets if d["attention"] == FINE)
     blind = [d for d in dets if d["attention"] == NOT_CHECKED]
     parts = []

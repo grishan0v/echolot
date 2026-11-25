@@ -169,6 +169,12 @@ Its silence is ambiguous: no bad frames, and no frame timeline in the trace at
 all, look the same. Android 11 and below have none, and neither does a capture
 that did not ask for it. Check before calling a scenario smooth.
 
+It judges the app's windows and nothing else. A map, a game or a video a
+thread of the app draws into a `SurfaceView` with Vulkan or GL has no frame in
+the timeline; the report says how many it presented there, on which thread and
+with which call (`window.frames.unjudged`), and a silent `frame_jank` says
+nothing of them.
+
 ## From a finding to the code
 
 1. A firing detector gives a `location` — a slice or thread name.
