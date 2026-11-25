@@ -1052,10 +1052,54 @@ draws a placeholder first is still loading after that frame, and only its
 `reportFullyDrawn()` call says when it is done: without the call, the work
 after the first frame is outside the window.
 
+### A start the app hands over
+
+A splash activity that draws a frame and then starts the app's main activity
+by itself is one start for the user and two launches for the platform: the
+second one is recorded as `launchingActivity#<id>:completed-same-process`,
+from the app's own call to the main activity's first frame. The window runs
+on through it, and through any launch after it of the same kind:
+
+- the launch is the same app's, and begins after the one before it ended;
+- nothing was delivered to the app between the two (no `deliverInputEvent`),
+  so it is not a tap that opened a screen;
+- the activity the launch before ended on is destroyed once the next launch
+  is under way: a splash, a trampoline or a gate leaves, while an activity
+  the app opens over its main screen keeps the main screen beneath it, and
+  is not followed.
+
+The window then closes at the end of the last such launch, or on
+`reportFullyDrawn()` when that comes later, and `window.defined_by` is
+`launch+handover`. The line says where the first frame was:
+
+```
+Scenario window: **690.23 ms** (from 666.95 to 719.33 across repeats)
+Window: the launch as the platform records it, from the intent to the end of the launch the app handed its start over to, that launch's first frame. The trace holds no `reportFullyDrawn` call after the launch began. `org.example.SplashActivity` drew the launch's first frame at 181 ms. 263 ms later, with nothing touched, the app went on by itself to `org.example.MainActivity` and finished the one before: the start was not over at that frame, so the window runs on. The launch ended on `org.example.MainActivity`.
+```
+
+`window.handover` in `report.json` holds the same: `from` and `to`, the
+first frame from the window's start (`first_frame_ms`), the time from it to
+the app's call (`after_ms`), how many launches were followed, and, merged,
+in how many repeats (`runs`). The startup line under it is still the first
+launch, the platform's own measure. On an open-source app whose splash
+starts its native core on the main thread, the window used to close at the
+splash's first frame, 181 ms of the 690 the user waited for the map, and
+the 181 ms of native start after that frame was outside it.
+
+A platform launch already runs on through an activity the app starts before
+its first frame, so the window is the same whichever side of the splash's
+frame the app hands over on. A set where the app handed over in some repeats
+and not in others measured two starts: the header says so and `compare`
+refuses it, as it refuses a `launch+handover` report against a `launch` one.
+
 The line ends with the activity the launch ended on, `The launch ended on
 `org.example.MainActivity`.`, where the trace names it: Android 12 and on
 write a `performCreate:<class>` slice for every activity created, and the
-last one inside the window is it (`window.activity` in `report.json`).
+last one inside the window is it (`window.activity` in `report.json`). A
+launcher that is an `<activity-alias>` is created under the alias's name,
+and `am start -W` names the activity behind it; with `collect`'s record
+beside the trace, the line names both, `` `org.example.Launcher` (an alias
+of `org.example.SplashActivity`) `` (`window.alias`).
 
 Above the findings, the report names the app's `BOOT_COMPLETED` receiver when
 the main thread ran it inside the window, with its time over the repeats

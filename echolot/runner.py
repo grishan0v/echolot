@@ -958,6 +958,73 @@ def several_launchers(device: str, package: str, answered: str, root: Path | Non
     return said + "."
 
 
+# What `cmd package resolve-activity` prints of an activity, without
+# `--brief`: `targetActivity=` is the class an alias stands for, `null` for
+# an activity that is no alias.
+_TARGET_SAID = re.compile(r"\btargetActivity=([\w.$]+)")
+
+
+def alias_target(device: str, started: str | None, root: Path | None) -> str | None:
+    """The activity `started` stands for, as a component, when it is an
+    `<activity-alias>`; None when it is none, or when nothing says (#1007).
+
+    An app whose launcher is an alias has `scan` write the alias, which is
+    right: it is the component the launcher starts. The platform starts the
+    activity behind it, and `am start -W` names that one, so a launch that
+    ended where it started read as one the app had taken on to another
+    activity by itself. The device says what the alias stands for, and the
+    project's manifests say it where the device does not: any of them, a
+    flavor's too, with a name that starts with a dot under the module's
+    namespace.
+    """
+    if not started or "/" not in started:
+        return None
+    package, cls = started.split("/", 1)
+    try:
+        said = _run(["adb", "-s", device, "shell", "cmd", "package", "resolve-activity",
+                     "-n", started], timeout=60)
+    except RunnerError:
+        said = ""
+    m = _TARGET_SAID.search(said or "")
+    if m and m.group(1) != "null":
+        return component(f"{package}/{m.group(1)}")
+    if root is None or not root.is_dir():
+        return None
+    from . import domains, mark
+    for mf in domains.files_named(root, "AndroidManifest.xml"):
+        text = mf.read_text(encoding="utf-8", errors="replace")
+        target = manifest_aliases(text, mark.module_package(mark.module_dir_of(mf), text)).get(cls)
+        if target:
+            return f"{package}/{target}"
+    return None
+
+
+def manifest_aliases(manifest: str, namespace: str | None) -> dict[str, str]:
+    """Each `<activity-alias>` of a manifest, by its full class name, and the
+    full name of the activity it stands for. A name that starts with a dot,
+    or has none, is under `namespace`, and is left out without one."""
+    from . import mark
+
+    def full(raw: str) -> str | None:
+        if "${" in raw:
+            return None
+        if "." in raw.lstrip(".") and not raw.startswith("."):
+            return raw
+        return f"{namespace}.{raw.lstrip('.')}" if namespace else None
+
+    out: dict[str, str] = {}
+    for m in mark._ACTIVITY_OPEN.finditer(mark._XML_COMMENT.sub("", manifest)):
+        if m.group("tag") != "activity-alias":
+            continue
+        name = mark._ANDROID_NAME.search(m.group("attrs"))
+        target = mark._TARGET_ACTIVITY.search(m.group("attrs"))
+        alias, behind = (full(name.group(1)) if name else None,
+                         full(target.group(1)) if target else None)
+        if alias and behind:
+            out[alias] = behind
+    return out
+
+
 # A package name and an atrace category are both substituted between quotes in
 # the protobuf text above. Nothing that could end the string early has any
 # business being in either — a package name is dotted identifiers, a category
@@ -1729,11 +1796,23 @@ class Prepared:
     withheld: list[str] | None = None
     # The activity the repeat before ended on (#909).
     ended_before: str | None = None
+    # Where the project's manifests are, for the activity an alias stands for.
+    root: Path | None = None
+    # The activity the one started stands for, when that is an
+    # `<activity-alias>`: read the first time a launch ends elsewhere than
+    # where it started, "" once read and none was found (#1007).
+    target: str | None = None
 
     @property
     def asked(self) -> str | None:
         """The activity started, as a component; None in command mode."""
         return component(self.activity) if self.mode == "launch" else None
+
+    def elsewhere(self, ended: str | None) -> bool:
+        """Whether a launch that ended on `ended` ended on another activity
+        than the one started: neither on it, nor on the activity it is an
+        alias of (#1007)."""
+        return bool(ended and self.asked) and ended not in (self.asked, self.target)
 
 
 def prepare(package: str, section: dict, iterations: int, *, device: str | None,
@@ -1830,7 +1909,8 @@ def prepare(package: str, section: dict, iterations: int, *, device: str | None,
     return Prepared(package=package, name=name, mode=mode, iterations=iterations,
                     reset=reset, duration_ms=duration_ms, config=config, names=names,
                     device=dev, activity=activity, command=command, planted=planted,
-                    settings=device_settings, last=last, reread=reread, built=built)
+                    settings=device_settings, last=last, reread=reread, built=built,
+                    root=Path(PROJECT_ROOT.read(section)))
 
 
 @dataclass
@@ -1976,6 +2056,12 @@ def record_one(p: Prepared, settled, i: int, attempt: int,
         if p.withheld is None:
             p.withheld = ungranted(dev, package)
         info["ungranted"] = p.withheld
+    # A launcher that is an `<activity-alias>` ends its launch on the
+    # activity it stands for, and `am start -W` names that one: the same
+    # activity, read once, after the recording, so that the question asked
+    # of the device is not in the trace (#1007).
+    elif p.mode == "launch" and p.target is None and p.elsewhere(info.get("activity")):
+        p.target = alias_target(dev, p.asked, p.root) or ""
     return repeat
 
 
@@ -2068,9 +2154,10 @@ def judge(repeat: Repeat, look: tuple[str | None, str | None] | None = None) -> 
     # Where the launch ended, against where it was started (#909).
     # Said when it ended elsewhere, unless the repeat before ended
     # there too: a splash that hands over to the app's main activity
-    # does that in every repeat, and one line says it.
+    # does that in every repeat, and one line says it. An alias ends on
+    # the activity it stands for, which is no other (#1007).
     ended, asked = info.get("activity"), p.asked
-    if ended and asked and ended != asked and ended != p.ended_before:
+    if p.elsewhere(ended) and ended != p.ended_before:
         notes.append(_dialog_line(ended, p.package, info["ungranted"])
                      if "ungranted" in info else _elsewhere_line(ended, asked))
     cold = (False if restarted else True
@@ -2121,6 +2208,8 @@ def repeat_facts(repeat: Repeat, verdict: Verdict) -> dict:
             # (#909).
             "activity": info.get("activity"),
             "asked": p.asked,
+            # The activity `asked` stands for, when it is an alias (#1007).
+            **({"target": p.target} if p.target else {}),
             # The runtime permissions the app held ungranted, read
             # when the launch ended on the permission dialog (#810).
             **({"ungranted": info["ungranted"]} if "ungranted" in info else {}),
@@ -2158,6 +2247,8 @@ def keep_or_set_aside(repeat: Repeat, verdict: Verdict, out: Path, first: Path |
     pulled = first / out.name if first is not None else out
     info.update(_pull(p.device, pulled))
     info["repeat"], info["asked"] = repeat.i + 1, p.asked
+    if p.target:
+        info["target"] = p.target
     info["device"] = p.device
     recording.write(pulled, repeat_facts(repeat, verdict))
 
@@ -2366,6 +2457,11 @@ def activities_said(results: list[dict]) -> str | None:
         return None
     counts = Counter(a for _, a in ended)
     asked = next((r.get("asked") for r in results if r.get("asked")), None)
+    # An alias and the activity it stands for are one activity (#1007).
+    target = next((r.get("target") for r in results if r.get("target")), None)
+    if target and asked:
+        counts = Counter(asked if a == target else a for a in counts.elements())
+        ended = [(r, asked if a == target else a) for r, a in ended]
     if len(counts) == 1:
         (only, n), = counts.items()
         if not asked or only == asked:

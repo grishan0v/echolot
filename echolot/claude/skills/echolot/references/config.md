@@ -181,6 +181,17 @@ makes the call gets a window that closes at the launch's end.
 Nobody chooses between the two ends. The trace decides, and the report says
 which it was: `window.defined_by` is `launch` or `launch+reportFullyDrawn`.
 
+A start the app hands over after its first frame runs on (#1008): a splash
+that draws a frame, then starts the main activity by itself and finishes, is
+a second launch for the platform (`completed-same-process`). The window runs
+through each launch of the same app that begins after the one before ended,
+with no input to the app between them, while the activity the one before
+ended on is destroyed once the next is under way. It closes at the last such
+launch's end, or on `reportFullyDrawn()` after it, and `window.defined_by`
+is `launch+handover`; `window.handover` names the activities and where the
+first frame was. A screen the app opens over its main one, which stays
+beneath it, is not followed.
+
 `window` takes the place of `start` and `end`: a scenario holds a window or
 anchors, and one with both does not load. It is written as the word, or as a
 block with `name: launch` beside `_source` and `_evidence`, the way an anchor
