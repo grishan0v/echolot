@@ -210,17 +210,22 @@ class that measures the launch, with `StartupTimingMetric in <file>` as its
 evidence, and the `gradle` runner stays.
 
 The window starts at the intent and ends at the launch's end, the first
-frame, or at the app's `reportFullyDrawn()` call when that comes later. After
-the dry run below, read `window.defined_by` in the report and tell the human
-in one sentence what closed the window: `launch` is the first frame,
-`launch+reportFullyDrawn` the app's own call.
+frame, or at the app's `reportFullyDrawn()` call when that comes later. A
+splash that draws a frame and then goes on to the main activity by itself
+does not end it: the window runs on to the end of the launch the app handed
+its start over to. After the dry run below, read `window.defined_by` in the
+report and tell the human in one sentence what closed the window: `launch`
+is the first frame, `launch+reportFullyDrawn` the app's own call,
+`launch+handover` the first frame of the activity the app went on to, with
+`window.handover` saying which and where the splash's own frame was.
 
 Ask about the end only if the human says the app is not ready at that
 moment. That happens with an app that draws a placeholder first and never
 calls `reportFullyDrawn()`: its window closes at the first frame, and what
 loads after it is outside. The answer is then an end anchor from the probe,
 with `start` and `end` in place of `window`, or the call added to the app:
-their choice, not yours.
+their choice, not yours. A hand-over is not that case: the trace says it,
+and the window already follows it.
 
 ## Provenance
 

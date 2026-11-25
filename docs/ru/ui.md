@@ -34,7 +34,12 @@ app opens** (Как открывается приложение) — от наж
 экрана. Это единственный сценарий, который не нужно описывать: его окно — сам
 запуск по записи телефона
 ([`scenario.window: launch`](analysing.md#окно-равное-запуску)), а
-`echolot scan` составляет весь конфиг по файлам сборки.
+`echolot scan` составляет весь конфиг по файлам сборки. Приложение, которое
+открывается на заставке и само переходит к основному экрану, меряется до
+первого кадра основного экрана, а первая строка отчёта говорит, где был кадр
+заставки: «The launch takes 0.7 s. It runs past SplashActivity's first frame
+at 0.2 s: the app went on to MainActivity by itself, and the start was not
+over.»
 
 Кнопка **Set it up** сохраняет этот черновик в `echolot.yml` — тот же текст,
 который `echolot scan` печатает под «A config to start from», с двумя

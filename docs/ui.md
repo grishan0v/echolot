@@ -31,7 +31,12 @@ check?** and has one answer: **How the app opens**, from the tap on its icon
 until the first screen is there. It is the one scenario nobody has to
 describe: its window is the launch as the phone records it
 ([`scenario.window: launch`](analysing.md#a-window-that-is-the-launch)), and
-`echolot scan` drafts the whole config for it from the build files.
+`echolot scan` drafts the whole config for it from the build files. An app
+that opens on a splash screen and then goes on to its main screen by itself
+is measured up to the main screen's first frame, and the report's first line
+says where the splash's frame was: "The launch takes 0.7 s. It runs past
+SplashActivity's first frame at 0.2 s: the app went on to MainActivity by
+itself, and the start was not over."
 
 **Set it up** writes that draft as `echolot.yml`: the text `echolot scan`
 prints under "A config to start from", with two lines of comment above it.

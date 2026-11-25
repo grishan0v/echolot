@@ -1920,6 +1920,83 @@ def journey() -> bytes:
     return builder.serialize()
 
 
+# --- a splash that hands the start over after its first frame ----------------------
+#
+# `handover()` only, a scene of its own (#1008). A cold start whose first
+# activity is a splash: it draws one frame, and the launch the platform
+# records ends there, at 300. The splash then waits for a message it posted,
+# and from 380 to 560 the app's own start runs on the main thread with no
+# section around it, 180 ms: a native library's start, the shape a test
+# drive on an open-source app found. Then the app starts its main activity
+# itself. The platform records that as a second launch, 555 to 900,
+# `completed-same-process` as Android 15 names it, and the main thread
+# destroys the splash at 950, once the main activity is up. The first launch
+# is `completed-cold`, in the same version's words.
+#
+# The main thread works only inside sections up to the splash's frame, so a
+# window that closes there sees nothing nobody named; one that runs on to
+# the main activity's frame holds the 180 ms.
+HANDOVER_SPLASH = "com.example.app.SplashActivity"
+HANDOVER_MAIN = "com.example.app.MainActivity"
+# The launcher the manifest declares as an `<activity-alias>` of the splash
+# (#1007): the trace's `performCreate:` names it, and `am start -W` the splash.
+HANDOVER_ALIAS = "com.example.app.Launcher"
+HANDOVER_LAUNCH_MS = (40, 300)
+HANDOVER_NEXT_MS = (555, 900)
+HANDOVER_INIT_MS = (380, 560)
+HANDOVER_DESTROYED_MS = 950
+HANDOVER_TAP_MS = 340
+
+
+def handover(*, touched: bool = False, kept: bool = False,
+             splash: str = HANDOVER_SPLASH) -> bytes:
+    """The scene above. `touched` puts a tap on the app at 340, between the
+    two launches: the second is a person's doing. `kept` leaves the first
+    activity alive, as a screen the app opens over its main one does.
+    `splash` is the class the trace names the first activity by:
+    `HANDOVER_ALIAS` for a launcher that is an alias of it."""
+    main = [
+        ("bindApplication", 100, 100, []),
+        ("activityStart", 200, 40, [(f"performCreate:{splash}", 202, 36, [])]),
+        ("activityResume", 240, 10, []),
+        ("Choreographer#doFrame 1", 255, 40, [("traversal", 256, 38, [])]),
+        *([(_input(HANDOVER_TAP_MS, 0x1A2B), HANDOVER_TAP_MS + 0.5, 2, [])] if touched else []),
+        ("activityStart", 560, 100, [(f"performCreate:{HANDOVER_MAIN}", 565, 90, [])]),
+        ("activityResume", 660, 10, []),
+        ("Choreographer#doFrame 2", 840, 50, [("traversal", 841, 48, [])]),
+        *([] if kept else [("activityDestroy", HANDOVER_DESTROYED_MS, 10, [
+            (f"performDestroy:{splash}", HANDOVER_DESTROYED_MS + 1, 8, [])])]),
+    ]
+    on_cpu = [(100, 250), (255, 295), (HANDOVER_INIT_MS[0], 670), (840, 890),
+              (HANDOVER_DESTROYED_MS, HANDOVER_DESTROYED_MS + 10)]
+    if touched:
+        on_cpu.append((HANDOVER_TAP_MS, HANDOVER_TAP_MS + 3))
+
+    builder = TraceProtoBuilder()
+    config(builder, frames=False)
+    process_tree(builder, [(APP_PID, APP_NAME, {TID_MAIN: APP_NAME[-15:]}),
+                           (SS_PID, SS_NAME, {SS_PID: SS_NAME})])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {0: []}
+    for start, end in sorted(on_cpu):
+        by_cpu[0] += [(ms(start), next(seq), "sched", "swapper/0", 0, R, APP_NAME[-15:], TID_MAIN),
+                      (ms(end), next(seq), "sched", APP_NAME[-15:], TID_MAIN, S, "swapper/0", 0)]
+    for ts, order, kind, name in _flatten(main, [], seq):
+        buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+        by_cpu[0].append((ts, order, "print", TID_MAIN, buf))
+    # system_server's two launches, on a CPU of its own.
+    for n, ((began, drew), kind) in enumerate(((HANDOVER_LAUNCH_MS, "cold"),
+                                               (HANDOVER_NEXT_MS, "same-process")), start=1):
+        name = f"launchingActivity#{n}"
+        by_cpu.setdefault(1, []).extend(
+            (ms(at), next(seq), "print", SS_PID, buf + "\n") for at, buf in (
+                (began, f"S|{SS_PID}|{name}|{n}"), (drew, f"F|{SS_PID}|{name}|{n}"),
+                (drew, f"B|{SS_PID}|{name}:completed-{kind}:{APP_NAME}"),
+                (drew, f"E|{SS_PID}")))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # --- the recording's own account of itself ---------------------------------------
 #
 # The tracing service writes the config a recording ran with at the head of

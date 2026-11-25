@@ -3708,7 +3708,26 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
     boot = _boot_said(window.get("boot_receivers"))
     if boot:
         notes.append(boot)
+    handed = _handover_said(window)
+    if handed:
+        notes.append(handed)
     return None, ("; ".join(notes) or None)
+
+
+def _handover_said(window: dict) -> str | None:
+    """What `collect` says when the first repeat's app handed its start over
+    after its first frame (#1008), or None: the window runs through it, and
+    a set that ends on the first screen in some repeats measures two starts.
+    """
+    h = window.get("handover")
+    if not h:
+        return None
+    first = f"`{h['from'].rsplit('.', 1)[-1]}`" if h.get("from") else "its first activity"
+    then = f"`{h['to'].rsplit('.', 1)[-1]}`" if h.get("to") else "another activity"
+    return (f"repeat 1 handed its start over: {first} drew the launch's first frame at "
+            f"{round(h['first_frame_ms']):,} ms, and {round(h['after_ms']):,} ms later the "
+            f"app went on by itself to {then}. `window: launch` runs through that launch, "
+            f"{round(window.get('duration_ms') or 0):,} ms in all, and analyze says so")
 
 
 def _boot_said(rows: list[dict] | None) -> str | None:

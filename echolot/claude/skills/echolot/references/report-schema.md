@@ -117,7 +117,10 @@ trace's last `performCreate:`): another journey, such as an app opening the
 page read last by itself; each has its `repeat`, its `activity` and the
 `others`' one. `window.activities` counts them instead when as many ended on
 each and none could be left out. `window.activity` is where a launch window's
-launches ended, and `window.boot_receivers` the app's `BOOT_COMPLETED`
+launches ended, `window.alias` the activity a launcher alias stands for,
+`window.handover` the splash's hand-over the window ran on through (`from`,
+`to`, `first_frame_ms`, `after_ms`, `launches`, `runs`; see `echolot guide
+report-checks`), and `window.boot_receivers` the app's `BOOT_COMPLETED`
 receivers the main thread ran inside the window, with their time and `runs`:
 on Android 15 every start after a force-stop runs them and a user's start does
 not, so their time is the reset's, not something to place in the start's code. Every number in it is then a median across them, and a few keys say

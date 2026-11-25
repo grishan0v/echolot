@@ -302,7 +302,8 @@ the numbers are about your scenario.
 Fix the config rather than hunting a problem. Same for `process_alternatives` —
 you may be analysing the wrong process.
 A scenario with `window: launch` has no anchors: `window.defined_by` says what
-closed it, the launch's end or the app's `reportFullyDrawn()`, and
+closed it, the launch's end, the end of the launch a splash handed the start
+over to, or the app's `reportFullyDrawn()`, and
 `defined_by_runs` in a merged report means the repeats did not agree.
 
 **`frame_jank` is about single frames, not totals.** Most of the others

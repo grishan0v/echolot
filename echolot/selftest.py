@@ -2738,15 +2738,17 @@ def _(report):
 
 
 def _collect_ending(ended: list[str], n: int, where: Path, started: str = ".Main",
-                    dump: str = "", pulled: bytes = b"a trace",
-                    **kw) -> tuple[list[dict], list[str]]:
+                    dump: str = "", pulled: bytes = b"a trace", resolved: str = "",
+                    root: Path | None = None, **kw) -> tuple[list[dict], list[str]]:
     """`runner.collect` of `n` cold launches of `com.example.app/<started>` on
     a fake device whose `am start -W` says each ended on the next of `ended`,
     in the short form a phone prints, or as the component given where it
     holds a `/`: the recordings made, and what was said. `dump` is what
     `dumpsys package` answers, and every call of it is said as `dumpsys`;
-    `pulled` is every trace the device hands over, and `kw` goes to
-    `collect` as it is."""
+    `resolved` is what `cmd package resolve-activity` answers, and every call
+    of it is said as `resolve`; `root` is the project's checkout, an empty
+    folder by default; `pulled` is every trace the device hands over, and
+    `kw` goes to `collect` as it is."""
     from . import runner
     package, serial = "com.example.app", "emulator-5554"
     ended = list(ended)
@@ -2770,6 +2772,9 @@ def _collect_ending(ended: list[str], n: int, where: Path, started: str = ".Main
         if text == f"dumpsys package {package}":
             said.append("dumpsys")
             return dump
+        if text.startswith("cmd package resolve-activity"):
+            said.append("resolve")
+            return resolved
         if args[3:4] == ["pull"]:
             Path(args[-1]).write_bytes(pulled)
         return ""
@@ -2778,9 +2783,11 @@ def _collect_ending(ended: list[str], n: int, where: Path, started: str = ".Main
     real = runner._run
     runner._run = adb
     try:
-        made = runner.collect(package, where, n, name="run",
-                              section={"activity": f"{package}/{started}"}, log=said.append,
-                              **kw)
+        with tempfile.TemporaryDirectory() as empty:
+            made = runner.collect(package, where, n, name="run",
+                                  section={"activity": f"{package}/{started}",
+                                           "project_root": str(root or empty)},
+                                  log=said.append, **kw)
     finally:
         runner._run = real
     return made, said
@@ -2831,6 +2838,78 @@ def _(report):
         assert _one_journey(reports) == (reports, [], None), "one journey: all read"
 
 
+# What `cmd package resolve-activity -n` prints of an `<activity-alias>`, cut
+# to the lines `runner.alias_target` reads, and of an activity that is none.
+_RESOLVED_ALIAS = """\
+priority=0 preferredOrder=0 match=0x0 specificIndex=-1 isDefault=false
+ActivityInfo:
+  name=com.example.app.Launcher
+  packageName=com.example.app
+  enabled=true exported=true directBootAware=false
+  taskAffinity=com.example.app targetActivity=com.example.app.SplashActivity persistableMode=PERSIST_ROOT_ONLY
+"""
+_RESOLVED_PLAIN = _RESOLVED_ALIAS.replace("targetActivity=com.example.app.SplashActivity",
+                                          "targetActivity=null")
+_ALIAS_MANIFEST = """\
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <activity android:name=".SplashActivity" />
+    <!-- <activity-alias android:name=".Old" android:targetActivity=".Gone" /> -->
+    <activity-alias android:name=".Launcher" android:targetActivity=".SplashActivity">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity-alias>
+  </application>
+</manifest>
+"""
+
+
+@check("collect: a launcher that is an activity-alias ends on the activity it stands "
+       "for, and that is said as no other activity")
+def _(report):
+    """An app whose launcher is an `<activity-alias>` has `scan` write the
+    alias, the component the launcher starts; `am start -W` answers with the
+    activity behind it, and `collect` said under every set that the app had
+    gone on to another activity by itself, while `analyze` named the alias
+    (#1007). What the alias stands for is read once, from the device, or from
+    the project's manifests where the device does not say, and kept with the
+    record. A launch that ends on another activity still is said."""
+    from . import runner
+    splash = "com.example.app/com.example.app.SplashActivity"
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([".SplashActivity"], 3, Path(tmp), started=".Launcher",
+                                     resolved=_RESOLVED_ALIAS)
+        assert not any("ended on" in s for s in said), said
+        assert said.count("resolve") == 1, "read once, at the first launch that looked elsewhere"
+        kept = [runner.launch_record(r["path"]) for r in made]
+        assert all(k["target"] == splash and k["activity"] == splash
+                   and not k["notes"] for k in kept), kept
+        assert runner.activities_said(made) is None, runner.activities_said(made)
+    with tempfile.TemporaryDirectory() as tmp:
+        checkout = Path(tmp) / "app"
+        (checkout / "app/src/main").mkdir(parents=True)
+        (checkout / "app/build.gradle.kts").write_text(
+            'android {\n    namespace = "com.example.app"\n}\n', encoding="utf-8")
+        (checkout / "app/src/main/AndroidManifest.xml").write_text(_ALIAS_MANIFEST,
+                                                                    encoding="utf-8")
+        made, said = _collect_ending([".SplashActivity"], 2, Path(tmp) / "traces",
+                                     started=".Launcher", resolved=_RESOLVED_PLAIN,
+                                     root=checkout)
+        assert not any("ended on" in s for s in said), "the manifest says it: " + str(said)
+        assert runner.launch_record(made[0]["path"])["target"] == splash
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([".Main"], 2, Path(tmp), started=".Launcher",
+                                     resolved=_RESOLVED_ALIAS)
+        under = [s.strip() for s in said if "the launch ended on" in s]
+        assert under == ["the launch ended on com.example.app.Main, not on the "
+                         "com.example.app.Launcher it started: the app went on to another "
+                         "activity by itself"], said
+        assert (runner.activities_said(made) or "").startswith(
+            "every launch of the 2 ended on com.example.app.Main"), made
+
+
 @check("launch window: says which activity the launch ended on, and names the app's "
        "BOOT_COMPLETED receiver inside it as the reset's work")
 def _(report):
@@ -2857,6 +2936,120 @@ def _(report):
     assert said in render_mod.overview(got), "and in the overview analyze prints"
     plain = report["window"]
     assert plain.get("boot_receivers") is None and "activity" not in plain, plain
+
+
+def _handed(folder: str, **build) -> tuple[dict, Path]:
+    """`fixture.handover` written into `folder` and analysed with `window:
+    launch`: the report, and the trace."""
+    trace = Path(folder) / "startup_iter000.perfetto-trace"
+    trace.write_bytes(fixture.handover(**build))
+    return _analyze(trace, Config(_HANDOVER_CONFIG)), trace
+
+
+_HANDOVER_CONFIG = {"project": {"package": fixture.APP_NAME, "process": fixture.APP_NAME},
+                    "scenario": {"name": "startup", "window": "launch"}}
+
+
+@check("launch window: a start the app hands over after its first frame runs on to the "
+       "end of the launch it went on to, and says so")
+def _(report):
+    """A splash that draws a frame and then, by itself, starts the app's
+    main activity and finishes, is one launch for a person and two for the
+    platform: the second `completed-same-process`. The window closed on the
+    first: on an open-source app 181 ms of the 690 to the map, with 181 ms of
+    the app's native start on the main thread after it, outside, and the
+    report and the page called the work nobody names fine (#1008). The
+    window runs on through each launch the app went on to by itself, with
+    nothing touched between and the screen before finished, and says where
+    the first frame was. A launch after a tap, or a screen opened over one
+    that stays, is not followed."""
+    import argparse
+
+    from . import launch as launch_mod
+    from . import plain as plain_mod
+    from . import render as render_mod
+    from .main import _scenario_ran
+    with tempfile.TemporaryDirectory() as tmp:
+        got, trace = _handed(tmp)
+        stop, note = _scenario_ran(Config(_HANDOVER_CONFIG), trace,
+                                   argparse.Namespace(tp_binary=_binary))
+    w = got["window"]
+    assert _window_ms(got) == (fixture.HANDOVER_LAUNCH_MS[0], fixture.HANDOVER_NEXT_MS[1]), \
+        _window_ms(got)
+    assert w["defined_by"] == launch_mod.HANDOVER, w["defined_by"]
+    assert w["handover"] == {
+        "from": fixture.HANDOVER_SPLASH, "to": fixture.HANDOVER_MAIN,
+        "first_frame_ms": 260.0, "after_ms": 255.0, "launches": 1}, w["handover"]
+    assert w["activity"] == fixture.HANDOVER_MAIN, w.get("activity")
+    # The app's own start after the splash's frame is in the window now, and
+    # is the main thread's work nobody named.
+    blind = next(d for d in got["detectors"] if d["id"] == "uninstrumented_cpu")
+    init = fixture.HANDOVER_INIT_MS[1] - fixture.HANDOVER_INIT_MS[0]
+    assert [(r["location"], r["total_ms"]) for r in blind["rows"]] == [("main", init)], \
+        blind["rows"]
+    text = render_mod.to_markdown(got)
+    said = (f"`{fixture.HANDOVER_SPLASH}` drew the launch's first frame at 260 ms. 255 ms "
+            f"later, with nothing touched, the app went on by itself to "
+            f"`{fixture.HANDOVER_MAIN}` and finished the one before")
+    assert said in text and "the end of the launch the app handed its start over to" in text, \
+        text[:1500]
+    assert said in render_mod.overview(got), "and in the overview analyze prints"
+    page = plain_mod.verdict(got)["text"]
+    assert page.startswith("The launch takes 0.9 s. It runs past SplashActivity's first "
+                           "frame at 0.3 s: the app went on to MainActivity by itself"), page
+    # Over two repeats: the medians, and how many made it.
+    both = launch_mod.merged([w, w], 2)
+    assert both["defined_by"] == launch_mod.HANDOVER and both["handover"]["runs"] == "2/2", both
+    # And never against a launch closed on its first frame.
+    apart = launch_mod.differ({"window": {"defined_by": launch_mod.LAUNCH}}, got)
+    assert apart and "run on through the launches the app handed over to" in apart, apart
+    # collect's first look at the set says it.
+    assert stop is None and note and note.startswith(
+        "repeat 1 handed its start over: `SplashActivity` drew the launch's first frame at "
+        "260 ms, and 255 ms later the app went on by itself to `MainActivity`"), note
+    for build in ({"touched": True}, {"kept": True}):
+        with tempfile.TemporaryDirectory() as tmp:
+            alone, _ = _handed(tmp, **build)
+        a = alone["window"]
+        assert _window_ms(alone) == fixture.HANDOVER_LAUNCH_MS and a["defined_by"] == "launch" \
+            and "handover" not in a and a["activity"] == fixture.HANDOVER_SPLASH, (build, a)
+        assert "handed" not in render_mod.to_markdown(alone), build
+
+
+@check("launch window: a launcher that is an activity-alias is named with the activity "
+       "it stands for")
+def _(report):
+    """The trace names an alias by itself, `performCreate:<the alias>`, and
+    `am start -W` by the activity behind it: `collect` said the launch ended
+    on one, `analyze` on the other, and neither said they were one (#1007).
+    The record `collect` keeps says what the alias stands for, and one kept
+    before it did says it all the same: `am start -W` named an activity the
+    trace never created, and the trace created the one started."""
+    from . import recording
+    from . import render as render_mod
+    package = fixture.APP_NAME
+    named = (f"`{fixture.HANDOVER_ALIAS}` (an alias of `{fixture.HANDOVER_SPLASH}`)")
+    asked = {"asked": f"{package}/{fixture.HANDOVER_ALIAS}",
+             "activity": f"{package}/{fixture.HANDOVER_SPLASH}"}
+    for record, build in ((asked, {"kept": True}),
+                          ({**asked, "target": asked["activity"]}, {"kept": True}),
+                          (asked, {})):
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = Path(tmp) / "startup_iter000.perfetto-trace"
+            trace.write_bytes(fixture.handover(splash=fixture.HANDOVER_ALIAS, **build))
+            recording.write(trace, {"runner": "launch", "launch": record})
+            got = _analyze(trace, Config(_HANDOVER_CONFIG))
+        assert got["window"]["alias"] == {"name": fixture.HANDOVER_ALIAS,
+                                          "of": fixture.HANDOVER_SPLASH}, got["window"]
+        text = render_mod.to_markdown(got)
+        # Where it handed over, the first frame is the alias's.
+        said = (f"{named} drew the launch's first frame" if not build else
+                f"The launch ended on {named}.")
+        assert said in text, text[:1500]
+    # Without a record there is nothing to tell an alias by: the trace's name.
+    with tempfile.TemporaryDirectory() as tmp:
+        got, _ = _handed(tmp, splash=fixture.HANDOVER_ALIAS, kept=True)
+    assert "alias" not in got["window"], got["window"]
 
 
 # A permission dialog's component as `am start -W` names it, and what

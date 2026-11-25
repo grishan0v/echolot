@@ -974,6 +974,21 @@ def _budget(report: dict[str, Any]) -> float | None:
     return float(value)
 
 
+def _handover(report: dict[str, Any]) -> str:
+    """The sentence after "The launch takes …" for a start the app handed
+    over after its first frame (#1008): the time a person waited runs through
+    it, and the first screen's frame is said with its time, so that neither
+    number is mistaken for the other. Empty for any other window."""
+    h = (report.get("window") or {}).get("handover")
+    if not isinstance(h, dict) or not isinstance(h.get("first_frame_ms"), (int, float)):
+        return ""
+    def short(cls: Any) -> str:
+        return str(cls).rsplit(".", 1)[-1] if cls else ""
+    first, then = short(h.get("from")) or "the first screen", short(h.get("to")) or "the next"
+    return (f" It runs past {first}'s first frame at {hum(float(h['first_frame_ms']))}: "
+            f"the app went on to {then} by itself, and the start was not over.")
+
+
 def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     """The launch against the budget: how long it takes and what that means.
 
@@ -1001,8 +1016,9 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     if ctx.window_ms <= 0:
         return {"level": NOT_CHECKED, "budget_ms": budget, "ratio": None, "warning": None,
                 "text": f"This recording has no measured {ctx.noun} to judge."}
+    handed = _handover(report)
     if budget is None:
-        lead = f"The {ctx.noun} takes {hum(ctx.window_ms)}."
+        lead = f"The {ctx.noun} takes {hum(ctx.window_ms)}.{handed}"
         return {"level": NO_LIMIT, "budget_ms": None, "ratio": None, "warning": None,
                 "text": f"{lead} No time limit is set, so there is nothing to compare it with."}
     # The key, and what is said from it: the sentence's ratio is `verdict.ratio`
@@ -1010,7 +1026,7 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     # ("1.9 s" over "0.5 s" is 3.8 where 1919 ms over 520 ms is 3.7).
     ratio = round(ctx.window_ms / budget, 3)
     took, limit = hum_against(ctx.window_ms, budget, ratio)
-    lead, allowed = f"The {ctx.noun} takes {took}.", f"You allowed {limit}, so"
+    lead, allowed = f"The {ctx.noun} takes {took}.{handed}", f"You allowed {limit}, so"
     # Judged by the exact times: a window a tenth of a millisecond over the
     # limit has a ratio that rounds to 1.0 and is still not within it.
     if ctx.window_ms <= budget:

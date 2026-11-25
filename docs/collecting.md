@@ -231,6 +231,25 @@ launches ended when they did not all end on one activity (`PageActivity in
 repeat 1, MainActivity in the other 9`), or says that every launch ended on
 another activity than the one started.
 
+A launcher that is an `<activity-alias>` is no other activity: `am start -W`
+names the activity behind the alias (`android:targetActivity`), and the first
+time a launch ends there `collect` asks the device what the alias stands for
+(`cmd package resolve-activity -n <the alias>`), or reads the project's
+manifests where the device does not say. A launch that ended on the alias's
+activity says nothing, and the record keeps it as `target`.
+
+`am start -W` returns at the first frame, so a splash that draws a frame and
+then hands over to the main activity by itself is not one of these: the
+launch ended where it started. The trace holds the hand-over as a second
+launch, and the first repeat's look at its trace says it, under that
+repeat's line:
+
+```
+      [!] repeat 1 handed its start over: `SplashActivity` drew the launch's first frame at 181 ms, and 263 ms later the app went on by itself to `MainActivity`. `window: launch` runs through that launch, 690 ms in all, and analyze says so
+```
+
+See [A start the app hands over](analysing.md#a-start-the-app-hands-over).
+
 Such a repeat is not recorded again, as a warm one is. Which repeat is the
 odd one out is the set's to say and not the activity started's: Wikipedia's
 was the first of its set, and a splash's set ends elsewhere every time.
