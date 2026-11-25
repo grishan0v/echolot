@@ -302,7 +302,8 @@ three ways:
    app_init's (no section) → the app's own ContentProviders and
      Application.onCreate: AGENTTMP_ markers there; what stays unnamed is
      libraries, listed as <provider> in the merged manifest
-   a named place → a few AGENTTMP_ markers around it, by hand
+   a named place → a few AGENTTMP_ markers around it, by hand; the time of
+     a `native` method is in its C or C++ body, and the markers go there
    round == loop.max_rounds → exit with an interim conclusion, and do not
      re-record: a recording nobody analyses costs minutes on the device
    build and install the app with the markers in it, unless runner.mode is
@@ -417,6 +418,29 @@ Nor fold a marker onto the line of the code it marks, anywhere: a one-line
 `try { work() } finally { android.os.Trace.endSection() } // echolot:mark` is
 a line in another shape, and it is still there after `--remove`.
 
+**In C or C++, behind a JNI call.** When the time is inside a `native`
+method, the next marker goes into its C or C++ body, in a file under
+`instrumentation.allowed` (an app module's `src/main/cpp` is in it when its
+`src/main` is). Use the project's own tracing wrapper when it has one, or
+`ATrace_beginSection("AGENTTMP_…")` from `<android/trace.h>` with an
+`ATrace_endSection()` on every way out; a scoped wrapper object in a block of
+its own ends the section on every one by itself:
+
+```cpp
+{ // echolot:mark
+  ScopedTrace section("AGENTTMP_open_store"); // echolot:mark
+  OpenStore(path);
+} // echolot:mark
+```
+
+echolot reads C and C++ as it reads Kotlin and Java: `analyze` holds the
+traces' names against them, and `echolot hunt`, the verdict check and
+`--remove` count what is left there. `--remove` deletes nothing there — it
+deletes the shapes `--apply` writes, and `--apply` writes none in C or C++ —
+and names every such line, `file:line`: take each out by hand, with the block,
+the end and the include it brought. Tag every line you add there as well; an
+`ATrace_endSection()` carries no prefix, and without the tag nothing finds it.
+
 **A marker reaches a trace only through a build.** In launch and command
 modes `collect` records the app that is installed on the phone and builds
 nothing, so after `mark --apply` or a marker added by hand, build and install
@@ -461,9 +485,11 @@ marker around the caller. Keep the work's own name the same in both places.
 
 **Cleanup is mandatory on success and on running out of rounds alike.** Run
 `echolot mark --remove`, then confirm from the checkout's root that
-`grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .`
-prints nothing — the files `echolot hunt` checks, every path in
-`instrumentation.allowed` among them — and say so in your report.
+`grep -rn --include='*.kt' --include='*.java' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.cxx' --include='*.h' --include='*.hh' --include='*.hpp' --include='*.hxx' -e AGENTTMP_ -e 'echolot:mark' .`
+prints nothing — the Kotlin, Java, C and C++ files `echolot hunt` checks,
+every path in `instrumentation.allowed` among them — and say so in your
+report. `--remove` names every marker it leaves, `file:line`: what you added
+by hand, in any of them, goes by hand.
 
 Instrumentation costs time: do not scatter it everywhere. One round, one blind
 spot, five to seven slices around the boundaries of the suspicious stretch.

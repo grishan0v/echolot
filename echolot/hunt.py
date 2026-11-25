@@ -1083,6 +1083,8 @@ def leftover_lines(left: dict[str, Any]) -> list[str]:
 
     The lines `--remove` leaves are a sentence of their own, with where each
     one is: after the press they are all that is left, and they go by hand.
+    So are the markers added by hand, by their places: a count of them sent
+    the human looking, and the one in a `.cpp` file was missed (#1009).
     """
     out = []
     if left["markers"]:
@@ -1090,6 +1092,8 @@ def leftover_lines(left: dict[str, Any]) -> list[str]:
         how = f"`echolot mark --remove` takes out {left['removable']}"
         if hand:
             how += f", {hand} were added by hand and need removing by hand"
+            if left.get("hand"):
+                how += f": {verdict_mod.places(left['hand'])}"
         out.append(f"{left['markers']} {left['prefix']} marker(s) still in "
                    f"{len(left['files'])} file(s) — {how}")
     elif left["lines"]:

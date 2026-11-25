@@ -27,6 +27,7 @@ from typing import Any, Callable
 import yaml
 
 from ..config import DEFAULT_PREFIX, Config
+from ..domains import NATIVE_EXT, SOURCE_EXT
 from . import facts as facts_mod
 from . import shell as _shell
 from .facts import (
@@ -438,12 +439,17 @@ def edits_outside_allowed(s: Session, f: Facts, cfg: Config | None) -> Signal | 
 
 
 def _cleanup_grep(prefix: str) -> str:
-    """The check the agent texts give, from the checkout's root: every Kotlin
-    and Java file, where markers may go under any `instrumentation.allowed`
-    path, and the tag that the `endSection()` half of a pair carries without
-    the prefix (#274)."""
-    return (f"grep -rn --include='*.kt' --include='*.java' -e {prefix} "
-            f"-e 'echolot:mark' .")
+    """The check the agent texts give, from the checkout's root: every Kotlin,
+    Java, C and C++ file, where markers may go under any
+    `instrumentation.allowed` path (a `.cpp` file behind a JNI call among
+    them, #1009), and the tag that the `endSection()` half of a pair carries
+    without the prefix (#274)."""
+    return f"grep -rn {CLEANUP_INCLUDES} -e {prefix} -e 'echolot:mark' ."
+
+
+# The `--include`s of that check: the suffixes `mark.marker_files` reads, the
+# one walk every marker count is made from.
+CLEANUP_INCLUDES = " ".join(f"--include='*{ext}'" for ext in SOURCE_EXT + NATIVE_EXT)
 
 
 def cleanup_balance(s: Session, f: Facts, cfg: Config | None) -> Signal | None:

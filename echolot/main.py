@@ -2711,6 +2711,8 @@ def cmd_hunt(args) -> int:
             how = f'`echolot mark --remove` takes out {left["removable"]}'
             if by_hand:
                 how += f', the other {by_hand} were added by hand and go by hand'
+                if left.get("hand"):
+                    how += f': {verdict_mod.places(left["hand"])}'
             print(f'    {how}.', file=sys.stderr)
         elif left["lines"]:
             # Half a pair: its `beginSection` went by hand and took the
@@ -3222,7 +3224,8 @@ def cmd_mark(args) -> int:
 
     if args.remove:
         refused: list[str] = []
-        touched, kept = markers.remove(refused)
+        hand: list[tuple[str, int, str]] = []
+        touched, kept = markers.remove(refused, hand)
         for rel, n in touched:
             print(f"  - {rel}: {n} line(s)")
         for rel in refused:
@@ -3231,18 +3234,24 @@ def cmd_mark(args) -> int:
         # A tagged line in any other shape than --apply's is left where it
         # is, and named: it carries more than a marker, which deleting it
         # would take along, and "nothing found" over a tree that still has
-        # it reads as clean.
-        for rel, line, text in kept:
+        # it reads as clean. So is a marker added by hand without the tag —
+        # in Kotlin, Java, C or C++ — which went uncounted here and, in a
+        # `.cpp` file, unseen by every other check as well (#1009).
+        for rel, line, text in [*kept, *hand]:
             print(f"  ! {rel}:{line}: {text[:120]}")
         if touched:
             print(f"removed markers from {len(touched)} file(s)")
-        elif not kept:
-            print("no `echolot:mark` lines found under this root")
+        elif not kept and not hand:
+            print("no temporary markers and no `echolot:mark` lines found under this root")
         if kept:
             print(f"left {len(kept)} line(s) with `{mark_mod.TAG}` on them that are not "
                   f"in the shape --apply writes — each carries something besides the "
                   f"marker, so take the marker out by hand")
-        recorder.note(removed_files=len(touched), kept_tagged=len(kept))
+        if hand:
+            print(f"left {len(hand)} {markers.prefix} marker(s) added by hand — --remove "
+                  f"deletes only the lines --apply writes, so take each out by hand, with "
+                  f"what came with it: its end, the block opened for its scope, an include")
+        recorder.note(removed_files=len(touched), kept_tagged=len(kept), kept_hand=len(hand))
         return 0
 
     if getattr(args, "mapping", None) and not args.from_anr:
