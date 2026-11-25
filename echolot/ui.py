@@ -327,15 +327,15 @@ def _answer(visit: Visit, params: dict[str, str]) -> Page:
     """
     site, last = visit.site, visit.last_hunt
     if "n" in params:
-        hunt = hunt_mod.find(site.project, params["n"])
-        if hunt is None:
+        found = state.investigation(site.project, params["n"])
+        if found is None:
             return _nothing(visit, "No such investigation", f"This project has had no investigation {int(params['n'])}.")
     else:
-        hunt = last
-        if hunt is None:
+        if last is None:
             return _nothing(visit, "No investigation yet", "One opens when an agent is asked to dig deeper. "
                             "Its rounds, and then its answer, appear here.")
-    reports = hunt_mod.archived_reports(site.project, hunt)
+        found = state.investigation_of(site.project, last)
+    hunt, reports = found["hunt"], found["reports"]
     again = cli._check_again_line(site.project, site.config, hunt, reports)
     mine = last is not None and hunt.get("n") == last.get("n")
     return Page(answer_page.render(hunt, reports, again=again, action_html=_again_button(visit, hunt),
@@ -555,7 +555,7 @@ def _set_limit(visit: Visit, params: dict[str, str]) -> Page:
 
 def _config_path(visit: Visit) -> str:
     known = visit.st.get("config") or {}
-    return str(known.get("path") or visit.site.config)
+    return str(known.get("path") or visit.st["config_typed"])
 
 
 def _dig_report(visit: Visit, params: dict[str, str]) -> tuple[dict[str, Any], str, str | None]:
