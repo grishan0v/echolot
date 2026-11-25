@@ -22,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from echolot import fixture, selftest  # noqa: E402
 from echolot.analyze import DETECTOR_DIR, analyze_trace  # noqa: E402
 from echolot.config import Config  # noqa: E402
-from echolot.report import FLOOR_MS, UNDER_ROWS, metric_of  # noqa: E402
+from echolot.merge import metric_of  # noqa: E402
+from echolot.report import FLOOR_MS, UNDER_ROWS  # noqa: E402
 from echolot.tp import _PLACEHOLDER, load_detectors, sql_value  # noqa: E402
 from tests.support import check  # noqa: E402
 

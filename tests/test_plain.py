@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import plain, recorder, tp  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.config import Config, ConfigError  # noqa: E402
 from echolot.analyze import DETECTOR_DIR  # noqa: E402
 from echolot.main import main  # noqa: E402
@@ -1071,9 +1072,9 @@ def test_a_merged_table_heads_max_as_any_runs():
     """#712: in a report of several launches, a row with one call a launch
     read "Total 65.86, Max 99.59"; the header says the two are different
     launches'."""
-    merged = report_mod._table([row("activityStart", 65.86, runs="5/5", max_ms=99.59)])
+    merged = render_mod._table([row("activityStart", 65.86, runs="5/5", max_ms=99.59)])
     check("merged: Max of any run", "Max of any run, ms" in merged, merged)
-    one = report_mod._table([{"location": "activityStart", "count": 1, "total_ms": 65.86,
+    one = render_mod._table([{"location": "activityStart", "count": 1, "total_ms": 65.86,
                               "max_ms": 65.86}])
     check("one recording: Max", "| Max, ms |" in one and "any run" not in one, one)
 

@@ -395,7 +395,7 @@ def annotate(report: dict[str, Any], root: Path, mapping: Path | None = None) ->
     With the build's `mapping`, the frames of contention slices that R8
     wrote are retraced first, and the report says how many there were and
     how many the mapping had no place for, in `retrace`: the sign of a
-    mapping from another build (see `report._retrace_lines`). A map id the
+    mapping from another build (see `render._retrace_lines`). A map id the
     frames carry goes there too: the mapping's own, `matched_map_id`, says
     it is the build's; another, `map_id`, that it is not, and then nothing
     is retraced.

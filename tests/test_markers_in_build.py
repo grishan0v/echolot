@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import mark, recorder, runner  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
 from echolot.main import _markers_against_code, main  # noqa: E402
 from tests.support import check  # noqa: E402
@@ -483,12 +484,12 @@ def test_the_views_say_it_too() -> None:
     rep = _report(["AGENTTMP_" + c for c in "abcdefg"])
     rep["markers"]["removed"] = {"names": rep["markers"]["in_trace"], "mode": "command",
                                  "install": []}
-    view = report_mod.markers_view(rep)
+    view = render_mod.markers_view(rep)
     check("`report --markers`, five named and the rest counted",
           "7 temporary markers are in these traces and nowhere in the code (`AGENTTMP_a`, "
           "`AGENTTMP_b`, `AGENTTMP_c`, `AGENTTMP_d`, `AGENTTMP_e` and 2 more)" in view
           and "Build and install the app, then record again." in view, view)
-    check("`report`, in its header", "nowhere in the code" in report_mod.overview(rep))
+    check("`report`, in its header", "nowhere in the code" in render_mod.overview(rep))
     check("and `report --json`", report_mod.select(rep, [], None, False, False)["markers"][
         "removed"]["names"][:1] == ["AGENTTMP_a"])
 

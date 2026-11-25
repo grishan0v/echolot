@@ -62,11 +62,11 @@ from . import check as check_mod
 from . import files as files_mod
 from . import hunt as hunt_mod
 from . import job, state
-from . import report as report_mod
+from . import render as render_mod
 from . import when as when_mod
 from .check import Refusal, _stops_recording
 from .config import DEFAULT_PREFIX, Config, ConfigError
-from .mark import Markers, allowed_entry
+from .mark import allowed_entry
 from .pages import report_page
 
 JOB = "dig"
@@ -584,7 +584,7 @@ def _worse_line(row: dict[str, Any], runs: int, new_counts: bool, prefix: str) -
     else:
         return None
     if row.get("detail"):
-        bits.append(report_mod.clip(str(row["detail"]), report_page.REQUEST_DETAIL))
+        bits.append(render_mod.clip(str(row["detail"]), report_page.REQUEST_DETAIL))
     return f"- {mark}: " + " · ".join(b for b in bits if b)
 
 
@@ -805,7 +805,7 @@ def start(project: Path, st: dict[str, Any], lines: list[dict[str, Any]], report
                    stdin=subprocess.DEVNULL, errors="replace")
     except (OSError, subprocess.SubprocessError) as e:
         raise Refusal("The investigation could not be opened", f"`echolot hunt` did not run: {e}.", 500) from None
-    opened = hunt_mod.load(project)
+    opened = state.hunt_now(project)
     if done.returncode != 0 or not opened or opened.get("question") != question or opened.get("status") != "open":
         said = _last_line(done.stderr) or _last_line(done.stdout) or "it said nothing"
         raise Refusal("The investigation could not be opened", f"`echolot hunt` said: {said}", 500)
@@ -997,10 +997,6 @@ def denied(found: dict[str, Any] | None) -> list[str]:
     return out
 
 
-def _rounds(project: Path, hunt: dict[str, Any] | None) -> int:
-    return len(hunt_mod.archived_reports(project, hunt)) if hunt else 0
-
-
 def _closed_after(hunt: dict[str, Any] | None, run: dict[str, Any]) -> str | None:
     """How the investigation came to be closed once the agent had ended:
     "page" when the page closed it (`close`, with words that end in the
@@ -1025,7 +1021,7 @@ def _closed_after(hunt: dict[str, Any] | None, run: dict[str, Any]) -> str | Non
 
 
 def _left(project: Path, st: dict[str, Any] | None) -> dict[str, Any]:
-    return Markers(project, ((st or {}).get("config") or {}).get("temp_prefix")).leftovers()
+    return state.leftovers(project, st)
 
 
 def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | None = None, *,
@@ -1049,7 +1045,8 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
     agent = adapter(what.get("client"))
     who = agent.name
     n = what.get("hunt") if isinstance(what.get("hunt"), int) else None
-    hunt = hunt_mod.find(project, str(n)) if n else None
+    found = state.investigation(project, n) if n else None
+    hunt = found["hunt"] if found else None
     step = next(iter(run.get("steps") or []), {})
     status = run["status"]
     # Ended by the job because nothing had moved for as long as the client's
@@ -1058,7 +1055,7 @@ def view(project: Path, st: dict[str, Any] | None = None, run: dict[str, Any] | 
     out: dict[str, Any] = {
         "status": status, "hunt": n, "question": what.get("question"), "scenario": what.get("scenario"),
         "hunt_status": (hunt or {}).get("status") or ("open" if hunt else None),
-        "verdict": isinstance((hunt or {}).get("verdict"), dict), "rounds": _rounds(project, hunt),
+        "verdict": isinstance((hunt or {}).get("verdict"), dict), "rounds": len(found["reports"]) if found else 0,
         # How long it ran: to its end, or to now while it runs. One cut short
         # has no end on record, and is not said to have run until now.
         "ran": (max(0.0, (run.get("finished") or now) - (run.get("started") or now))
@@ -1177,7 +1174,7 @@ def close(project: Path, config: str, st: dict[str, Any] | None, *,
     if seen is None or seen["status"] == job.RUNNING or not seen["can_close"]:
         raise Refusal("Nothing to close", "No investigation of an agent the page started is open and idle. "
                       "Its page shows where it stands.")
-    current = hunt_mod.load(project) or {}
+    current = (st.get("hunt") if st is not None else state.hunt_now(project)) or {}
     if current.get("n") != seen["hunt"] or (current.get("status") or "open") != "open":
         raise Refusal("Nothing to close", "The investigation open now is not the one the agent worked in.")
     done = run([sys.executable, "-m", "echolot", "hunt", "--done", closing_words(seen), "-c", config],

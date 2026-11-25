@@ -185,10 +185,10 @@ def test_the_comparison_examples_carry_what_compare_writes():
 
 
 def test_the_report_reference_warns_where_the_report_does():
-    from echolot import report
-    key = report.BUDGET_LABELS[0][0]
-    quiet = report._budget_lines({"window_ms": 100.0, "accounted_pct": 97.0, key: 97.0})
-    loud = report._budget_lines({"window_ms": 100.0, "accounted_pct": 94.0, key: 94.0})
+    from echolot import render
+    key = render.BUDGET_LABELS[0][0]
+    quiet = render._budget_lines({"window_ms": 100.0, "accounted_pct": 97.0, key: 97.0})
+    loud = render._budget_lines({"window_ms": 100.0, "accounted_pct": 94.0, key: 94.0})
     check("97% passes in silence and 94% does not", len(loud) > len(quiet), (quiet, loud))
     flat = _flat(REFS / "report-window.md")
     check("the reference says 95%", "The report warns below 95%" in flat, flat)

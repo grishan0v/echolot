@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import plain  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_compare import compare, det, report, row  # noqa: E402
 
@@ -83,9 +84,9 @@ def test_the_report_says_what_a_pool_row_adds_up() -> None:
     check("the table has the column", "| Where | Threads |" in md, md)
     check("and says what a row of several is",
           "_Threads: a row adds up every thread of its name — `DefaultDispatch` 8." in md, md)
-    view = report_mod.detector_view(rep, "monitor_contention")
+    view = render_mod.detector_view(rep, "monitor_contention")
     check("so does the one detector's view", "`DefaultDispatch` 8" in view, view)
-    over = report_mod.overview(rep)
+    over = render_mod.overview(rep)
     check("and the overview's top row", "DefaultDispatch (8 threads)" in over, over)
 
 

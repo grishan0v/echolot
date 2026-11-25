@@ -1052,7 +1052,7 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
 
     tr = st.get("traces") or {}
     last_run = st.get("collect") or {}
-    if tr.get("count") and recorded_outside(hunt, last_run):
+    if tr.get("count") and st.get("recorded_outside"):
         # Offered for reuse, a baseline recorded outside the investigation
         # read as its own evidence: "traces it would reuse: 5" were cold
         # starts a question about scrolling never asked for (#498).
@@ -1069,9 +1069,9 @@ def recap(hunt: dict[str, Any] | None, st: dict[str, Any],
         out.append(f"  ! {d}")
 
     if root is not None:
-        from .mark import Markers
+        from . import state as state_mod
 
-        left = Markers(root, (st.get("config") or {}).get("temp_prefix")).leftovers()
+        left = state_mod.leftovers(root, st)
         for note in leftover_lines(left):
             out.append(f"  ! {note}")
     return out

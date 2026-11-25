@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import composenames, compare, report, runner  # noqa: E402
+from echolot import compare, composenames, render, report, runner  # noqa: E402
 from echolot.runner import RunnerError  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_collect_fake_adb import PACKAGE, SERIAL, FakeAdb  # noqa: E402
@@ -299,15 +299,15 @@ def test_the_report_merges_and_says_names() -> None:
                                           {"asked": True, "calls": 922}, None])
     check("median calls of the runs that had any, and how many runs",
           merged == {"asked": True, "calls": 921, "runs": "2/3"}, merged)
-    lines = report._compose_names_lines(merged)
+    lines = render._compose_names_lines(merged)
     check("named, with the repeats that lacked them, and the cost said",
           "Composable names: 921 calls, in 2 of 3 repeats." in lines[0]
           and "compare these numbers only with another round recorded with them" in lines[0], lines)
-    asked = report._compose_names_lines({"asked": True, "calls": 0, "runs": "0/2"})
+    asked = render._compose_names_lines({"asked": True, "calls": 0, "runs": "0/2"})
     check("asked for and none arrived is a warning",
           asked[0].startswith("> ⚠️ The recording asked for composable names and none arrived"),
           asked)
-    check("never asked, nothing said", report._compose_names_lines(None) == [])
+    check("never asked, nothing said", render._compose_names_lines(None) == [])
 
 
 def test_compare_warns_when_one_round_had_names() -> None:

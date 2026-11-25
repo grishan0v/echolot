@@ -175,9 +175,8 @@ def test_the_readings_as_the_device_prints_them() -> None:
     check("the HAL's current readings, the USB's 0.0 left out",
           hal == [(0, "AP", 30.1), (2, "BAT", 27.1), (3, "SKIN", 29.0)], hal)
     cached = "Thermal Status: 2\nCached temperatures:\n\tTemperature{mValue=41.5, mType=0, mName=cpu0, mStatus=1}\nHAL Ready: true\n"
-    check("the cached ones when the HAL lists none, and the status",
-          stabilize.hal_temperatures(cached) == [(0, "cpu0", 41.5)]
-          and stabilize.thermal_status(cached) == 2)
+    check("the cached ones when the HAL lists none",
+          stabilize.hal_temperatures(cached) == [(0, "cpu0", 41.5)])
     check("nothing to read is nothing", stabilize.battery_c("level: 85") is None
           and stabilize.hal_temperatures("") == [])
 
@@ -477,12 +476,12 @@ def test_collect_keeps_the_cooldown_and_each_repeats_temperature_beside_the_set(
 
 
 def _throttled(cooldown) -> str:
-    from echolot import report
+    from echolot import render
     env = {"thermal": {"max_celsius": 83.0, "throttled": True,
                        "throttle_device": "thermal-cpufreq-1", "throttled_runs": "4/4"}}
     if cooldown is not None:
         env["cooldown"] = cooldown
-    return "\n".join(report._environment_lines(env))
+    return "\n".join(render._environment_lines(env))
 
 
 def test_the_throttle_warning_follows_how_the_set_was_cooled() -> None:

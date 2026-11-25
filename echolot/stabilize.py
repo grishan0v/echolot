@@ -137,7 +137,6 @@ _BATTERY = re.compile(r"^\s*temperature:\s*(-?\d+)\s*$", re.MULTILINE)
 _TEMPERATURE = re.compile(
     r"Temperature\{mValue=(?P<value>-?[\d.]+), mType=(?P<type>-?\d+), "
     r"mName=(?P<name>[^,}]*)")
-_STATUS = re.compile(r"^Thermal Status:\s*(\d+)", re.MULTILINE)
 
 
 def battery_c(text: str) -> float | None:
@@ -168,13 +167,6 @@ def hal_temperatures(text: str) -> list[tuple[int, str, float]]:
         if block:
             return block
     return []
-
-
-def thermal_status(text: str) -> int | None:
-    """The platform's throttling level, 0 for none, from `dumpsys
-    thermalservice`."""
-    m = _STATUS.search(text)
-    return int(m.group(1)) if m else None
 
 
 def cpufreq_limits(run: Callable[..., str], device: str) -> dict[str, tuple[int, int]]:

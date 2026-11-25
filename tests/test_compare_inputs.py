@@ -123,8 +123,9 @@ def test_the_time_beside_each_side_is_when_its_report_was_written(tmp_path: Path
 
 def test_the_windows_spread_is_named_as_the_repeats(demo_report) -> None:
     from echolot import report as report_mod
+    from echolot import render as render_mod
     md = report_mod.to_markdown(demo_report)
     line = next(ln for ln in md.splitlines() if ln.startswith("Scenario window"))
     check("report.md", line.endswith("across repeats)"), line)
-    head = "\n".join(report_mod._header_lines(demo_report))
+    head = "\n".join(render_mod._header_lines(demo_report))
     check("and the short header", "(repeats " in head and "· written " in head, head)

@@ -26,7 +26,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import fixture, recorder, recording, runner  # noqa: E402
-from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.main import _one_journey, main  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_collect_fake_adb import (  # noqa: E402
@@ -184,7 +184,7 @@ def test_analyze_leaves_out_the_launch_that_ended_elsewhere_by_its_trace(tmp_pat
     check("report.md says it under the runs", said in md
           and md.index("Runs: **2**") < md.index(said), md[:1200])
     check("and so does the run, and the overview", said in err
-          and said in report_mod.overview(rep), err)
+          and said in render_mod.overview(rep), err)
     check("the window line says where the launches ended",
           f"The launch ended on `{MAIN}`." in md, md[:1600])
 

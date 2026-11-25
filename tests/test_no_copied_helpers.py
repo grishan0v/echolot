@@ -33,8 +33,6 @@ MIN_NODES = 5
 APART: dict[frozenset[str], str] = {
     frozenset({"check.py:stop", "dig.py:stop"}):
         "the same line over a different module-level JOB: each stops its own job",
-    frozenset({"report.py:to_json", "reflect/render.py:to_json"}):
-        "the report split of #992 moves `report.to_json`; fold the pair there",
 }
 
 

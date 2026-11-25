@@ -210,7 +210,7 @@ def _(report):
     moment under the name the code writes today (#500): `list_shown` for a
     `list_shown_mark` that no build wrote any more."""
     from .config import Config
-    from .report import _window_warning_lines
+    from .render import _window_warning_lines
     cfg = {**FIXTURE_CONFIG,
            "scenario": {**FIXTURE_CONFIG["scenario"], "end": {"name": "Screen.firstFrameMark"}}}
     with tempfile.TemporaryDirectory() as tmp:
@@ -420,7 +420,7 @@ def _(report):
     # place in the code, the samples, a merge's bookkeeping — is not the
     # query's, and not counted.
     from .analyze import DETECTOR_DIR
-    from .report import GATES, HIDDEN
+    from .render import GATES, HIDDEN
     from .tp import load_detectors
 
     # A gate column is the query's own, hidden from the tables only.
@@ -1455,7 +1455,7 @@ def _(report):
     slice's name, and both of its frames are still placed, and still shown
     when a view cuts the evidence short."""
     from . import place
-    from . import report as report_mod
+    from . import render as render_mod
     with tempfile.TemporaryDirectory() as tmp:
         got = _analyze(other_thread_trace(Path(tmp) / "other.perfetto-trace"),
                        Config(OTHER_CONFIG))
@@ -1479,7 +1479,7 @@ def _(report):
     lonely = one_row(got, "monitor_contention", "Lonely")
     assert lonely["detail"] == ("Lock contention on a monitor lock (owner tid: 9999) · "
                                 "waiting in refresh"), lonely["detail"]
-    view = report_mod.detector_view(got, "monitor_contention")
+    view = render_mod.detector_view(got, "monitor_contention")
     line = next(ln for ln in view.splitlines() if ln.startswith("| DefaultDispatch"))
     assert line.endswith(f"| monitor contention with …{said} |"), line
     # On the fixture: two owners of the main thread's locks, one running,
@@ -2045,7 +2045,7 @@ def _(report):
     """
     import copy
     from . import place
-    from . import report as report_mod
+    from . import render as render_mod
     kept = ("com.example.Store -> com.example.Store:\n"
             "    1:50:void put(java.lang.String):100:149 -> put\n")
     with tempfile.TemporaryDirectory() as tmp:
@@ -2068,7 +2068,7 @@ def _(report):
         place.annotate(rep, root, path)
     names = named["environment"]["sampling"]["names"]
     assert names == {"methods": 8, "minified": 0, "renamed": 0}, names
-    lines = report_mod._names_lines(names)
+    lines = render_mod._names_lines(names)
     assert lines and lines[0].startswith("> ⚠️") and "keeps its names" in lines[0], lines
     row = one_row(rep, "monitor_contention", "LockWaiter")
     assert row["code"] == "owner at Store.java:41 · blocked at Store.java:4", row.get("code")
@@ -2087,7 +2087,7 @@ def _(report):
     """
     import copy
     from . import anr, place
-    from . import report as report_mod
+    from . import render as render_mod
     map_id = "5e1fa7c0" * 8
     mapping_text = ("# compiler: R8\n"
                     f"# pg_map_id: {map_id}\n"
@@ -2116,13 +2116,13 @@ def _(report):
     assert named == {"frames": 2, "outside": 1, "matched_map_id": map_id}, named
     for retrace, why in ((plain, "says nothing about the build"),
                          (named, "`5e1fa7c05e1f…`, so it is this build's")):
-        for lines in (report_mod._retrace_lines(retrace), anr._retrace_note(retrace)):
+        for lines in (render_mod._retrace_lines(retrace), anr._retrace_note(retrace)):
             assert len(lines) == 1 and not lines[0].startswith(">") \
                 and "1 had no place in it" in lines[0] and why in lines[0], lines
     both = {"frames": 2, "outside": 2}
-    for lines in (report_mod._retrace_lines(both), anr._retrace_note(both)):
+    for lines in (render_mod._retrace_lines(both), anr._retrace_note(both)):
         assert lines[0].startswith("> ⚠️ 2 of the 2 frames"), lines
-    for lines in (report_mod._retrace_lines({**both, "matched_map_id": map_id}),
+    for lines in (render_mod._retrace_lines({**both, "matched_map_id": map_id}),
                   anr._retrace_note({**both, "matched_map_id": map_id})):
         assert not lines[0].startswith(">"), lines
 
@@ -2185,10 +2185,10 @@ def _(report):
 def _(report):
     from .analyze import DETECTOR_DIR
     from .tp import load_detectors
-    from .report import COLUMNS
+    from .render import COLUMNS
     for d in load_detectors(DETECTOR_DIR):
         for c in d.calibrations:
-            # parse_meta already validates the param; here it is the column —
+            # parse_header already validates the param; here it is the column —
             # a typo there would silently yield an empty sample and a "kept the
             # default".
             assert c.column in COLUMNS, (
@@ -2693,6 +2693,7 @@ def _(report):
     The trace's last `performCreate:` names where the launch ended (#909).
     """
     from . import report as report_mod
+    from . import render as render_mod
     got = _launched(activities=("com.example.app.MainActivity",
                                 "com.example.app.PageActivity"), boot=True)
     w = got["window"]
@@ -2704,7 +2705,7 @@ def _(report):
     said = (f"> ⚠️ The main thread ran the app's `BOOT_COMPLETED` receiver inside the "
             f"window: `{fixture.BOOT_RECEIVER}` {fixture.BOOT_MS} ms.")
     assert said in text and "it is the reset's work, not the start's" in text, text[:1600]
-    assert said in report_mod.overview(got), "and in the overview analyze prints"
+    assert said in render_mod.overview(got), "and in the overview analyze prints"
     plain = report["window"]
     assert plain.get("boot_receivers") is None and "activity" not in plain, plain
 
@@ -7337,6 +7338,7 @@ def _(report):
     import copy
 
     from . import report as report_mod
+    from . import render as render_mod
     runs = [copy.deepcopy(report) for _ in range(5)]
     for i, run in enumerate(runs):
         run["trace"] = f"run{i}"
@@ -7356,16 +7358,16 @@ def _(report):
     assert [r["self_ms"] for r in single] == sorted(
         (r["self_ms"] for r in single), reverse=True), single
 
-    view = report_mod.detector_view(merged, "main_thread_block", top=3)
+    view = render_mod.detector_view(merged, "main_thread_block", top=3)
     shown = [loc for loc in order if f"| {loc}" in view]
     assert shown == order[:3], (shown, view)
     assert (f"_Showing 3 of {len(order)}; of the {len(order) - 3} left, 2 were "
             f"found in one run of 5. `--top {len(order)}` for all._") in view, view
     # Every row found in every repeat: the cut says no more than it did.
-    whole = report_mod.detector_view(report_mod.aggregate(runs[:3]), "main_thread_block", top=3)
+    whole = render_mod.detector_view(report_mod.aggregate(runs[:3]), "main_thread_block", top=3)
     assert f"_Showing 3 of {len(single)}; `--top {len(single)}` for all._" in whole, whole
 
-    assert "| waitWhileAllocatingLocked" in report_mod.overview(merged), "the overview's top row"
+    assert "| waitWhileAllocatingLocked" in render_mod.overview(merged), "the overview's top row"
     md, js = report_mod.to_markdown(merged), report_mod.to_json(merged)
     assert all(f"| {loc}" in md for loc in order), "report.md keeps every row"
     assert all(f'"location": "{loc}"' in js for loc in order), "report.json keeps every row"

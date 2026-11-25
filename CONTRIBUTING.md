@@ -24,15 +24,38 @@ pytest                       # every check, including the ones doctor runs
 pytest -n auto               # the same on every core, the way CI runs it
 pytest -k uninstrumented     # one detector's claims, by name
 ruff check echolot tests action   # the linter, which CI runs beside pytest
+vulture                      # code nothing calls; CI runs it too
 ```
 
 `doctor` stays dependency-free: it walks the same list itself, because it runs
 on a user's laptop where pytest is not installed.
 
+`vulture` reads its settings from `[tool.vulture]` in `pyproject.toml`. When
+it reports a name that is used where it cannot see, such as a field set on a
+protobuf message or a method the standard library calls by name, add the name
+to `vulture_whitelist.py` with the reason. `vulture --min-confidence 60` also
+lists the functions nothing names, which need checking by hand.
+
 A new detector takes more than a new `.sql` file; the checklist is in
 [docs/detectors.md](docs/detectors.md#adding-a-detector). The README's
 pictures are drawn by a script, and [docs/assets/README.md](docs/assets/README.md)
 says how.
+
+### Comments and docstrings
+
+A docstring says what holds: the invariant, in one paragraph. The issue a
+change fixes goes in the commit message, where `git log -S` and `git blame`
+find it, and stays out of the code. A story of a past bug stays in a comment
+only where the code looks wrong without it: the reader would otherwise
+"simplify" it back into the bug.
+
+A comment does not count what can be counted. "The detectors whose
+`@identity` names a second column" stays true when a detector lands; "seven
+of the fifteen" did not, and `tests/test_docs.py` fails on a stated total of
+shipped detectors that differs from `echolot/sql/detectors/`.
+
+Files that do not follow this yet get it when a pull request touches them,
+not in one sweep over the tree.
 
 ## The documentation site
 

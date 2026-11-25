@@ -30,6 +30,7 @@ from . import place as place_mod
 from . import recording as recording_mod
 from . import names as names_mod
 from . import report as report_mod
+from . import merge as merge_mod
 from . import stacks as stacks_mod
 from .config import LAUNCH, NO_ANCHOR, PACKAGE, WHOLE, Config, ConfigError
 from .tp import TraceSession, load_detectors, render_sql, sql_value, toolchain_info
@@ -342,7 +343,7 @@ def _over_bar(rows: list[dict]) -> tuple[list[dict], list[dict]]:
         row = dict(raw)
         if row.pop("over_bar", None):
             shown.append(row)
-        elif float(row.get(report_mod.metric_of(row)) or 0.0) >= report_mod.FLOOR_MS:
+        elif float(row.get(merge_mod.metric_of(row)) or 0.0) >= report_mod.FLOOR_MS:
             under.append(row)
     return shown, under
 
@@ -761,8 +762,8 @@ def _with_variants(rows: list[dict], identity: tuple[str, ...],
 def _claim_names(tp, overrides: dict) -> None:
     """`_claimed_name` — every slice name a detector's mask already speaks for.
 
-    Four of the fifteen detectors know the names of what they are looking for
-    and say so in a `*name_glob*` param: `*GC`, `Lock contention on a monitor
+    The detectors that know the names of what they are looking for say so in
+    a `*name_glob*` param: `*GC`, `Lock contention on a monitor
     lock*`, `binder transaction`, and a composable's `* ([A-Za-z]*.kt:[0-9]*)`.
     `repeated_work` knows no name in advance —
     it asks a question about shape and so has to look at every name there

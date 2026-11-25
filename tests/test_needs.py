@@ -25,7 +25,7 @@ from tests.support import check  # noqa: E402
 
 from echolot import needs as needs_mod  # noqa: E402
 from echolot.analyze import DETECTOR_DIR  # noqa: E402
-from echolot.tp import Detector, load_detectors, parse_meta  # noqa: E402
+from echolot.tp import Detector, load_detectors, parse_header  # noqa: E402
 
 # What every shipped detector reads, from reading its query. The ones that read
 # only what every recording `collect` makes holds — the app's slices, its
@@ -89,8 +89,8 @@ def test_a_category_nobody_defined_is_refused() -> None:
 
 
 def test_meta_leaves_needs_to_the_detector() -> None:
-    meta, _, _ = parse_meta("-- @id: d\n-- @needs: frame_timeline\n-- @why: w\n")
-    check("it is a plain key to parse_meta", meta["needs"] == "frame_timeline", meta)
+    meta = parse_header("-- @id: d\n-- @needs: frame_timeline\n-- @why: w\n").meta
+    check("it is a plain key to parse_header", meta["needs"] == "frame_timeline", meta)
 
 
 # --- what the shipped detectors read ------------------------------------------------

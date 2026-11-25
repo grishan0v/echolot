@@ -1413,13 +1413,6 @@ def _has_prefix_added(c: Call, prefix: str = DEFAULT_PREFIX) -> bool:
     return prefix in new and prefix not in old
 
 
-def _has_prefix_removed(c: Call, prefix: str = DEFAULT_PREFIX) -> bool:
-    inp = c.input or {}
-    new = str(inp.get("new_string") or "")
-    old = str(inp.get("old_string") or "")
-    return prefix in old and prefix not in new
-
-
 # A path may start with `/`: an absolute one is made relative to the
 # session's directory below. Refused after a `/`, it gave no file at all.
 _SRC_PATH = re.compile(r"(?<![\w.-])(/?(?:[\w.-]+/)*[\w.-]+\.(?:kt|java|kts))\b")

@@ -22,6 +22,7 @@ from . import hunt as hunt_mod
 from .anchors import UNPICKED
 from .config import Config, ConfigError
 from .config import PACKAGE, PROCESS, TEMP_PREFIX
+from .mark import Markers
 
 
 def project_state(project: Path, config: str = "echolot.yml",
@@ -34,8 +35,17 @@ def project_state(project: Path, config: str = "echolot.yml",
     the project's folder, as the page offers them.
 
     Everything here is read from disk and the run log; nothing runs.
+
+    A fact more than one reader needs is worked out here, or by the helpers
+    beside this (`hunt_now`, `investigation`, `leftovers`), and `status`,
+    `init`, the start page, its check and the agent's panel read it from
+    here; `tests/test_project_facts_once.py` holds them to that (#991).
     """
     st: dict = {"project": project, "shown": shown_from(project, config, here)}
+    # The config as the command was given it, for a reader that hands it on
+    # to another command: `shown` names it from `here`, `config` below by
+    # its path from the project.
+    st["config_typed"] = config
     st["layer_verdict"], st["layer_line"] = layer.one_line(project)
     # The `init` a project with echolot's plugin runs, where the plugin is
     # found: plain `init` beside it installs every skill twice (#598).
@@ -63,7 +73,7 @@ def project_state(project: Path, config: str = "echolot.yml",
     st["config"] = None
     # Which question all of the below is about. None is a normal answer:
     # every project predates its first investigation.
-    st["hunt"] = hunt_mod.load(project)
+    st["hunt"] = hunt_now(project)
     # One that is there and does not load is said as that, not as none (#580).
     st["hunt_unreadable"] = hunt_mod.unreadable_line(project)
     # Where the latest report is: the config's, per scenario when it names
@@ -158,6 +168,10 @@ def project_state(project: Path, config: str = "echolot.yml",
                     "last_set": max(sets, key=lambda k: sets[k]) if sets else None}
     st["starts"] = starts(list(stamps), scenario, every, mine) if every is not None else None
     st["collect"] = collect_state(project)
+    # Whether the traces here were recorded outside that investigation: the
+    # last collect said it ran outside it. `status`, `hunt` and the page
+    # each had a rule of their own for this, and they drifted apart (#720).
+    st["recorded_outside"] = hunt_mod.recorded_outside(st["hunt"], st["collect"])
 
     st["report"] = _report(project / report_dir / "report.json")
     # A config that names several scenarios: each one's traces and latest
@@ -197,6 +211,57 @@ def project_state(project: Path, config: str = "echolot.yml",
         elif run.get("cmd") == "analyze":
             st["last_analyze"] = run
     return st
+
+
+def hunt_now(project: Path) -> dict | None:
+    """The last investigation, open or concluded, as it is on disk now: what
+    `project_state` holds as `hunt`, read again by a reader that has just run
+    a command that opens or closes one."""
+    return hunt_mod.load(project)
+
+
+def investigation(project: Path, ident: int | str) -> dict | None:
+    """Investigation `ident` (a number, or a piece of its question) as every
+    reader needs it, or None when this project has had no such one: see
+    `investigation_of`."""
+    found = hunt_mod.find(project, str(ident))
+    return None if found is None else investigation_of(project, found)
+
+
+def investigation_of(project: Path, hunt: dict) -> dict:
+    """An investigation's record with what it filed: `hunt` the record,
+    `home` the folder it keeps its own copies in (None for a record with no
+    number), `reports` the reports it filed by the number they are filed
+    under, None for one that does not read.
+
+    The start page, its check, the agent's panel and the answer's page each
+    looked these up again, one more place for the next fix to land on one
+    side only (#991)."""
+    return {"hunt": hunt, "home": hunt_mod.home(project, hunt),
+            "reports": hunt_mod.archived_reports(project, hunt)}
+
+
+def investigations(project: Path) -> list[dict]:
+    """Every investigation this project has had, newest first, open one
+    included, each as `investigation_of` gives it."""
+    return [investigation_of(project, h) for h in hunt_mod.history(project)]
+
+
+def leftovers(project: Path, st: dict | None) -> dict:
+    """The temporary markers still in the project's sources, by the config's
+    prefix (`Markers.leftovers`).
+
+    Read on the first ask and kept in `st` for the next: it walks every
+    source file, which `status` without an open investigation, and a page
+    that only says which agent runs, never need. `hunt`, `status` and the
+    agent's panel each built their own `Markers` for it.
+    """
+    if st is not None and "leftovers" in st:
+        return st["leftovers"]
+    left = Markers(project, ((st or {}).get("config") or {}).get("temp_prefix")).leftovers()
+    if st is not None:
+        st["leftovers"] = left
+    return left
 
 
 def _report(rep: Path) -> dict | None:
@@ -784,7 +849,7 @@ def by_hand(st: dict) -> tuple[str, str]:
     # not its evidence: `hunt` says so, and analysed with `--hunt N` they
     # were filed as its round all the same (#720). The step is to record
     # inside it.
-    outside = n is not None and hunt_mod.recorded_outside(hunt, st.get("collect"))
+    outside = n is not None and bool(st.get("recorded_outside"))
     if outside or not (traces["count"] if traces.get("scenario") is None else traces["scenario"]):
         return "collect", collect_line_for(scenario, (st.get("config") or {}).get("runner"), n,
                                            shown=shown)

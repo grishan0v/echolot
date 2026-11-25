@@ -42,7 +42,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from . import hunt as hunt_mod
 from . import files as files_mod
 from . import job, ready, recorder, state, stats, when
 from .config import LAUNCH, NO_ANCHOR, Config, ConfigError
@@ -467,9 +466,8 @@ def start(project: Path, config: str, found: dict[str, Any], run: dict[str, Any]
     if press["hunt"]:
         # Against the app as it was before anyone touched it: the first
         # report the investigation filed, where it stands.
-        hunt = hunt_mod.find(project, press["hunt"])
-        home = hunt_mod.home(project, hunt) if hunt else None
-        filed = hunt_mod.archived_reports(project, hunt) if hunt else {}
+        found = state.investigation(project, press["hunt"])
+        hunt, home, filed = (found["hunt"], found["home"], found["reports"]) if found else ({}, None, {})
         first = min((n for n, rep in filed.items() if rep is not None), default=None)
         if home is None or first is None:
             raise Refusal("No such investigation", "It filed no report to compare the new one with. "

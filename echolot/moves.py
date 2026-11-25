@@ -63,7 +63,7 @@ from typing import Any
 
 from . import compare, plain, stats
 from . import launch as launch_mod
-from .report import metric_of
+from .merge import metric_of
 from .files import runs as _runs
 from .plain import with_reading as _read
 from .words import counted as _counted

@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.analyze import _startup_info  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -82,7 +83,7 @@ BASE = {"type": "cold", "dur_ms": 1000.0, "from_window_start_ms": 0.0,
 
 
 def test_a_startup_reads_like_the_budget_with_its_states_in_words() -> None:
-    lines = report_mod._startup_lines({**BASE, "reasons": {
+    lines = render_mod._startup_lines({**BASE, "reasons": {
         "Running": 500.0, "bind_application": 300.0, "R": 60.0, "R+": 40.0,
         "S": 95.0, "launch_delay": 5.0}})
     check("one line when the startup is the window", len(lines) == 1, lines)
@@ -91,21 +92,21 @@ def test_a_startup_reads_like_the_budget_with_its_states_in_words() -> None:
           lines[0] == "Startup: cold, **1000 ms** from the launch to the first frame: "
                       "50% on a CPU · 30% `bind_application` · 10% waiting for a CPU · "
                       "10% sleeping", lines[0])
-    check("no startup, no line", report_mod._startup_lines(None) == [])
+    check("no startup, no line", render_mod._startup_lines(None) == [])
 
 
 def test_a_startup_that_is_not_the_window_says_so() -> None:
-    lines = report_mod._startup_lines({**BASE, "reasons": {"Running": 1000.0},
+    lines = render_mod._startup_lines({**BASE, "reasons": {"Running": 1000.0},
                                        "from_window_start_ms": -127.4,
                                        "from_window_end_ms": 12.0})
     check("where it began and ended against the window",
           lines[1] == "That is the platform's measure rather than the window: the "
                       "startup began 127 ms before the window opened, and ended 12 ms "
                       "after it closed.", lines)
-    apart = report_mod._startup_lines({**BASE, "reasons": {}, "in_window_ms": 0.0,
+    apart = render_mod._startup_lines({**BASE, "reasons": {}, "in_window_ms": 0.0,
                                        "from_window_start_ms": -3000.0})
     check("and warns when the two do not meet at all", apart[1].startswith("> ⚠️"), apart)
-    several = report_mod._startup_lines({**BASE, "reasons": {}, "startups": 3, "type": None})
+    several = render_mod._startup_lines({**BASE, "reasons": {}, "startups": 3, "type": None})
     check("several in the trace, and a type Perfetto could not tell",
           "of a kind Perfetto could not tell" in several[0]
           and "the one of 3 in the trace" in several[0], several)

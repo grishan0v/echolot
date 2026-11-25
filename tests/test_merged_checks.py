@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from echolot import compare as compare_mod  # noqa: E402
 from echolot import names as names_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_report import env, one, row  # noqa: E402
 
@@ -57,7 +58,7 @@ def test_device_state_from_one_repeat_says_so() -> None:
 
 
 def test_the_missing_line_is_worded_by_what_is_missing() -> None:
-    lines = report_mod._environment_lines({
+    lines = render_mod._environment_lines({
         "cpu": {"mean_mhz": 1500.0, "on_cpu_ms": 900.0, "measured_ms": 900.0},
         "thermal": None, "memory": None, "missing": ["memory", "thermal"]})
     text = "\n".join(lines)
@@ -67,7 +68,7 @@ def test_the_missing_line_is_worded_by_what_is_missing() -> None:
           and "cannot tell a slower machine" not in text
           and "whether the kernel throttled" in text, text)
 
-    lines = report_mod._environment_lines({
+    lines = render_mod._environment_lines({
         "cpu": None, "thermal": None, "memory": None,
         "missing": ["cpu", "memory", "thermal"]})
     check("with nothing recorded the old sentence stands",

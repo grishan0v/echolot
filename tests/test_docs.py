@@ -99,6 +99,17 @@ CHECK_SAMPLE_LINES = [
 DETECTOR_TALLIES = [
     ("README.md", r"runs " + NUMBER + r" SQL detectors"),
     ("README.md", r"Detectors fired: \*\*\d+ of " + NUMBER + r"\*\*"),
+    ("README.ru.md", r"запускает (\d+) SQL-детекторов"),
+    ("README.ru.md", r"Detectors fired: \*\*\d+ of " + NUMBER + r"\*\*"),
+]
+
+# The shapes in which a comment, a docstring or a page states how many
+# detectors ship, wherever it sits. The last number each one captures is the
+# total. A count of some of them ("three of the detectors") is not matched: it
+# is a claim about a property, and only the total has a file count to check.
+DETECTOR_TOTALS = [
+    r"\b" + NUMBER + r" of the " + NUMBER + r" (?:shipped |built-in |SQL )?detectors\b",
+    r"\b(?:the|all) " + NUMBER + r" (?:shipped|built-in) detectors\b",
 ]
 
 
@@ -245,6 +256,63 @@ def test_documented_detector_count_is_current(document, pattern):
     assert stated, f"{document}: nothing matched /{pattern}/ — the claim moved or went away"
     assert set(stated) == {shipped}, (
         f"{document} says {sorted(set(stated))} detectors, {shipped} are shipped"
+    )
+
+
+def _sources() -> list[Path]:
+    """Every file whose comments, docstrings or prose a reader takes as true."""
+    found = set(_markdown())
+    for folder in ("echolot", "tests", "docs", "action"):
+        for suffix in ("*.py", "*.sql"):
+            found.update((ROOT / folder).rglob(suffix))
+    found.add(ROOT / "echolot.yml.example")
+    return sorted(found)
+
+
+def _stated_totals(text: str) -> list[tuple[str, int]]:
+    """Each claim of how many detectors ship, with the total it states.
+
+    Lines are joined first, with the `#` or `--` that starts a comment line,
+    so a sentence wrapped across a comment still reads as one. A sentence two
+    shapes match is one claim, kept once by where it ends.
+    """
+    flat = re.sub(r"[ \t]*\n[ \t]*(?:#+|--)?[ \t]*", " ", text)
+    found = {}
+    for pattern in DETECTOR_TOTALS:
+        for match in re.finditer(pattern, flat, flags=re.IGNORECASE):
+            total = match.groups()[-1]
+            found.setdefault(match.end(), (
+                match.group(0), int(total) if total.isdigit() else WORDS[total.lower()]))
+    return [found[end] for end in sorted(found)]
+
+
+def test_the_totals_are_found_in_wrapped_comments():
+    """The shapes the stale counts had, wrapped the way the code wraps them (#993)."""
+    stale = ("# Four of the\n# fifteen detectors know\n"
+             "-- Three of the thirteen\n-- detectors know\n"
+             '"""Seven of the fifteen shipped\n    detectors group\n'
+             "and so do all 16 built-in\n detectors")
+    assert [n for _, n in _stated_totals(stale)] == [15, 13, 15, 16]
+    assert not _stated_totals("three of the detectors find; all six detectors of the time")
+
+
+def test_no_comment_or_page_states_a_stale_detector_total():
+    """A comment that says how many detectors ship says what `sql/detectors/` holds.
+
+    Two docstrings said "of the fifteen" and a detector header "of the
+    thirteen" while sixteen shipped (#993). The way to keep one current is to
+    leave the number out; this catches the one somebody writes anyway.
+    """
+    shipped = len(list((ROOT / "echolot/sql/detectors").glob("*.sql")))
+    stale = [
+        f"{path.relative_to(ROOT)}: {said!r}"
+        for path in _sources()
+        for said, total in _stated_totals(path.read_text(encoding="utf-8"))
+        if total != shipped
+    ]
+    assert not stale, (
+        f"{shipped} detectors ship; these say otherwise. Leave the number out, "
+        "or name the detectors the sentence is about:\n" + "\n".join(stale)
     )
 
 

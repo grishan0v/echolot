@@ -14,7 +14,9 @@ What a command stands on lives beside it, one file per job:
     config.py    echolot.yml, and local.yml layered on top
     tp.py        the pinned trace_processor, and loading detectors from .sql
     analyze.py   the engine: a trace and a config in, a Marker Report out
-    report.py    the Marker Report — report.json and report.md
+    report.py    the Marker Report — what it holds, and a set merged into one
+    merge.py     one detector's rows merged across repeats
+    render.py    report.md, the views `echolot report` prints, and report.json
     compare.py   the delta between two of those
     runner.py    the device: adb, the perfetto config, capturing a scenario
     hunt.py      the open investigation — which question the traces answer
@@ -59,6 +61,7 @@ from . import names as names_mod
 from . import noise as noise_mod
 from . import tpshell
 from . import report as report_mod
+from . import render as render_mod
 from . import verdict as verdict_mod
 from .analyze import (
     ASYNC_THREAD,
@@ -548,7 +551,7 @@ def _report_text(rep: dict | None, cfg: dict | None, project: Path,
         note = " · made with --defaults"
     elif cfg and cfg.get("sha") and rep.get("config_sha") and rep["config_sha"] != cfg["sha"]:
         note = " · made with an older config"
-    other = report_mod.written_by(rep.get("echolot"), short=True)
+    other = render_mod.written_by(rep.get("echolot"), short=True)
     if other:
         note += f" · {other}"
     # The window warning report.md opens with: a report over the whole
@@ -810,12 +813,12 @@ def cmd_analyze(args) -> int:
         # In one order whatever order they were named in (#581).
         traces, same = _distinct_recordings(sorted(args.traces, key=run_order))
         if same:
-            print(f"[!] {report_mod.same_recording_said(same)}", file=sys.stderr)
+            print(f"[!] {render_mod.same_recording_said(same)}", file=sys.stderr)
         # A start `collect` stopped the app for and found warm, among cold
         # ones: left out, and named (#523).
         traces, warm = _cold_only(traces)
         if warm:
-            print(f"[!] {report_mod.not_cold_said(warm, len(traces))}", file=sys.stderr)
+            print(f"[!] {render_mod.not_cold_said(warm, len(traces))}", file=sys.stderr)
         # Side by side, each in its own trace_processor, and merged in that
         # order (#488). See parallel.py.
         jobs = parallel.jobs_for(traces, getattr(args, "jobs", None))
@@ -840,7 +843,7 @@ def cmd_analyze(args) -> int:
         # the set: left out, and named, unless no repeat finished (#921).
         reports, unfinished = _finished(reports)
         if unfinished:
-            print(f"[!] {report_mod.unfinished_said(unfinished, len(reports))}",
+            print(f"[!] {render_mod.unfinished_said(unfinished, len(reports))}",
                   file=sys.stderr)
         # In the order they were recorded, when every trace says when (#848).
         reports = _in_recording_order(reports)
@@ -848,7 +851,7 @@ def cmd_analyze(args) -> int:
         # another journey: left out, and named (#909).
         reports, elsewhere, mixed = _one_journey(reports)
         if elsewhere:
-            print(f"[!] {report_mod.elsewhere_said(elsewhere, len(reports))}",
+            print(f"[!] {render_mod.elsewhere_said(elsewhere, len(reports))}",
                   file=sys.stderr)
         traces = [r["trace"] for r in reports]
         rep = report_mod.aggregate(reports)
@@ -967,7 +970,7 @@ def cmd_analyze(args) -> int:
     else:
         json_path = out_dir / "report.json"
         latest = _latest_here(out_dir, cfg, _where(args).here)
-        print(report_mod.overview(rep, cmd=_report_cmd(
+        print(render_mod.overview(rep, cmd=_report_cmd(
             None if latest else _rel_to(json_path.resolve(), _where(args).here))))
         print("\nThe overview, because the output is not a terminal: the whole "
               "report is report.md beside report.json, and `analyze --full` prints it.")
@@ -3392,7 +3395,7 @@ def _install_step(cfg: Config | None, root: Path) -> str:
     """How to build and install the variant the config measures, by task where known."""
     tasks = _install_tasks(root, cfg)
     if tasks:
-        return f"build and install the app with {report_mod.install_command(tasks)}"
+        return f"build and install the app with {render_mod.install_command(tasks)}"
     package = str(cfg.value(PACKAGE) or "") if cfg is not None else ""
     return "build and install " + (f"the variant that installs as {package}" if package
                                    else "the variant the config measures")
@@ -5102,15 +5105,15 @@ def cmd_report(args) -> int:
         return 0
     parts = []
     if args.window:
-        parts.append(report_mod.window_view(rep))
+        parts.append(render_mod.window_view(rep))
     if args.markers:
-        parts.append(report_mod.markers_view(rep, top=args.top or 15))
+        parts.append(render_mod.markers_view(rep, top=args.top or 15))
     for det in detectors:
-        parts.append(report_mod.detector_view(rep, det, top=args.top or 5, wide=args.wide))
+        parts.append(render_mod.detector_view(rep, det, top=args.top or 5, wide=args.wide))
     if not parts:
         # A report named by its path is named in the pointers too: `report`
         # with no path reads the latest, which this one may not be.
-        parts.append(report_mod.overview(rep, cmd=_report_cmd(args.report)))
+        parts.append(render_mod.overview(rep, cmd=_report_cmd(args.report)))
     print("\n\n".join(parts))
     return 0
 

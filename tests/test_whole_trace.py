@@ -31,6 +31,7 @@ from echolot import fixture, needs, plain, recorder, selftest  # noqa: E402
 from echolot import compare as compare_mod  # noqa: E402
 from echolot import launch as launch_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from echolot.config import NO_ANCHOR, Config, ConfigError  # noqa: E402
 from echolot.main import main  # noqa: E402
 from echolot.pages import report_page  # noqa: E402
@@ -209,7 +210,7 @@ def test_the_whole_trace_is_the_recording_in_words() -> None:
     check("the page asks about the trace, not about a scenario's time",
           report_page.question(rep).startswith("The whole trace runs 15,000 ms, and no scenario "
                                                 "cuts it."), report_page.question(rep))
-    head = "\n".join(report_mod._header_lines(rep))
+    head = "\n".join(render_mod._header_lines(rep))
     check("the overview calls it the whole trace, once",
           "window **15000.0 ms**" in head and head.count("whole trace") == 1, head[:800])
     merged = report_mod.aggregate([_whole_report(), _whole_report(16000.0)])["window"]

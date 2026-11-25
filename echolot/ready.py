@@ -673,8 +673,8 @@ def investigations(project: Path) -> list[dict[str, Any]]:
     with the numbers of the reports it filed: `reports` the ones that read,
     `unread` the ones that are there and do not."""
     out = []
-    for h in hunt_mod.history(project):
-        filed = hunt_mod.archived_reports(project, h) if h.get("n") else {}
+    for found in state.investigations(project):
+        h, filed = found["hunt"], found["reports"]
         out.append({
             "n": h.get("n"), "current": bool(h.get("current")),
             "when": _at(h.get("opened_at")), "status": h.get("status") or "open",
@@ -714,11 +714,11 @@ def behind(ready: list[dict[str, Any]], step: dict[str, Any], says: dict[str, li
 def archived(project: Path, n: int, k: int) -> tuple[dict[str, Any], Path] | None:
     """Report `k` of investigation `n` and the file it is, or None when there
     is no such report to read."""
-    found = hunt_mod.find(project, str(n))
-    home = hunt_mod.home(project, found)
+    found = state.investigation(project, n)
+    home = found["home"] if found else None
     if found is None or home is None:
         return None
-    data = hunt_mod.archived_reports(project, found).get(k)
+    data = found["reports"].get(k)
     if not isinstance(data, dict) or "detectors" not in data:
         return None
     return data, home / "reports" / f"{k:03d}.json"

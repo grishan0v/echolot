@@ -37,10 +37,9 @@ Three things it refuses to do quietly:
     `checked` existed is unknown, and is compared as it always was.
 
 Rows are paired on everything the detector declared in `@identity`, which the
-report carries. Seven of the fifteen shipped detectors name a second column
-there, and one location legitimately holding several rows is what that field
-exists to say; see `_match` for what pairing on the name alone produced
-instead.
+report carries. A detector whose `@identity` names a second column there says
+that one location legitimately holds several rows; see `_match` for what
+pairing on the name alone produced instead.
 """
 
 from __future__ import annotations
@@ -57,9 +56,12 @@ from . import needs as needs_mod
 from . import recording as recording_mod
 from . import names as names_mod
 from . import report as report_mod
+from . import merge as merge_mod
+from . import render as render_mod
 from . import files, plain, stats, table
 from .names import across_builds
-from .report import identity_of, metric_of, short_runs
+from .merge import metric_of, short_runs
+from .report import identity_of
 from .files import runs as _runs
 
 # What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
@@ -1154,10 +1156,10 @@ def _outside_moved(before: dict, after: dict) -> list[dict[str, str]]:
     # read both ways differs by 40 points that no load put there.
     if ("platform_pct" in ob) != ("platform_pct" in oa):
         return []
-    if max(pb, pa) < report_mod.OUTSIDE_PCT or abs(pa - pb) < OUTSIDE_GAP:
+    if max(pb, pa) < render_mod.OUTSIDE_PCT or abs(pa - pb) < OUTSIDE_GAP:
         return []
     busy, quiet = ("after", "before") if pa > pb else ("before", "after")
-    who = report_mod.outside_who(oa if pa > pb else ob)
+    who = render_mod.outside_who(oa if pa > pb else ob)
     return [{
         "id": "environment-load",
         "text": f"Other processes took {max(pb, pa):.0f}% of the CPUs' time in "
@@ -1633,7 +1635,7 @@ def _main_named(d: dict, report: dict | None) -> dict:
     under = below.get("rows") if isinstance(below, dict) else None
     every = [*(d.get("rows") or []), *(under if isinstance(under, list) else [])]
     if (d.get("id") not in plain.NAMED_MAIN or not every
-            or any(report_mod.THREADS in r for r in every)):
+            or any(merge_mod.THREADS in r for r in every)):
         return d
     kernel = plain.kernel_name(report or {})
     if not kernel:
@@ -1690,7 +1692,7 @@ def _match(before_rows: list[dict], after_rows: list[dict],
     """Pairs rows of one detector, exactly first and by name family second.
 
     A row is named by every column in `identity`, never by `location` alone.
-    Seven of the fifteen shipped detectors group by a second column —
+    The detectors whose `@identity` names a second column group by it —
     `runnable_starvation` by the thread's state, `binder_txn` by whether the
     thread is the main one, `anr` by which record it is — so one location
     carrying several rows is ordinary rather than a corner.

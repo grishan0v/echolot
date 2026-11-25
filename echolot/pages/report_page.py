@@ -27,6 +27,8 @@ from typing import Any, Sequence
 from .. import launch as launch_mod
 from .. import plain
 from .. import report as report_mod
+from .. import merge as merge_mod
+from .. import render as render_mod
 from ..tp import load_detectors
 from . import kit, md
 from .kit import e
@@ -56,7 +58,7 @@ _FIRST_SENTENCE = re.compile(r"(.+?[.!?])\s+(.+)", re.S)
 
 def _value(row: dict[str, Any]) -> float:
     try:
-        return float(row.get(report_mod.metric_of(row)) or 0.0)
+        return float(row.get(merge_mod.metric_of(row)) or 0.0)
     except (TypeError, ValueError):
         return 0.0
 
@@ -81,7 +83,7 @@ def _checks(report: dict[str, Any]) -> list[dict[str, Any]]:
         did = str(det.get("id") or "")
         # In the report's order, which a report this version did not write
         # may not keep: a row in every repeat before a longer one seen once.
-        rows = sorted(det.get("rows") or [], key=report_mod.standing, reverse=True)
+        rows = sorted(det.get("rows") or [], key=merge_mod.standing, reverse=True)
         said = words.get("found") or (words.get("clean") if level == plain.FINE else words.get("reason")) or ""
         kind = kit.tone(level)
         out.append({
@@ -103,7 +105,7 @@ def _checks(report: dict[str, Any]) -> list[dict[str, Any]]:
 # drawn by: a row exists only at or above it, so it can be drawn on the row's
 # axis as "where the check fires". Read from the headers the package ships: a
 # detector says so by calibrating exactly one threshold, from one of the two
-# columns a row is judged by (`report.metric_of`). One with two thresholds
+# columns a row is judged by (`merge.metric_of`). One with two thresholds
 # fires on either (`binder_txn`: one long call, or many short ones), and one
 # that is calibrated from another column (`main_thread_outlier`: the longest
 # single occurrence) has its bar on another measure; a line on this axis would
@@ -134,7 +136,7 @@ def _fires_at(det: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[str, flo
     value = (det.get("params") or {}).get(param)
     if not _is_number(value) or value <= 0:
         return None
-    if any(report_mod.metric_of(r) != column for r in rows):
+    if any(merge_mod.metric_of(r) != column for r in rows):
         return None
     return param, float(value), column
 
@@ -169,7 +171,7 @@ def _thresholds(det: dict[str, Any], fires: tuple[str, float, str] | None) -> st
 def _mark(row: dict[str, Any], ctx: Any, subs: list[str], several: bool) -> tuple[dict[str, Any], list[float]]:
     """One row of the report as a row of a chart: the bar to its value (the
     median over the recordings), a dot for each recording it was found in."""
-    metric = report_mod.metric_of(row)
+    metric = merge_mod.metric_of(row)
     value = _value(row)
     name = str(row.get("location")) if row.get("location") not in (None, "") else "(no name)"
     spread = (row.get("spread") or {}).get(metric) or {}
@@ -195,7 +197,7 @@ def _mark(row: dict[str, Any], ctx: Any, subs: list[str], several: bool) -> tupl
                    f"{kit.exact(row['max_ms'])} ms")
     # A pool's workers share one cut name, and the bar is their time together
     # (#511).
-    threads = row.get(report_mod.THREADS)
+    threads = row.get(merge_mod.THREADS)
     if isinstance(threads, int) and threads > 1:
         notes.append(f"{threads} threads together")
         tip.append(f"threads added up: {threads}")
@@ -223,7 +225,7 @@ def _measurements(c: dict[str, Any], ctx: Any, several: bool) -> str:
         return "".join(out)
     marks, values = [], [fires[1]] if fires else []
     for row in rows:
-        mark, seen = _mark(row, ctx, [row.get("code"), report_mod.clip(row.get("detail"), PANEL_DETAIL)], several)
+        mark, seen = _mark(row, ctx, [row.get("code"), render_mod.clip(row.get("detail"), PANEL_DETAIL)], several)
         marks.append(mark)
         values += seen
     out.append(kit.chart(marks, kit.nice_top(max(values)), mark=fires[1] if fires else None,
@@ -234,7 +236,7 @@ def _measurements(c: dict[str, Any], ctx: Any, several: bool) -> str:
     # Rows from a part of the recordings: the rest could not be read, or failed.
     if det.get("checked") is False and det.get("reason"):
         out.append(f'<p class="small sub">{kit.prose(det["reason"])}</p>')
-    part = report_mod.short_runs(det.get("failed_runs"))
+    part = merge_mod.short_runs(det.get("failed_runs"))
     if part:
         out.append(f'<p class="small sub">Failed in {part[0]} of {part[1]} repeats: {e(det.get("error"))}. '
                    'The rows are from the others.</p>')
@@ -246,12 +248,12 @@ def _request_lines(c: dict[str, Any]) -> str:
     order, each as the report names it, one to a line."""
     out = []
     for row in c["rows"][:REQUEST_ROWS]:
-        figure = f"{_number(row.get(report_mod.metric_of(row)))} ms"
+        figure = f"{_number(row.get(merge_mod.metric_of(row)))} ms"
         if row.get("runs"):
             figure += f", {row['runs']} runs"
         bits = [str(row.get("location")), c["id"], figure]
         if row.get("detail"):
-            bits.append(report_mod.clip(row["detail"], REQUEST_DETAIL))
+            bits.append(render_mod.clip(row["detail"], REQUEST_DETAIL))
         out.append("- " + " · ".join(bits))
     more = len(c["rows"]) - REQUEST_ROWS
     if more > 0:
@@ -322,7 +324,7 @@ def window_notes(report: dict[str, Any]) -> list[str]:
     had neither (#927)."""
     w = report.get("window") or {}
     try:
-        lines = report_mod._diverged_lines(w) + report_mod._window_warning_lines(w)
+        lines = render_mod._diverged_lines(w) + render_mod._window_warning_lines(w)
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return []
     return [re.sub(r"^>\s*(?:⚠️\s*)?", "", line).replace("**", "") for line in lines]
@@ -593,7 +595,7 @@ def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
     budget = (report.get("window") or {}).get("main_thread") or {}
     window = budget.get("window_ms") or 0
     if window:
-        states = [(label, float(budget.get(key) or 0)) for key, label in report_mod.BUDGET_LABELS]
+        states = [(label, float(budget.get(key) or 0)) for key, label in render_mod.BUDGET_LABELS]
         states = [(label, v) for label, v in states if v / window * 100 >= 1]
         marks = [{"name": label, "mono": False, "value": v, "figure": f"{kit.ms(v)} ms",
                   "notes": [f"{v / window * 100:.0f}% of the window"],

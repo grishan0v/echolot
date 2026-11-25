@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import compare as compare_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
+from echolot import render as render_mod  # noqa: E402
 from tests.support import check  # noqa: E402
 from tests.test_compare import compare, det, report  # noqa: E402
 
@@ -124,7 +125,7 @@ def test_a_set_with_the_marker_in_some_repeats_is_two_rounds() -> None:
     check("the merged table says so, with the slice it sits in",
           merged.get("mixed") == [{"location": MARK, "runs": "1/2", "parents": [SLICE]}]
           and merged["rows"][0]["parents"] == {SLICE: 90.0}, merged)
-    lines = "\n".join(report_mod._markers_lines(merged))
+    lines = "\n".join(render_mod._markers_lines(merged))
     check("and report.md warns, naming the marker and the slice",
           "in some repeats and not others" in lines and f"`{MARK}` (1/2)" in lines
           and f"`{SLICE}`" in lines and "two rounds" in lines, lines)
