@@ -21,10 +21,13 @@ import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from . import files, recording, sandbox
 from .config import FLAG, INTEGER, NUMBER, SHAPES, TEXT, TEXTS, Key, key
+
+if TYPE_CHECKING:
+    from .screen import Screen
 
 # Default atrace categories. sched in ftrace_events is mandatory: without it
 # there is no thread_state, so runnable_starvation, uninstrumented_cpu and
@@ -1430,11 +1433,16 @@ def collect(package: str, out_dir: Path, iterations: int,
     repeat started is kept beside its trace (`launch_record`, #619).
     `progress` is told the names of those set aside as `not_cold`, so that
     an interrupt can name them (#860).
+
+    Launch and command modes go in four steps, each with its own inputs
+    (#996): `prepare` checks the round and reads the device once, before
+    anything is touched; `record_one` records one repeat; `judge` says
+    whether it counts, and why not; `keep_or_set_aside` gives its trace a
+    name in the set or beside it. This is the loop over them.
     """
     import time
 
-    from . import composenames, power, screen, stabilize
-    from . import launch as launch_mod
+    from . import composenames, power, stabilize
 
     section = section or {}
     mode = str(MODE.read(section))
@@ -1458,102 +1466,285 @@ def collect(package: str, out_dir: Path, iterations: int,
                 on_set_aside(aside)
 
     if mode == "gradle":
-        task = GRADLE_TASK.read(section)
-        if not task:
-            raise RunnerError("runner.mode: gradle needs runner.gradle_task")
-        root = Path(PROJECT_ROOT.read(section))
-        timeout = _positive(section, TIMEOUT_S)
-        # Every part quoted, so each element of the list reaches gradle as one
-        # argument with nothing expanded. Joined with spaces, the shell read
-        # `$Startup` in a nested test class's name as a variable and ran the
-        # benchmark under another filter, and split `-Dorg.gradle.jvmargs=…`
-        # at its space. The line logged is the line run.
-        command = _join([str(GRADLE.read(section)), str(task),
-                         *_listed(section, GRADLE_ARGS)])
-        log(f"gradle: {command}")
-        log(f"  in {root.resolve()}")
-        env = None
-        if settle and not device:
-            # To be held still the device has to be known before gradle
-            # picks it, and it is picked the way gradle would: the one adb
-            # lists, or the one ANDROID_SERIAL names.
-            device = pick_device(os.environ.get("ANDROID_SERIAL"))
-        if device:
-            # The connected test tasks run on every device adb lists unless
-            # ANDROID_SERIAL names one. `--device` and runner.device used to
-            # stop at the other two modes, and the hint for gradle's own "no
-            # device" failure recommended runner.device to a mode that never
-            # read it.
-            env = {"ANDROID_SERIAL": str(device)}
-            log(f"  on {device} (ANDROID_SERIAL)")
-        elif os.environ.get("ANDROID_SERIAL"):
-            log(f"  on {os.environ['ANDROID_SERIAL']} (ANDROID_SERIAL, from the environment)")
-        ignored = [k for k in RECORDING_KNOBS if k in section]
-        if ignored:
-            # Nothing here builds a trace config: the macrobenchmark wrote
-            # these traces and chose what went into them. Said out loud
-            # because the knobs look like they apply and do not — on the first
-            # real run of this mode, `environment: true` sat in the config
-            # while the report came back with the thermal counters missing,
-            # and the config was not the reason for either half of that.
-            log(f"  [!] the macrobenchmark chose what to record, so "
-                f"{', '.join('runner.' + k for k in ignored)} "
-                f"{'does' if len(ignored) == 1 else 'do'} not apply here. "
-                f"What the traces carry is up to the benchmark's own perfetto "
-                f"config; the report says which platform state it found.")
-            if "compose_names" in ignored:
-                log("      Composable names are the benchmark's to switch on: "
-                    "-Pandroid.testInstrumentationRunnerArguments.androidx."
-                    "benchmark.perfettoSdkTracing.enable=true in runner.gradle_args.")
-        # The phone the round runs on, when adb can tell which (#524): how it
-        # is powered before the task, and whether the app is still on it
-        # after. The connected test task uninstalls the app it tested when it
-        # ends, passed or failed, and the next launch-mode round stopped on
-        # an app that was not installed, with nothing said of why.
-        phone = _gradle_phone(device)
-        had, began = _gradle_look(phone, package)
-        if phone and began is not None:
-            power.check(phone, began, under, log)
-        since = time.time()
-        try:
-            if settle:
-                with stabilize.Settled(section, str(device), run=_run, log=log,
-                                       notify=tell) as settled:
-                    if settled.cooldown is not None:
-                        log("  cooldown: before the task only; the macrobenchmark "
-                            "runs its repeats back to back")
-                    settled.cool()
-                    spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
-                                        cwd=root, env=env)
-            else:
+        return _gradle_round(package, out_dir, section, device, name, log,
+                             settle=settle, under=under, tell=tell, make_room=make_room)
+
+    p = prepare(package, section, iterations, device=device, name=name,
+                names=names, under=under, planted=planted, log=log)
+
+    # Every recording, in the order made: the set's, and those set aside as
+    # not cold (`aside`), which the caller counts and leaves out.
+    results = []
+    # A repeat the app was stopped for and that started warm all the same is
+    # set aside, out of the set, and recorded again (#523). The set gets as
+    # many recordings more as it has repeats, and no more: a device that
+    # starts the app again after every stop would be recorded forever. Past
+    # them, a repeat that is not cold leaves the set one cold start short.
+    spare = iterations if p.reset == "force-stop" else 0
+    kept = again_used = short = 0
+    checked = False
+    # Composable names go on after the device is held still and off before
+    # it is put back, so that the app is the last thing touched and the
+    # first thing restored.
+    switched = (composenames.Names(package, p.device, run=_run, log=log) if names
+                else contextlib.nullcontext())
+    # Where the set's first trace waits for `check_first` (#857), swept away
+    # however the round ends: a stop, an error, Ctrl-C in the middle of it.
+    first = out_dir / f".{name}-first"
+    with stabilize.Settled(section, p.device, run=_run, log=log, notify=tell) as settled, \
+            switched, _swept(first):
+        if settled.cooldown is not None and p.reset == "force-stop":
+            log("  the app is stopped before each wait, and stopped again if it "
+                "is running by the recording")
+        # Which recording of the repeat this is: 2 and on, recorded again.
+        attempt = 0
+        while kept + short < iterations:
+            # Which repeat of the set this is, counted over every one it had:
+            # a repeat the spent re-recordings left short is one of them, and
+            # counted with the kept alone, the next recording was taken for
+            # the same repeat again, a fifth recording of repeat 1 after the
+            # line that said none was left, and the last never came (#858).
+            i = kept + short
+            attempt += 1
+            # The set's names run on without a gap: a recording set aside
+            # leaves its name to the one that records the repeat again, and
+            # a repeat left short leaves it to the next.
+            out = out_dir / f"{name}_iter{kept:03d}.perfetto-trace"
+            repeat = record_one(p, settled, i, attempt, log)
+            verdict = judge(repeat)
+            if verdict.outcome == "stop":
+                # Stopped before the trace takes a name: the recording is
+                # left on the phone no longer.
+                _run(["adb", "-s", p.device, "shell", "rm", "-f", DEVICE_TRACE])
+                raise RunnerError(verdict.reason)
+            # The set's first trace, read before it takes its name: pulled
+            # beside the set, and the set before stays until the check lets
+            # the trace in (#857).
+            checking = (verdict.outcome == "keep" and not checked
+                        and check_first is not None)
+            info = keep_or_set_aside(repeat, verdict, out, first if checking else None,
+                                     make_room, log)
+            results.append(info)
+            if verdict.outcome == "aside":
+                tell(not_cold=[r["path"].name for r in results if r.get("aside")])
+                if again_used < spare:
+                    again_used += 1
+                    log(f"      set aside, out of the set: repeat {i + 1} is recorded "
+                        f"again ({again_used} of the {spare} re-recordings the set "
+                        f"is given)")
+                else:
+                    short += 1
+                    # The next recording is the next repeat's, its first.
+                    attempt = 0
+                    log(f"      set aside, out of the set; the {spare} re-recordings "
+                        f"the set is given are spent, so it ends one cold start short")
+                continue
+            kept += 1
+            attempt = 0
+            # One look at the first trace before the rest are recorded: a
+            # round in which the scenario never reached its screen stops here,
+            # with the phone still in hand (#536). The first trace of the
+            # set, not a recording set aside before it.
+            if checking:
+                checked = True
+                verdict = judge(repeat, look=check_first(info["path"]))
+                if verdict.outcome == "stop":
+                    # The trace goes with its folder, and the set before was
+                    # never moved: .echolot/traces is as the round found it.
+                    raise RunnerError(verdict.reason)
+                # Let in: the set before makes room, and the trace and its
+                # account take the set's first name.
+                make_room()
+                pulled = info["path"]
+                pulled.replace(out)
+                recording.sidecar(pulled).replace(recording.sidecar(out))
+                info["path"] = out
+                if verdict.said:
+                    log(f"      [!] {verdict.said}")
+                    recording.write(out, repeat_facts(repeat, verdict))
+            # Where this launch ended, for the next repeat's line (#909).
+            # Kept only now: the look above judges this repeat again.
+            if p.mode == "launch":
+                p.ended_before = repeat.info.get("activity")
+            tell(done=kept)
+    if not kept:
+        # Every recording set aside: nothing to hand on as a set, and the
+        # traces are where the system's doing is to be read.
+        aside = ", ".join(r["path"].name for r in results)
+        raise RunnerError(
+            f"none of the {len(results)} recordings started cold: the app was "
+            f"stopped before each, and its process was running again by its start "
+            f"every time. They are set aside in {out_dir}: {aside}. "
+            f"`{proc_starts(p.device)}` says what the system started it for; "
+            f"to read these starts as they are, analyze those traces by name.",
+            gist=f"none of the {len(results)} recordings started cold: the app's "
+                 f"process was running again by each start")
+    return results
+
+
+def _gradle_round(package: str, out_dir: Path, section: dict, device: str | None,
+                  name: str, log: Callable[[str], None], *, settle: bool, under: int,
+                  tell: Callable[..., None], make_room: Callable[[], None]) -> list[dict]:
+    """`collect` in gradle mode: the macrobenchmark records its repeats, and
+    the traces it wrote are collected."""
+    import time
+
+    from . import power, stabilize
+
+    task = GRADLE_TASK.read(section)
+    if not task:
+        raise RunnerError("runner.mode: gradle needs runner.gradle_task")
+    root = Path(PROJECT_ROOT.read(section))
+    timeout = _positive(section, TIMEOUT_S)
+    # Every part quoted, so each element of the list reaches gradle as one
+    # argument with nothing expanded. Joined with spaces, the shell read
+    # `$Startup` in a nested test class's name as a variable and ran the
+    # benchmark under another filter, and split `-Dorg.gradle.jvmargs=…`
+    # at its space. The line logged is the line run.
+    command = _join([str(GRADLE.read(section)), str(task),
+                     *_listed(section, GRADLE_ARGS)])
+    log(f"gradle: {command}")
+    log(f"  in {root.resolve()}")
+    env = None
+    if settle and not device:
+        # To be held still the device has to be known before gradle
+        # picks it, and it is picked the way gradle would: the one adb
+        # lists, or the one ANDROID_SERIAL names.
+        device = pick_device(os.environ.get("ANDROID_SERIAL"))
+    if device:
+        # The connected test tasks run on every device adb lists unless
+        # ANDROID_SERIAL names one. `--device` and runner.device used to
+        # stop at the other two modes, and the hint for gradle's own "no
+        # device" failure recommended runner.device to a mode that never
+        # read it.
+        env = {"ANDROID_SERIAL": str(device)}
+        log(f"  on {device} (ANDROID_SERIAL)")
+    elif os.environ.get("ANDROID_SERIAL"):
+        log(f"  on {os.environ['ANDROID_SERIAL']} (ANDROID_SERIAL, from the environment)")
+    ignored = [k for k in RECORDING_KNOBS if k in section]
+    if ignored:
+        # Nothing here builds a trace config: the macrobenchmark wrote
+        # these traces and chose what went into them. Said out loud
+        # because the knobs look like they apply and do not — on the first
+        # real run of this mode, `environment: true` sat in the config
+        # while the report came back with the thermal counters missing,
+        # and the config was not the reason for either half of that.
+        log(f"  [!] the macrobenchmark chose what to record, so "
+            f"{', '.join('runner.' + k for k in ignored)} "
+            f"{'does' if len(ignored) == 1 else 'do'} not apply here. "
+            f"What the traces carry is up to the benchmark's own perfetto "
+            f"config; the report says which platform state it found.")
+        if "compose_names" in ignored:
+            log("      Composable names are the benchmark's to switch on: "
+                "-Pandroid.testInstrumentationRunnerArguments.androidx."
+                "benchmark.perfettoSdkTracing.enable=true in runner.gradle_args.")
+    # The phone the round runs on, when adb can tell which (#524): how it
+    # is powered before the task, and whether the app is still on it
+    # after. The connected test task uninstalls the app it tested when it
+    # ends, passed or failed, and the next launch-mode round stopped on
+    # an app that was not installed, with nothing said of why.
+    phone = _gradle_phone(device)
+    had, began = _gradle_look(phone, package)
+    if phone and began is not None:
+        power.check(phone, began, under, log)
+    since = time.time()
+    try:
+        if settle:
+            with stabilize.Settled(section, str(device), run=_run, log=log,
+                                   notify=tell) as settled:
+                if settled.cooldown is not None:
+                    log("  cooldown: before the task only; the macrobenchmark "
+                        "runs its repeats back to back")
+                settled.cool()
                 spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
                                     cwd=root, env=env)
-            # A build that failed raised above, and one that wrote nothing
-            # copies nothing: either way the previous set stays where it was.
-            results = harvest(root, since, out_dir, name, before_copy=make_room)
-            if not results:
-                raise RunnerError(
-                    f"gradle finished but no new traces appeared under "
-                    f"{root.resolve()}. Check that the task really is a "
-                    f"macrobenchmark, that it actually ran, and that "
-                    f"runner.project_root points at the project that wrote them.")
-        except RunnerError:
-            _uninstalled(phone, package, had, log)
-            raise
-        for r in results:
-            # The macrobenchmark drove these, and how it reset the app
-            # between them is its own: none of it is ours to say. Nor are
-            # the device's animation scales, which a run with AGP's
-            # `animationsDisabled` turns to 0 for its own length and back.
-            # How the phone was powered when the task began is.
-            recording.write(r["path"], {"runner": "gradle", "scenario": name,
-                                        **(power.facts(began) if began else {})})
-        log(f"  traces collected: {len(results)} in {spent:.0f}s")
-        for r in results:
-            log(f"    {r['path'].name}  {r['size'] / 1e6:.1f} MB")
+        else:
+            spent = run_command(command, timeout=timeout, knob="runner.timeout_s",
+                                cwd=root, env=env)
+        # A build that failed raised above, and one that wrote nothing
+        # copies nothing: either way the previous set stays where it was.
+        results = harvest(root, since, out_dir, name, before_copy=make_room)
+        if not results:
+            raise RunnerError(
+                f"gradle finished but no new traces appeared under "
+                f"{root.resolve()}. Check that the task really is a "
+                f"macrobenchmark, that it actually ran, and that "
+                f"runner.project_root points at the project that wrote them.")
+    except RunnerError:
         _uninstalled(phone, package, had, log)
-        return results
+        raise
+    for r in results:
+        # The macrobenchmark drove these, and how it reset the app
+        # between them is its own: none of it is ours to say. Nor are
+        # the device's animation scales, which a run with AGP's
+        # `animationsDisabled` turns to 0 for its own length and back.
+        # How the phone was powered when the task began is.
+        recording.write(r["path"], {"runner": "gradle", "scenario": name,
+                                    **(power.facts(began) if began else {})})
+    log(f"  traces collected: {len(results)} in {spent:.0f}s")
+    for r in results:
+        log(f"    {r['path'].name}  {r['size'] / 1e6:.1f} MB")
+    _uninstalled(phone, package, had, log)
+    return results
 
+
+@dataclass
+class Prepared:
+    """A round in launch or command mode, checked and its device read once
+    before the first repeat (`prepare`).
+
+    The last five fields are what the round learns of the device as it goes:
+    the last look at the screen, whether the build on the phone is still to
+    be read, the markers it was found to carry, the permissions the app
+    holds ungranted, and the activity the last launch ended on.
+    """
+
+    package: str
+    name: str
+    mode: str
+    iterations: int
+    reset: str
+    duration_ms: int
+    config: str
+    names: bool
+    device: str
+    activity: str | None
+    command: str | None
+    planted: Planted | None
+    # What the device is set to do with the app's animations and activities,
+    # and whether the build is debuggable: kept beside every trace (#612,
+    # #616, #925).
+    settings: dict
+    # The screen and power at the last look (screen.py, power.py, #524).
+    last: Screen
+    # Command mode: the scenario may install another build, so the one on
+    # the phone is read again after the first repeat.
+    reread: bool = False
+    # The markers the build on the phone was found to carry, kept beside the
+    # set: a report that finds none of them in the traces then knows the build
+    # was not the reason (#536).
+    built: list[str] | None = None
+    # The runtime permissions the app holds ungranted, once a permission
+    # dialog took a launch (#810); None until then.
+    withheld: list[str] | None = None
+    # The activity the repeat before ended on (#909).
+    ended_before: str | None = None
+
+    @property
+    def asked(self) -> str | None:
+        """The activity started, as a component; None in command mode."""
+        return component(self.activity) if self.mode == "launch" else None
+
+
+def prepare(package: str, section: dict, iterations: int, *, device: str | None,
+            name: str, names: bool, under: int, planted: Planted | None,
+            log: Callable[[str], None]) -> Prepared:
+    """A round in launch or command mode, checked before anything is touched:
+    the mode and what it needs, the numbers, the trace config, the device,
+    the app on it and its build, its screen and power."""
+    from . import power, screen
+
+    mode = str(MODE.read(section))
     if mode not in ("launch", "command"):
         raise RunnerError(
             f"unknown runner.mode: {mode}. Available: launch, command, gradle.")
@@ -1593,9 +1784,6 @@ def collect(package: str, out_dir: Path, iterations: int,
     # after `mark --apply` held none of them (#390). Read before the device
     # is held still, so that the cooldown takes the heat of the reading.
     reread = False
-    # The markers the build on the phone was found to carry, kept beside the
-    # set: a report that finds none of them in the traces then knows the build
-    # was not the reason (#536).
     built: list[str] | None = None
     if planted:
         lacking, why = unbuilt(dev, package, planted)
@@ -1639,312 +1827,350 @@ def collect(package: str, out_dir: Path, iterations: int,
     # The same read says whether the build on the phone is debuggable, which
     # the trace does not say (#925).
     device_settings = recording.settings(dev, _run, package)
+    return Prepared(package=package, name=name, mode=mode, iterations=iterations,
+                    reset=reset, duration_ms=duration_ms, config=config, names=names,
+                    device=dev, activity=activity, command=command, planted=planted,
+                    settings=device_settings, last=last, reread=reread, built=built)
 
-    # Every recording, in the order made: the set's, and those set aside as
-    # not cold (`aside`), which the caller counts and leaves out.
-    results = []
-    # A repeat the app was stopped for and that started warm all the same is
-    # set aside, out of the set, and recorded again (#523). The set gets as
-    # many recordings more as it has repeats, and no more: a device that
-    # starts the app again after every stop would be recorded forever. Past
-    # them, a repeat that is not cold leaves the set one cold start short.
-    spare = iterations if reset == "force-stop" else 0
-    kept = again_used = short = 0
-    checked = False
-    # The activity started, and the one the repeat before ended on (#909).
-    asked = component(activity) if mode == "launch" else None
-    ended_before: str | None = None
-    # The runtime permissions the app holds ungranted, once a permission
-    # dialog took a launch (#810); None until then.
-    withheld: list[str] | None = None
-    # Composable names go on after the device is held still and off before
-    # it is put back, so that the app is the last thing touched and the
-    # first thing restored.
-    switched = (composenames.Names(package, dev, run=_run, log=log) if names
-                else contextlib.nullcontext())
-    # Where the set's first trace waits for `check_first` (#857), swept away
-    # however the round ends: a stop, an error, Ctrl-C in the middle of it.
-    first = out_dir / f".{name}-first"
-    with stabilize.Settled(section, dev, run=_run, log=log, notify=tell) as settled, \
-            switched, _swept(first):
-        cooling = settled.cooldown
-        if settled.cooldown is not None and reset == "force-stop":
-            log("  the app is stopped before each wait, and stopped again if it "
-                "is running by the recording")
-        # Which recording of the repeat this is: 2 and on, recorded again.
-        attempt = 0
-        while kept + short < iterations:
-            # Which repeat of the set this is, counted over every one it had:
-            # a repeat the spent re-recordings left short is one of them, and
-            # counted with the kept alone, the next recording was taken for
-            # the same repeat again, a fifth recording of repeat 1 after the
-            # line that said none was left, and the last never came (#858).
-            i = kept + short
-            attempt += 1
-            # The set's names run on without a gap: a recording set aside
-            # leaves its name to the one that records the repeat again, and
-            # a repeat left short leaves it to the next.
-            out = out_dir / f"{name}_iter{kept:03d}.perfetto-trace"
-            # HOME, the force-stop and a wait for the process to be gone (see
-            # _stop), before the device cools and not after (#611). Cooled
-            # with the app in front, a job it scheduled during the wait was
-            # due by the force-stop, and the system started the process for
-            # it 95–112 ms after the kill: on an A51, 47 of 59 repeats that
-            # had waited began warm, and 0 of 51 that had not. Stopped first,
-            # nothing of the app runs while the device cools.
-            left, was = _stop(dev, package) if reset == "force-stop" else ("", None)
-            waited = settled.cool()
-            during = f"before repeat {i + 1} of {iterations}"
-            now = screen.ready(dev, _run, log, during=during)
-            power.between(dev, last, now, during, log)
-            last = now
-            # A last look right before the recording: whatever started the
-            # app during the wait, it is stopped again, and the repeat says
-            # so. A process back after that stop is stopped once more
-            # (RESTOPS): a recording made with it there is known not to be
-            # cold before it begins (#523). What is left after that is said
-            # under the repeat's line.
-            again = _running(dev, package) if reset == "force-stop" else ""
-            restops = 0
-            while again and restops < RESTOPS and (restops == 0 or left):
-                left, _ = _stop(dev, package)
-                restops += 1
+
+@dataclass
+class Repeat:
+    """One recording of a repeat (`record_one`), its trace still on the phone."""
+
+    round: Prepared
+    # Which repeat of the set, from 0, and which recording of it, from 1.
+    i: int
+    attempt: int
+    # What `am start -W` said of the launch; in command mode, what the
+    # recording window had to say.
+    info: dict
+    # The stop before the repeat (see _stop): a pid left after it, and
+    # whether the app was running when it came.
+    left: str
+    was: str | None
+    # A pid found at the last look right before the recording, and how many
+    # times the app was stopped again for it (#523).
+    again: str
+    restops: int
+    # How long the device cooled for, and the cooldown's account of it.
+    waited: float
+    cooldown: dict | None
+    # The screen and power at the look before the recording, and again after
+    # a launch the system measured no start for (#593).
+    before: Screen
+    after: Screen | None = None
+
+
+def _unmeasured(mode: str, reset: str, info: dict) -> bool:
+    """After a force-stop `UNKNOWN` is a launch the system measured no start
+    for. Without a stop, `UNKNOWN` or a `TotalTime: 0` is the app still in
+    front from the repeat before: the trace holds no launch (#593)."""
+    return (mode == "launch"
+            and (str(info.get("launch_state", "")).startswith("UNKNOWN")
+                 or (reset == "none" and info.get("total_time_ms") == 0)))
+
+
+def record_one(p: Prepared, settled, i: int, attempt: int,
+               log: Callable[[str], None]) -> Repeat:
+    """Repeat `i` of the round, recorded once: the app stopped, the device
+    cooled, the screen looked at, the trace recorded around the launch or
+    the scenario's command. The trace stays on the phone; what the launch
+    ran into is read while the phone is as it left it."""
+    import time
+
+    from . import launch as launch_mod
+    from . import power, screen
+
+    dev, package, iterations, duration_ms = p.device, p.package, p.iterations, p.duration_ms
+    # HOME, the force-stop and a wait for the process to be gone (see
+    # _stop), before the device cools and not after (#611). Cooled
+    # with the app in front, a job it scheduled during the wait was
+    # due by the force-stop, and the system started the process for
+    # it 95–112 ms after the kill: on an A51, 47 of 59 repeats that
+    # had waited began warm, and 0 of 51 that had not. Stopped first,
+    # nothing of the app runs while the device cools.
+    left, was = _stop(dev, package) if p.reset == "force-stop" else ("", None)
+    waited = settled.cool()
+    cooling = settled.cooldown
+    cooldown = None if cooling is None else {
+        "max_c": cooling.max_c, "sensor": cooling.sensor,
+        "before_c": (round(settled.last_c, 1) if settled.last_c is not None else None)}
+    during = f"before repeat {i + 1} of {iterations}"
+    now = screen.ready(dev, _run, log, during=during)
+    power.between(dev, p.last, now, during, log)
+    p.last = now
+    # A last look right before the recording: whatever started the
+    # app during the wait, it is stopped again, and the repeat says
+    # so. A process back after that stop is stopped once more
+    # (RESTOPS): a recording made with it there is known not to be
+    # cold before it begins (#523). What is left after that is said
+    # under the repeat's line.
+    again = _running(dev, package) if p.reset == "force-stop" else ""
+    restops = 0
+    while again and restops < RESTOPS and (restops == 0 or left):
+        left, _ = _stop(dev, package)
+        restops += 1
+    _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
+    # With composable names, `--background-wait` waits on every SDK
+    # producer on the device and outlasts the recording (see
+    # TRACK_EVENT_START_S).
+    _run(["adb", "-s", dev, "shell", "perfetto", "-c", "-", "--txt",
+          "-o", DEVICE_TRACE, "--background" if p.names else "--background-wait"],
+         stdin=p.config, timeout=120)
+    recording_since = time.monotonic()
+    if p.names:
+        time.sleep(TRACK_EVENT_START_S)
+
+    info: dict = {}
+    if p.mode == "launch":
+        began = time.monotonic()
+        info = _launch(dev, p.activity)
+        # The recording runs `duration_ms` from its start, and the
+        # intent is sent some way into it: a launch that took the
+        # rest ends after the trace does (#921).
+        info["recorded_after_ms"] = round(duration_ms - (began - recording_since) * 1000)
+    else:
+        spent = run_command(p.command, timeout=duration_ms // 1000 + 300,
+                            knob="runner.duration_ms",
+                            env={"ANDROID_SERIAL": dev})
+        if spent * 1000 > duration_ms:
+            log(f"  [!] the scenario ran {spent:.0f}s against a "
+                f"{duration_ms / 1000:.0f}s recording window — the trace "
+                f"covers only its beginning")
+
+    _run(["adb", "-s", dev, "shell",
+          "while pidof perfetto > /dev/null; do sleep 0.5; done"],
+         timeout=duration_ms // 1000 + 300)
+    # Command mode: whatever the scenario installed is on the phone
+    # now, and it is what this repeat recorded. Stopped before the
+    # trace takes a name, as a launch that failed is.
+    if p.reread and p.planted:
+        p.reread = False
+        lacking, why = unbuilt(dev, package, p.planted)
+        if lacking:
             _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
-            # With composable names, `--background-wait` waits on every SDK
-            # producer on the device and outlasts the recording (see
-            # TRACK_EVENT_START_S).
-            _run(["adb", "-s", dev, "shell", "perfetto", "-c", "-", "--txt",
-                  "-o", DEVICE_TRACE, "--background" if names else "--background-wait"],
-                 stdin=config, timeout=120)
-            recording_since = time.monotonic()
-            if names:
-                time.sleep(TRACK_EVENT_START_S)
+            raise RunnerError(f"repeat 1 of {iterations}: "
+                              + unbuilt_sentence(dev, package, p.planted, lacking))
+        if lacking == []:
+            p.built = sorted(p.planted.names)
+        log(_has_line(p.planted) if lacking == [] else _unread_line(p.planted, why))
+    repeat = Repeat(round=p, i=i, attempt=attempt, info=info, left=left, was=was,
+                    again=again, restops=restops, waited=waited, cooldown=cooldown,
+                    before=now)
+    # A launch that `am start` refused is judged on what it said (#385), and
+    # nothing more is read for it.
+    if info.get("launch_error"):
+        return repeat
+    # A launch the system measured no start for, after a stop: a screen that
+    # went dark or locked since the look before explains it (see judge).
+    if _unmeasured(p.mode, p.reset, info) and p.reset == "force-stop":
+        repeat.after = screen.read(dev, _run)
+        if repeat.after.dark or repeat.after.locked:
+            return repeat
+    # The system's permission dialog is no activity the app went on
+    # to: it came up over the app before its first frame and took the
+    # launch (#810). What the app holds ungranted is read the first
+    # time, for the command that grants it, and kept with every
+    # repeat the dialog took.
+    if p.mode == "launch" and launch_mod.permission_dialog(info.get("activity")):
+        if p.withheld is None:
+            p.withheld = ungranted(dev, package)
+        info["ungranted"] = p.withheld
+    return repeat
 
-            info: dict = {}
-            if mode == "launch":
-                began = time.monotonic()
-                info = _launch(dev, activity)
-                # The recording runs `duration_ms` from its start, and the
-                # intent is sent some way into it: a launch that took the
-                # rest ends after the trace does (#921).
-                info["recorded_after_ms"] = round(duration_ms - (began - recording_since) * 1000)
-            else:
-                spent = run_command(command, timeout=duration_ms // 1000 + 300,
-                                    knob="runner.duration_ms",
-                                    env={"ANDROID_SERIAL": dev})
-                if spent * 1000 > duration_ms:
-                    log(f"  [!] the scenario ran {spent:.0f}s against a "
-                        f"{duration_ms / 1000:.0f}s recording window — the trace "
-                        f"covers only its beginning")
 
-            _run(["adb", "-s", dev, "shell",
-                  "while pidof perfetto > /dev/null; do sleep 0.5; done"],
-                 timeout=duration_ms // 1000 + 300)
-            # Command mode: whatever the scenario installed is on the phone
-            # now, and it is what this repeat recorded. Stopped before the
-            # trace takes a name, as a launch that failed is.
-            if reread and planted:
-                reread = False
-                lacking, why = unbuilt(dev, package, planted)
-                if lacking:
-                    _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
-                    raise RunnerError(f"repeat 1 of {iterations}: "
-                                      + unbuilt_sentence(dev, package, planted, lacking))
-                if lacking == []:
-                    built = sorted(planted.names)
-                log(_has_line(planted) if lacking == [] else _unread_line(planted, why))
-            # `am start` refused, an activity that is not there most often,
-            # and exited 0 all the same: the repeat recorded the device and
-            # no app. Stopped before the trace takes a name (#385).
-            if info.get("launch_error"):
-                _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
-                raise RunnerError(
-                    f"repeat {i + 1} of {iterations}: `am start -W -n {activity}` "
+@dataclass
+class Verdict:
+    """Whether a repeat counts (`judge`), and the reason when it does not."""
+
+    # "keep": one of the set's. "aside": stopped, and not a cold start all
+    # the same; kept under a name of its own and recorded again (#523).
+    # "stop": the round stops here, for `reason`.
+    outcome: str
+    # Why the repeat does not count: the sentence the round stops with, or
+    # the line said under a repeat set aside. None for one kept.
+    reason: str | None
+    # How `am start -W` said the launch started, "" where it said nothing.
+    state: str
+    # True: stopped, and `am start -W` said COLD. False: stopped, and it was
+    # not. None: nothing to judge by.
+    cold: bool | None
+    # With nothing stopping the app, `am start -W` measured no start, and
+    # the trace holds no launch (#593).
+    no_launch: bool
+    # What is said under the repeat's line, and kept beside its trace with
+    # the rest of how it started (#619).
+    notes: list[str]
+    # The line the first look at the set's first trace adds, when it has
+    # one (#536).
+    said: str | None = None
+
+
+def judge(repeat: Repeat, look: tuple[str | None, str | None] | None = None) -> Verdict:
+    """Whether `repeat` counts, and why not: a launch that started nothing,
+    one behind a screen that went dark, one that was not cold after the
+    stop. Reads nothing from the phone: `record_one` read what is needed.
+
+    `look` is what `check_first` said of the set's first trace, once it is
+    pulled: `(stop, note)`. A scenario that never reached its screen, or
+    whose app drew no frame, stops the round there (#536, #849); in a round
+    of one repeat the trace is kept, to look at.
+    """
+    from . import screen
+
+    p, info = repeat.round, repeat.info
+    where = f"repeat {repeat.i + 1} of {p.iterations}"
+    state = str(info.get("launch_state", ""))
+    unmeasured = _unmeasured(p.mode, p.reset, info)
+
+    def stop(reason: str) -> Verdict:
+        return Verdict("stop", reason, state, None, False, [])
+
+    # `am start` refused, an activity that is not there most often,
+    # and exited 0 all the same: the repeat recorded the device and
+    # no app. Stopped before the trace takes a name (#385).
+    if info.get("launch_error"):
+        return stop(f"{where}: `am start -W -n {p.activity}` "
                     f"started nothing: {info['launch_error']} Check "
                     f"runner.activity, and that the build installed is the one "
                     f"it names.")
-            # After a force-stop `UNKNOWN` is a launch the system measured no
-            # start for. A screen that went dark or locked since the check
-            # explains it, and the set stops before the trace takes a name;
-            # on a screen that is on and unlocked the line says so. Without a
-            # stop, `UNKNOWN` or a `TotalTime: 0` is the app still in front from
-            # the repeat before: this trace holds no launch (#593).
-            unmeasured = (mode == "launch"
-                          and (str(info.get("launch_state", "")).startswith("UNKNOWN")
-                               or (reset == "none" and info.get("total_time_ms") == 0)))
-            if unmeasured and reset == "force-stop":
-                now = screen.read(dev, _run)
-                if now.dark or now.locked:
-                    _run(["adb", "-s", dev, "shell", "rm", "-f", DEVICE_TRACE])
-                    raise RunnerError(screen.unmeasured_sentence(
-                        dev, now, f"repeat {i + 1} of {iterations}"))
-            # Stopped, and the process was running again by the start all the
-            # same (#404): `am start -W` says so for a launch, and the pid left
-            # after the stop says it where `am start` says nothing.
-            state = str(info.get("launch_state", ""))
-            restarted = (reset == "force-stop" and not unmeasured
-                         and (state in NOT_COLD or (bool(left) and state != "COLD")))
-            # What is said under the repeat's line, and kept beside its trace
-            # with the rest of how it started (#619).
-            notes: list[str] = []
-            if again:
-                notes.append(_stopped_again_line(package, again, waited, restops))
-            if unmeasured and reset == "none":
-                info["no_launch"] = True
-                notes.append("[!] am start -W measured no start: the app was still in "
-                             "front, and with reset_policy: none nothing stopped it, so "
-                             "this trace holds no launch")
-            elif unmeasured:
-                notes.append("[!] am start -W measured no start, with the screen on and "
-                             "unlocked: this trace may hold none")
-            if restarted:
-                info["not_cold"] = True
-                notes.append("[!] " + _not_cold_line(package, left))
-            outlasted = _outlasted_line(info, duration_ms)
-            if outlasted:
-                notes.append(outlasted)
-            # Where the launch ended, against where it was started (#909).
-            # Said when it ended elsewhere, unless the repeat before ended
-            # there too: a splash that hands over to the app's main activity
-            # does that in every repeat, and one line says it.
-            ended = info.get("activity")
-            # The system's permission dialog is no activity the app went on
-            # to: it came up over the app before its first frame and took the
-            # launch (#810). What the app holds ungranted is read the first
-            # time, for the command that grants it, and kept with every
-            # repeat the dialog took.
-            if mode == "launch" and launch_mod.permission_dialog(ended):
-                if withheld is None:
-                    withheld = ungranted(dev, package)
-                info["ungranted"] = withheld
-            if ended and asked and ended != asked and ended != ended_before:
-                notes.append(_dialog_line(ended, package, withheld)
-                             if "ungranted" in info else _elsewhere_line(ended, asked))
-            if mode == "launch" and not restarted:
-                ended_before = ended
-            # The set's first trace, read before it takes its name: pulled
-            # beside the set, and the set before stays until the check lets
-            # the trace in (#857).
-            checking = not restarted and not checked and check_first is not None
-            # Any other trace is recorded and about to take its name: the
-            # moment the previous set has to make room, and not a moment
-            # earlier. A recording set aside is the round's own, and left
-            # beside the set before it would be taken for one of that set's.
-            if not checking:
-                make_room()
-            if restarted:
-                # Out of the set, under a name no glob of its repeats takes,
-                # and kept: it is what the system did to the app (#523).
-                info["aside"] = True
-                out = _aside_path(out, state)
-            pulled = first / out.name if checking else out
-            info.update(_pull(dev, pulled))
-            facts = {
-                "runner": mode, "reset_policy": reset, "app_at_stop": was,
-                "scenario": name,
-                **device_settings,
-                "cooldown": None if cooling is None else {
-                    "max_c": cooling.max_c, "sensor": cooling.sensor,
-                    "before_c": (round(settled.last_c, 1)
-                                 if settled.last_c is not None else None)},
-                **({"markers_in_build": built} if built is not None else {}),
-                **power.facts(now),
-                "launch": {
-                    "repeat": i + 1, "attempt": attempt,
-                    "state": state or None,
-                    "total_time_ms": info.get("total_time_ms"),
-                    # True: stopped, and `am start -W` said COLD. False:
-                    # stopped, and it was not. None: nothing to judge by.
-                    "cold": (False if restarted else True
-                             if mode == "launch" and reset == "force-stop"
-                             and state == "COLD" else None),
-                    # The activity the launch ended on, as `am start -W`
-                    # said, and the one it started; None in command mode
-                    # (#909).
-                    "activity": info.get("activity"),
-                    "asked": asked,
-                    # The runtime permissions the app held ungranted, read
-                    # when the launch ended on the permission dialog (#810).
-                    **({"ungranted": info["ungranted"]} if "ungranted" in info else {}),
-                    "notes": notes,
-                    # With nothing stopping the app, `am start -W` measured
-                    # no start, and the trace holds no launch (#593): the
-                    # next step's line leaves it out (#856).
-                    **({"no_launch": True} if info.get("no_launch") else {}),
-                }}
-            info["repeat"], info["asked"] = i + 1, asked
-            info["device"] = dev
-            recording.write(pulled, facts)
-            results.append(info)
+    # After a force-stop `UNKNOWN` is a launch the system measured no
+    # start for. A screen that went dark or locked since the check
+    # explains it, and the set stops before the trace takes a name;
+    # on a screen that is on and unlocked the line says so (#593).
+    after = repeat.after
+    if unmeasured and p.reset == "force-stop" and after is not None \
+            and (after.dark or after.locked):
+        return stop(screen.unmeasured_sentence(p.device, after, where))
+    # Stopped, and the process was running again by the start all the
+    # same (#404): `am start -W` says so for a launch, and the pid left
+    # after the stop says it where `am start` says nothing.
+    restarted = (p.reset == "force-stop" and not unmeasured
+                 and (state in NOT_COLD or (bool(repeat.left) and state != "COLD")))
+    no_launch = unmeasured and p.reset == "none"
+    notes: list[str] = []
+    if repeat.again:
+        notes.append(_stopped_again_line(p.package, repeat.again, repeat.waited,
+                                         repeat.restops))
+    if no_launch:
+        notes.append("[!] am start -W measured no start: the app was still in "
+                     "front, and with reset_policy: none nothing stopped it, so "
+                     "this trace holds no launch")
+    elif unmeasured:
+        notes.append("[!] am start -W measured no start, with the screen on and "
+                     "unlocked: this trace may hold none")
+    not_cold = _not_cold_line(p.package, repeat.left) if restarted else None
+    if not_cold:
+        notes.append("[!] " + not_cold)
+    outlasted = _outlasted_line(info, p.duration_ms)
+    if outlasted:
+        notes.append(outlasted)
+    # Where the launch ended, against where it was started (#909).
+    # Said when it ended elsewhere, unless the repeat before ended
+    # there too: a splash that hands over to the app's main activity
+    # does that in every repeat, and one line says it.
+    ended, asked = info.get("activity"), p.asked
+    if ended and asked and ended != asked and ended != p.ended_before:
+        notes.append(_dialog_line(ended, p.package, info["ungranted"])
+                     if "ungranted" in info else _elsewhere_line(ended, asked))
+    cold = (False if restarted else True
+            if p.mode == "launch" and p.reset == "force-stop" and state == "COLD"
+            else None)
+    verdict = Verdict("aside" if restarted else "keep", not_cold, state, cold,
+                      no_launch, notes)
+    if look is None or restarted:
+        return verdict
+    halt, note = look
+    if halt and p.iterations == 1:
+        # The one trace there is: kept, to look at.
+        note = (f"{halt}: the scenario did not get where it was going. "
+                f"Look at the phone before recording more")
+    elif halt:
+        return stop(f"{where}: {halt}. The scenario did not "
+                    f"get where it was going, and nothing more was recorded. Look "
+                    f"at the phone: an error screen, no network, a dialog in the "
+                    f"way. Once it shows the scenario's screen, collect again.")
+    if note:
+        verdict.said = note
+        verdict.notes.append(f"[!] {note}")
+    return verdict
 
-            extra = ""
-            if info.get("total_time_ms") is not None:
-                extra = f", am start -W: {info['total_time_ms']} ms"
-            if info.get("launch_state"):
-                extra += f" ({info['launch_state']})"
-            log(f"  [{i + 1}/{iterations}] {out.name}  "
-                f"{info['size'] / 1e6:.1f} MB{extra}")
-            for note in notes:
-                log("      " + note)
-            if restarted:
-                tell(not_cold=[r["path"].name for r in results if r.get("aside")])
-                if again_used < spare:
-                    again_used += 1
-                    log(f"      set aside, out of the set: repeat {i + 1} is recorded "
-                        f"again ({again_used} of the {spare} re-recordings the set "
-                        f"is given)")
-                else:
-                    short += 1
-                    # The next recording is the next repeat's, its first.
-                    attempt = 0
-                    log(f"      set aside, out of the set; the {spare} re-recordings "
-                        f"the set is given are spent, so it ends one cold start short")
-                continue
-            kept += 1
-            attempt = 0
-            # One look at the first trace before the rest are recorded: a
-            # round in which the scenario never reached its screen stops here,
-            # with the phone still in hand (#536). The first trace of the
-            # set, not a recording set aside before it.
-            if checking:
-                checked = True
-                stop, note = check_first(pulled)
-                if stop and iterations == 1:
-                    # The one trace there is: kept, to look at.
-                    note = (f"{stop}: the scenario did not get where it was going. "
-                            f"Look at the phone before recording more")
-                elif stop:
-                    # The trace goes with its folder, and the set before was
-                    # never moved: .echolot/traces is as the round found it.
-                    raise RunnerError(
-                        f"repeat {i + 1} of {iterations}: {stop}. The scenario did not "
-                        f"get where it was going, and nothing more was recorded. Look "
-                        f"at the phone: an error screen, no network, a dialog in the "
-                        f"way. Once it shows the scenario's screen, collect again.")
-                # Let in: the set before makes room, and the trace and its
-                # account take the set's first name.
-                make_room()
-                pulled.replace(out)
-                recording.sidecar(pulled).replace(recording.sidecar(out))
-                info["path"] = out
-                if note:
-                    log(f"      [!] {note}")
-                    notes.append(f"[!] {note}")
-                    recording.write(out, facts)
-            tell(done=kept)
-    if not kept:
-        # Every recording set aside: nothing to hand on as a set, and the
-        # traces are where the system's doing is to be read.
-        aside = ", ".join(r["path"].name for r in results)
-        raise RunnerError(
-            f"none of the {len(results)} recordings started cold: the app was "
-            f"stopped before each, and its process was running again by its start "
-            f"every time. They are set aside in {out_dir}: {aside}. "
-            f"`{proc_starts(dev)}` says what the system started it for; "
-            f"to read these starts as they are, analyze those traces by name.",
-            gist=f"none of the {len(results)} recordings started cold: the app's "
-                 f"process was running again by each start")
-    return results
+
+def repeat_facts(repeat: Repeat, verdict: Verdict) -> dict:
+    """How the repeat was recorded and how it started, kept beside its
+    trace (`recording.write`, #619)."""
+    from . import power
+
+    p, info = repeat.round, repeat.info
+    return {
+        "runner": p.mode, "reset_policy": p.reset, "app_at_stop": repeat.was,
+        "scenario": p.name,
+        **p.settings,
+        "cooldown": repeat.cooldown,
+        **({"markers_in_build": p.built} if p.built is not None else {}),
+        # The screen read after a launch that measured no start, when there
+        # was one, and the look before the recording otherwise.
+        **power.facts(repeat.after if repeat.after is not None else repeat.before),
+        "launch": {
+            "repeat": repeat.i + 1, "attempt": repeat.attempt,
+            "state": verdict.state or None,
+            "total_time_ms": info.get("total_time_ms"),
+            "cold": verdict.cold,
+            # The activity the launch ended on, as `am start -W`
+            # said, and the one it started; None in command mode
+            # (#909).
+            "activity": info.get("activity"),
+            "asked": p.asked,
+            # The runtime permissions the app held ungranted, read
+            # when the launch ended on the permission dialog (#810).
+            **({"ungranted": info["ungranted"]} if "ungranted" in info else {}),
+            "notes": verdict.notes,
+            # With nothing stopping the app, `am start -W` measured
+            # no start, and the trace holds no launch (#593): the
+            # next step's line leaves it out (#856).
+            **({"no_launch": True} if verdict.no_launch else {}),
+        }}
+
+
+def keep_or_set_aside(repeat: Repeat, verdict: Verdict, out: Path, first: Path | None,
+                      make_room: Callable[[], None], log: Callable[[str], None]) -> dict:
+    """The repeat's trace pulled from the phone under the set's next name,
+    `out`, or beside the set when `verdict` sets it aside (#523), with how it
+    started beside it. `first` is the folder the set's first trace waits in
+    for its look (#857); the set before makes room for any other trace.
+    Returned: the recording as `collect` returns it, and the line said."""
+    p, info = repeat.round, repeat.info
+    if verdict.no_launch:
+        info["no_launch"] = True
+    if verdict.outcome == "aside":
+        info["not_cold"] = True
+    # Any other trace is recorded and about to take its name: the
+    # moment the previous set has to make room, and not a moment
+    # earlier. A recording set aside is the round's own, and left
+    # beside the set before it would be taken for one of that set's.
+    if first is None:
+        make_room()
+    if verdict.outcome == "aside":
+        # Out of the set, under a name no glob of its repeats takes,
+        # and kept: it is what the system did to the app (#523).
+        info["aside"] = True
+        out = _aside_path(out, verdict.state)
+    pulled = first / out.name if first is not None else out
+    info.update(_pull(p.device, pulled))
+    info["repeat"], info["asked"] = repeat.i + 1, p.asked
+    info["device"] = p.device
+    recording.write(pulled, repeat_facts(repeat, verdict))
+
+    extra = ""
+    if info.get("total_time_ms") is not None:
+        extra = f", am start -W: {info['total_time_ms']} ms"
+    if info.get("launch_state"):
+        extra += f" ({info['launch_state']})"
+    log(f"  [{repeat.i + 1}/{p.iterations}] {out.name}  "
+        f"{info['size'] / 1e6:.1f} MB{extra}")
+    for note in verdict.notes:
+        log("      " + note)
+    return info
 
 
 # How long the app's process may take to be gone after `am force-stop`, in
