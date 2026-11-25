@@ -122,6 +122,14 @@ the fifteenth character arrives as **one** name, so every
 digits fall inside the cut stays several — `arch_disk_io_0` … `arch_disk_io_3`
 are four rows and one pool.
 
+`Thread-N` has two origins. The JDK gives it to a `Thread(` created without a
+name; ART gives it to a native thread that C or C++ attaches to the VM with
+`AttachCurrentThread(&env, nullptr)`, over any name `pthread_setname_np` set.
+Their slices tell them apart: a renderer's `queueBuffer`, Vulkan calls and a
+C++ library's own sections are the second kind. `echolot mark --pools` lists
+both, the second as `[jni]` rows: the name goes into `JavaVMAttachArgs` at
+the attach call, and naming a Java thread beside it changes nothing.
+
 ## System slices of a cold start
 
 These appear by themselves, need no instrumentation, and have no counterpart in

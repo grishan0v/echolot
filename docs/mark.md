@@ -39,6 +39,7 @@ the project. Each row it prints carries one of these tags:
 | `call-from-setContent` | the composables invoked inside `setContent { }`, kept only when `@Composable fun Name(` is in this project's sources | `AppTheme { AppNavHost() }` → both, if defined here |
 | `anr` | a frame of a stack from a freeze, with `--from-anr`: the function around the line the compiler wrote into it | see `--from-anr` below |
 | `jdk` | a thread or a pool the JDK's default factory will name, with `--pools` | `Executors.newSingleThreadExecutor()`, `Thread(task)` |
+| `jni` | a native thread C or C++ attaches to the VM with no name, with `--pools` | `vm->AttachCurrentThread(&env, nullptr)` |
 
 There is no rule about `*ViewModel`, `*Repository`, `*Screen`, `*Fragment`
 or any other convention. A project where the ViewModel is called `Presenter`
@@ -274,11 +275,12 @@ uninstrumented_cpu   pool-7-thread-1   3184 ms   98% of CPU outside slices
 ```
 
 Nothing in the repository is called `pool-7-thread-1`. The JDK named it, from
-the default factory that `Executors.new*` and a bare `Thread(` — or Kotlin's
-`Thread { … }`, whose trailing lambda is the Runnable — hand their threads
-to. A `ForkJoinPool` and `Executors.newWorkStealingPool()` name theirs
-`ForkJoinPool-N-worker-M`, and the row says so. Grepping for the name finds nothing, and that is where a hunt
-stalls.
+the default factory that `Executors.new*`, the pool constructors
+(`ThreadPoolExecutor(`) and a bare `Thread(` — or Kotlin's `Thread { … }`,
+whose trailing lambda is the Runnable — hand their threads to. A
+`ForkJoinPool` and `Executors.newWorkStealingPool()` name theirs
+`ForkJoinPool-N-worker-M`, and the row says so. Grepping for the name finds
+nothing, and that is where a hunt stalls.
 
 Marking the work is the wrong first move there — you do not know what the work
 is, which is the complaint. Naming the pool is cheaper and does not need to
@@ -330,6 +332,58 @@ factory names its threads. What counts as given:
 
 Counting those found fifteen sites on a codebase where four were real.
 
+### `Thread-N` that the JDK did not name
+
+ART names one more kind of thread `Thread-N`: a native thread that C or C++
+attaches to the VM without a name. `AttachCurrentThread(&env, nullptr)` gives
+the thread a Java peer, the peer gets a made-up name, and ART writes that name
+over whatever `pthread_setname_np` set. On an app with a C++ core the hot row
+of a map pan was such a row — a Vulkan renderer and the core's workers, eight
+threads, 93% of their CPU outside slices — and no Java pool had anything to do
+with it:
+
+```
+uninstrumented_cpu   Thread-#   8 threads   7803 ms   93.0% of CPU outside slices
+```
+
+So `--pools` reads the C and C++ sources too — under any folder, since native
+code lives wherever the build says (`src/main/cpp`, `jni/`, a core at the
+repository's root) — and lists each attach whose last argument, the
+`JavaVMAttachArgs`, is `nullptr`, `NULL` or `0`:
+
+```
+· core/src/main/cpp/…/thread_attach.cpp:8        (name it)  [jni]  AttachCurrentThread(…, 0) — a native thread attached with no name reaches the trace as `Thread-N`, …
+· core/src/main/java/…/io/Workers.java:18         (name it)  [jdk]  ThreadPoolExecutor — its threads reach the trace as `pool-N-thread-M`, …
+```
+
+The name goes into the arguments:
+
+```cpp
+JavaVMAttachArgs args{JNI_VERSION_1_6, "render", nullptr};
+vm->AttachCurrentThread(&env, &args);
+```
+
+Where one function attaches every native thread, it does not know which
+thread it is attaching; the name can then be the thread's own, read with
+`pthread_getname_np(pthread_self(), …)`, once the code that starts the thread
+gives it one. A `Thread-N` row whose slices are native — `queueBuffer`,
+`QueuePresentKHR`, a C++ library's own sections — is a thread of this kind,
+and `mark` says so in a note: naming the Java threads beside it does not
+touch it. When there is no such attach in the C and C++ under the root, the
+note says that too — the thread is then attached by a prebuilt library.
+
+The attach rows come first: there are one or two of them, and each names
+every thread that attaches through it. After them come the JDK's places, and
+after everything the project can write a name into, the places outside
+`instrumentation.allowed`.
+
+A place inside a git submodule — a path `.gitmodules` lists, read from the
+repository the root is in — is not listed; one note counts them by submodule.
+A submodule is another repository checked out at a commit the project pins,
+and on one project its perf-test harness and its notifier thread came first
+in the list, ahead of the project's own, only because the folder it was
+checked out into sorted before the app's.
+
 ## The loop it fits into
 
 ```
@@ -354,8 +408,13 @@ weight is; the agent opens the one file the trace named. That order is what
 - **`androidx.compose.runtime:runtime-tracing`** in the app module puts
   composable names into the trace with no code touched. `mark` says when a
   Compose app is missing it — one whose app module calls `setContent {` or
-  declares a `@Composable` — and for such an app it is the first thing to
-  add. An app without Compose is not told about it.
+  declares a `@Composable` in Kotlin — and for such an app it is the first
+  thing to add. An app without Compose is not told about it. Java does not
+  count: the Compose compiler is a Kotlin plugin, so a Java file never calls
+  Compose's `setContent`, and a Views widget's own
+  `public void setContent(int title)` with its brace on the next line is a
+  method, not a Compose tree. Nor does a Kotlin `fun setContent(…) {`: a
+  `fun` or a return type before the name declares it.
 - **Callstack sampling** (`runner.sampling`, Perfetto's `linux.perf`) names
   the Java and Kotlin frames on a hot thread from symbols, no instrumentation,
   no naming. The build has to be profileable, and a minified one needs its R8
@@ -379,3 +438,10 @@ and that thread is listed anyway; a `Thread(group, runnable)` has two
 arguments and is taken for named when it is not. A factory handed to a pool
 constructor (`ThreadPoolExecutor(…)`) is not looked for, and that pool is
 listed as `pool-N-thread-M`.
+
+The JNI rows read the attach call and nothing before it: a
+`JavaVMAttachArgs` passed by name is taken for named, even when its `name`
+is null, and a library that attaches its threads from a prebuilt `.so` has
+no source here to list. A Kotlin call to a Views method of the project's own
+named `setContent`, with a trailing lambda — `dialog.setContent(layout) { … }`
+— still reads as Compose's.

@@ -6173,6 +6173,156 @@ def _(report):
         assert any("already carries a name" in n for n in pl.notes), pl.notes
 
 
+def _views_app(root: Path, *extra: tuple[str, str]) -> None:
+    """A Views-only app in Java: a launcher with `setContentView`, and a
+    widget with a `setContent(…)` method of its own, written Allman-style
+    with the brace on the next line."""
+    files = {
+        "app/src/main/AndroidManifest.xml":
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+            '  <application><activity android:name="com.example.app.MainActivity">'
+            '<intent-filter><action android:name="android.intent.action.MAIN" />'
+            '<category android:name="android.intent.category.LAUNCHER" /></intent-filter>'
+            '</activity></application>\n</manifest>\n',
+        "app/src/main/java/com/example/app/MainActivity.java":
+            "package com.example.app;\n\npublic class MainActivity extends Activity\n{\n"
+            "  @Override\n  protected void onCreate(Bundle b)\n  {\n"
+            "    super.onCreate(b);\n    setContentView(R.layout.main);\n  }\n}\n",
+        "app/src/main/java/com/example/app/EmptyState.java":
+            "package com.example.app;\n\npublic class EmptyState extends View\n{\n"
+            "  public void setContent(@StringRes int title, @StringRes int subtitle)\n  {\n"
+            "    mTitle.setText(title);\n  }\n}\n",
+        **dict(extra),
+    }
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+
+
+@check("mark: a Views-only app with a setContent method of its own is not told to add Compose tracing")
+def _(report):
+    """A declaration read as a call (#1005).
+
+    `setContent\\s*(…)?\\s*{` let the whitespace run over the newline and the
+    optional group take a parameter list, so a Java widget's
+    `public void setContent(int title, int subtitle)` with its brace on the
+    next line read as Compose's `setContent(…) { … }` — and an app with no
+    Compose in it was told runtime-tracing was the first thing to add. The
+    Compose compiler is a Kotlin plugin, so a Java file never calls Compose's
+    `setContent`; and in Kotlin, a `fun` before the name declares it.
+    """
+    from . import mark as mk
+
+    def note(root):
+        return next((n for n in mk.plan(root).notes if "runtime-tracing" in n), None)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _views_app(root)
+        assert note(root) is None, note(root)
+        # the same method in Kotlin, on one line, is a declaration too
+        (root / "app/src/main/java/com/example/app/Banner.kt").write_text(
+            "package com.example.app\n\nclass Banner : View() {\n"
+            "    fun setContent(title: Int) {\n        text = title\n    }\n}\n",
+            encoding="utf-8")
+        assert note(root) is None, note(root)
+        assert all(p.kind != "set_content" for p in mk.plan(root).proposals), \
+            _shape(mk.plan(root))
+
+    for rel, text in (("app/src/main/java/com/example/app/Home.kt",
+                       "package com.example.app\n\nfun show(view: ComposeView) {\n"
+                       "    view.setContent { AppRoot() }\n}\n"),
+                      ("app/src/main/java/com/example/app/Screen.kt",
+                       "package com.example.app\n\n@Composable\nfun Screen() {\n"
+                       "    Text(\"home\")\n}\n")):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _views_app(root, (rel, text))
+            assert note(root) is not None, (rel, mk.plan(root).notes)
+
+
+@check("mark --pools: a native thread attached to the VM with no name is found where it is attached")
+def _(report):
+    """ART calls such a thread `Thread-N`, and the JDK's places do not name it (#1010).
+
+    A C++ core's renderer and workers, started with `pthread_create` and
+    attached with `AttachCurrentThread(&env, 0)`, were the hot `Thread-#`
+    row of a map pan, and `--pools` listed only Java executors — one of them,
+    a `ThreadPoolExecutor`, said to make `Thread-N` threads when its default
+    factory makes `pool-N-thread-M`. An agent following it named the
+    executors, re-recorded, and got the same anonymous row.
+    """
+    from . import mark as mk
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cpp = root / "core/src/main/cpp"
+        cpp.mkdir(parents=True)
+        (cpp / "attach.cpp").write_text(
+            "void Attach() {\n  JNIEnv * env;\n"
+            "  // vm->AttachCurrentThread(&env, nullptr) in a comment is not a call\n"
+            "  g_vm->AttachCurrentThread(&env, 0);\n}\n", encoding="utf-8")
+        (cpp / "attach_c.c").write_text(
+            "void attach(JavaVM *vm) {\n  JNIEnv *env;\n"
+            "  (*vm)->AttachCurrentThreadAsDaemon(vm, &env, NULL);\n}\n", encoding="utf-8")
+        (cpp / "named.cpp").write_text(
+            "void Named(JavaVM * vm) {\n  JNIEnv * env;\n"
+            "  JavaVMAttachArgs args{JNI_VERSION_1_6, \"render\", nullptr};\n"
+            "  vm->AttachCurrentThread(&env, &args);\n}\n", encoding="utf-8")
+        java = root / "core/src/main/java/a"
+        java.mkdir(parents=True)
+        (java / "Pool.java").write_text(
+            "class Pool {\n  final ThreadPoolExecutor p =\n"
+            "      new ThreadPoolExecutor(1, 1, 5, TimeUnit.SECONDS, new LinkedBlockingQueue<>());\n}\n",
+            encoding="utf-8")
+        pl = mk.plan_pools(root)
+        rows = [(p.file, p.line, p.source, p.kind) for p in pl.proposals]
+        # the attach calls first: each names every thread that attaches there
+        assert rows == [
+            ("core/src/main/cpp/attach.cpp", 4, "jni", "thread_name"),
+            ("core/src/main/cpp/attach_c.c", 3, "jni", "thread_name"),
+            ("core/src/main/java/a/Pool.java", 3, "jdk", "pool_name"),
+        ], rows
+        assert all("`Thread-N`" in p.what for p in pl.proposals if p.source == "jni")
+        assert "`pool-N-thread-M`" in pl.proposals[-1].what, pl.proposals[-1].what
+        said = " ".join(pl.notes)
+        assert "JavaVMAttachArgs" in said and "native" in said, pl.notes
+
+
+@check("mark --pools: a git submodule's threads are counted, not listed, and allowed places come first")
+def _(report):
+    """Another repository's perf tests led the list (#1010).
+
+    The vendored folder sorted before the app's: a library's notifier thread and
+    its perf-test harness, both in a git submodule and outside
+    `instrumentation.allowed`, came first in a list capped at seven. A place
+    in a submodule is now a count in a note; a place outside `allowed` comes
+    after the ones the project can write a name into.
+    """
+    from . import mark as mk
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".gitmodules").write_text(
+            '[submodule "vendor/lib"]\n  path = vendor/lib\n  url = https://example.com/lib.git\n',
+            encoding="utf-8")
+        for rel in ("vendor/lib/core/src/main/java/v/Notifier.java",
+                    "vendor/lib/perf-tests/src/main/java/v/PerfTest.java",
+                    "aaa/src/main/java/a/Outside.java",
+                    "app/src/main/java/a/Inside.java"):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text("class X {\n  void go() { new Thread(r).start(); }\n}\n",
+                                    encoding="utf-8")
+        pl = mk.plan_pools(root, allowed=["app/src/main"])
+        rows = [(p.file, p.applicable, p.reason) for p in pl.proposals]
+        assert rows == [
+            ("app/src/main/java/a/Inside.java", False, ""),
+            ("aaa/src/main/java/a/Outside.java", False, "outside instrumentation.allowed"),
+        ], rows
+        assert any("2 more in git submodules" in n and "vendor/lib (2)" in n
+                   for n in pl.notes), pl.notes
+
+
 @check("mark: --apply inserts tagged pairs, --remove restores the bytes")
 def _(report):
     from . import mark as mk

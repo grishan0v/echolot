@@ -78,8 +78,9 @@ def files_named(root: Path, name: str) -> list[Path]:
     return _walk(root, lambda n: n == name)
 
 
-def files_ending(root: Path, suffix: str) -> list[Path]:
-    """Every file whose name ends with this, from the same pruned walk."""
+def files_ending(root: Path, suffix: str | tuple[str, ...]) -> list[Path]:
+    """Every file whose name ends with this, or with any of these, from the
+    same pruned walk."""
     return _walk(root, lambda n: n.endswith(suffix))
 
 
@@ -104,6 +105,38 @@ def _is_worktree(path: Path) -> bool:
     except OSError:
         return False
     return "/worktrees/" in head.replace("\\", "/")
+
+
+_SUBMODULE_PATH = re.compile(r"^\s*path\s*=\s*(.+?)\s*$", re.M)
+
+
+def submodules(root: Path) -> list[Path]:
+    """The git submodules checked out under the root, from `.gitmodules`.
+
+    Read from the repository the root is in: the root itself, or the folder
+    above it that holds `.git` — `--root android` in a repository whose
+    submodules are listed one level up. A submodule the root sits inside is
+    not one of them: asked to read that tree, the walk reads it.
+
+    The walk itself goes into them (see `_is_worktree`): their code is built
+    with the project's, and a slice name or a frame can be in it. What does
+    not belong there is advice to edit: a submodule is another repository,
+    checked out here at a commit the project pins.
+    """
+    root = root.resolve()
+    for top in (root, *root.parents):
+        listed = top / ".gitmodules"
+        if listed.is_file():
+            try:
+                text = listed.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return []
+            found = {(top / m.group(1).strip("\"'")).resolve()
+                     for m in _SUBMODULE_PATH.finditer(text)}
+            return sorted(p for p in found if root in p.parents)
+        if (top / ".git").exists():
+            return []
+    return []
 
 
 def _walk(root: Path, wanted, *, under_src: bool = False) -> list[Path]:
