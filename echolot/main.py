@@ -296,9 +296,9 @@ def _anchor_candidates(tp, upid: int) -> None:
     folded: dict[str, dict] = {}
     for r in rows:
         # The numbers `family` folds, written as `*`: a `#` the name had of
-        # its own, as in `Choreographer#doFrame`, stays.
-        glob = names_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
-                                     str(r["name"]))
+        # its own, as in `Choreographer#doFrame`, stays. A name with a number
+        # is a GLOB, and a `[` of its own is escaped in it (#1012).
+        glob = names_mod.as_written(str(r["name"]))
         seen = folded.get(glob)
         if seen is None:
             folded[glob] = {"slice": glob, "thread": r["thread"], "n": r["n"], "dur": r["dur"] or 0}
@@ -312,6 +312,10 @@ def _anchor_candidates(tp, upid: int) -> None:
         print("\nA `*` stands for a number that differs in every recording: write the "
               "name as shown, a glob. One that matches a slice of every frame closes "
               "the window at the first such slice after it opens.")
+    if any(e in x["slice"] for x in top for e in ("[[]", "[*]", "[?]")):
+        print("\nIn such a glob a `[`, `*` or `?` of the name's own is written `[[]`, "
+              "`[*]`, `[?]`, so that it matches itself. A name without a `*` matches "
+              "as written, brackets and all.")
 
 
 # The sections Android writes itself, on the app's main thread, when a
@@ -1873,7 +1877,8 @@ def _name_coverage(tp, upid: int, masks):
     The distinction matters: a name dropped by `skip_glob` is a decision, not a
     miss. Lumping them together means calling people to fix what is not broken.
     SQLite evaluates the GLOB itself, so the answer is exact rather than
-    something that merely resembles GLOB.
+    something that merely resembles GLOB; and a mask written as a slice's
+    name matches that name, as the detectors read it (#1012).
     """
     positive: dict[str, set[str]] = defaultdict(set)
     negative: dict[str, set[str]] = defaultdict(set)
@@ -1884,7 +1889,7 @@ def _name_coverage(tp, upid: int, masks):
             FROM slice s
             JOIN thread_track tt ON s.track_id = tt.id
             JOIN thread t        ON tt.utid = t.utid
-            WHERE t.upid = {upid} AND {column} GLOB '{sql_value(glob)}'
+            WHERE t.upid = {upid} AND {names_mod.matches_sql(column, glob)}
         """)
         bucket = negative if kind == "skip" else positive
         bucket[det].update(r["name"] for r in rows)

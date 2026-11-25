@@ -16,6 +16,11 @@ comes after a dash, on as many lines as it takes:
     --       has to finish to count as late
     -- @param: name_glob = *GC — GLOB over slice names: the collections
 
+A mask a query holds a name against is read as `names.matches` reads what
+the user writes, the name itself or a GLOB: `(s.name = '{{name_glob}}' OR
+s.name GLOB '{{name_glob}}')`. A mask the config sets to a slice's name,
+brackets and all, then matches that slice (#1012).
+
 @column says what one column of the rows means in this detector, the same
 way: `-- @column: max_ms — the worst frame's overrun`. A detector names every
 column its query returns. Both are what `echolot explain` prints (#494).

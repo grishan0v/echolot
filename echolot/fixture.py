@@ -1750,6 +1750,55 @@ def pool() -> bytes:
     return builder.serialize()
 
 
+# --- names with brackets ---------------------------------------------------------
+#
+# `bracketed()` only, a scene of its own (#1012). A renderer that names its
+# sections by subsystem, as native code often does: a thread of its own draws
+# three frames, each `[render] DrawFrame` with the frame's own number inside
+# it, and ends with `[render] Present`. Read as a GLOB, `[render]` is one
+# letter of r, e, n, d: an anchor or a `domains` entry written as the trace
+# has the name matched nothing.
+BRACKET_RENDER = 4701
+BRACKET_THREADS = {TID_MAIN: APP_NAME[-15:], BRACKET_RENDER: "RenderLoop"}
+BRACKET_DRAW = "[render] DrawFrame"
+BRACKET_END = "[render] Present"
+BRACKET_END_MS = 370           # where `[render] Present` ends: AppStart opens at 0
+
+
+def bracketed() -> bytes:
+    """The scene above: `AppStart` from 0 to 400 ms on the main thread, and on
+    the render thread three `[render] DrawFrame` of 30 ms at 50, 150 and 250,
+    each holding `[render] Frame-10`, `-11`, `-12`, then `[render] Present`
+    from 360 to 370."""
+    slices = {
+        TID_MAIN: [("AppStart", 0, 400, [("Screen.firstFrame", 390, 5, [])])],
+        BRACKET_RENDER: [
+            *[(BRACKET_DRAW, 50 + 100 * i, 30, [(f"[render] Frame-{10 + i}", 55 + 100 * i, 10, [])])
+              for i in range(3)],
+            (BRACKET_END, 360, 10, []),
+        ],
+    }
+    sched = [(0, TID_MAIN, 0, 400, S), (1, BRACKET_RENDER, 40, 375, S)]
+    builder = TraceProtoBuilder()
+    config(builder, frames=False)
+    process_tree(builder, [(APP_PID, APP_NAME, BRACKET_THREADS)])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {}
+    for cpu, tid, start, end, end_state in sched:
+        idle = f"swapper/{cpu}"
+        by_cpu.setdefault(cpu, []).extend([
+            (ms(start), next(seq), "sched", idle, 0, R, BRACKET_THREADS[tid], tid),
+            (ms(end), next(seq), "sched", BRACKET_THREADS[tid], tid, end_state, idle, 0),
+        ])
+    cpu_of = {tid: cpu for cpu, tid, *_ in sched}
+    for tid, tree in slices.items():
+        for ts, order, kind, name in _flatten(tree, [], seq):
+            buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+            by_cpu[cpu_of[tid]].append((ts, order, "print", tid, buf))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # --- a journey a command drives --------------------------------------------------
 #
 # `journey()` only, a scene of its own (#615). `com.example.app` is running

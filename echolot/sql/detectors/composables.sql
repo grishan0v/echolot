@@ -82,7 +82,7 @@ WITH calls AS MATERIALIZED (
     FROM _slice_win s
     JOIN _compose_own o ON o.name = s.name
     WHERE s.is_main_thread = 1
-      AND s.name GLOB '{{name_glob}}'
+      AND (s.name = '{{name_glob}}' OR s.name GLOB '{{name_glob}}')
 )
 -- The name under the fold every detector groups by (#831).
 SELECT c.slice_id, COALESCE(f.family, c.name) AS name, c.ts, c.dur,

@@ -141,8 +141,8 @@ WITH txn AS (
     -- mask 'binder transaction*' also covers the async one — where the
     -- sender does not block, so presenting it as the cost of synchronous IPC
     -- would be a lie.
-    WHERE s.name GLOB '{{name_glob}}'
-      AND s.name NOT GLOB '{{skip_glob}}'
+    WHERE (s.name = '{{name_glob}}' OR s.name GLOB '{{name_glob}}')
+      AND NOT (s.name = '{{skip_glob}}' OR s.name GLOB '{{skip_glob}}')
 ),
 -- The outermost of the platform's sections a main-thread transaction was
 -- made in, if any.

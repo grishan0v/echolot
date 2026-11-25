@@ -91,7 +91,8 @@ SELECT ts, dur, name FROM _aslice;
 DROP VIEW IF EXISTS _win_start;
 CREATE VIEW _win_start AS
 SELECT COALESCE(
-    (SELECT MIN(ts) FROM _anchor WHERE name GLOB '{{scenario_start}}'),
+    (SELECT MIN(ts) FROM _anchor
+      WHERE (name = '{{scenario_start}}' OR name GLOB '{{scenario_start}}')),
     (SELECT MIN(ts) FROM _slice)
 ) AS ts;
 
@@ -115,7 +116,7 @@ SELECT
         (SELECT CASE WHEN a.dur < 0 THEN (SELECT end_ts FROM trace_bounds)
                      ELSE a.ts + a.dur END
            FROM _anchor a
-          WHERE a.name GLOB '{{scenario_end}}'
+          WHERE (a.name = '{{scenario_end}}' OR a.name GLOB '{{scenario_end}}')
             AND a.ts >= (SELECT ts FROM _win_start)
           ORDER BY a.ts
           LIMIT 1),

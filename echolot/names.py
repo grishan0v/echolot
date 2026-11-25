@@ -16,11 +16,21 @@ The two looser rules below are for one question only: is a name of one build
 the same as a name of another? `compare` asks it as its second matching pass,
 `names` to keep an inventory short. They fold every number, which no row's
 name may do: `Store.java:41` in a lock note is a place in the code.
+
+The last part is the other way round: a name the user wrote, held against
+the names of a trace (#1012). An anchor, a `domains` entry or a detector's
+mask matches a slice of that very name, and every slice it matches as a
+GLOB besides. A renderer that names its sections by subsystem writes
+`[render] DrawFrame`, `probe` showed it so, and as a GLOB alone the `[render]`
+was a class of one letter: the name written as shown matched nothing.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import re
+
+from .tp import sql_value
 
 # Any number: what the matches across builds fold.
 NUMBER = re.compile(r"0x[0-9a-fA-F]+|\d+")
@@ -135,3 +145,54 @@ def slice_across_builds(name: str, keep: str | None = None,
     name = _INSTALL.sub(lambda m: f"/data/app/{'~~#/' if m.group(1) else ''}{m.group(2)}-#/",
                         name)
     return _DIGITS.sub(lambda m: "0x#" if m.group(0).startswith("0x") else "#", name)
+
+
+# --- a name the user wrote (#1012) ---------------------------------------------
+#
+# Read two ways at once, and never one or the other by guessing: as the name
+# it is, and as a GLOB. A GLOB alone took `[render] DrawFrame` for one of the
+# letters r, e, n, d followed by ` DrawFrame`, and the name written as the
+# trace has it, as `probe` showed it, matched nothing. Read as a name first
+# and a GLOB only when no slice had that name, the same anchor would have cut
+# two recordings two ways. Both at once, a GLOB keeps every wildcard it has,
+# and a written name is never worse off than before: what it matched it still
+# matches. What it costs is that a name with a `[`, `*` or `?` of its own
+# matches what its GLOB matches as well — `d DrawFrame` for the name above.
+# `escaped` writes the GLOB that matches one name and nothing else.
+
+_GLOB_SPECIAL = re.compile(r"([\[*?])")
+
+
+def escaped(name: str) -> str:
+    """A name as the GLOB that matches it and nothing else: each `[`, `*` and
+    `?` of its own in a class of one, `[[]render] DrawFrame`."""
+    return _GLOB_SPECIAL.sub(r"[\1]", name)
+
+
+def matches(name: str, written: str) -> bool:
+    """Whether a slice's name is what the user wrote: that very name, or one
+    the GLOB matches."""
+    return name == written or fnmatch.fnmatchcase(name, written)
+
+
+def matches_sql(column: str, written: str) -> str:
+    """`matches` as an SQL condition over `column`."""
+    value = sql_value(written)
+    return f"({column} = '{value}' OR {column} GLOB '{value}')"
+
+
+def _folded(name: str) -> str:
+    """Each number of a name written as `*`, an address as `0x*`."""
+    return NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*", name)
+
+
+def as_written(name: str) -> str:
+    """A slice's name as an anchor is written to match it in every recording.
+
+    A number that differs in every recording, a frame's vsync id or a tid,
+    is written `*`. A name with no number is written as it is: it matches
+    itself. One with a number is a GLOB, in which a `[`, `*` or `?` of the
+    name's own is escaped: `[[]render] Frame *` for `[render] Frame 12`.
+    """
+    folded = _folded(name)
+    return name if folded == name else _folded(escaped(name))

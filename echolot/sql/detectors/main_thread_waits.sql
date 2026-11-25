@@ -133,7 +133,8 @@ SELECT s.ts, s.dur, s.utid,
 FROM sleeps s
 LEFT JOIN _name_family f  ON f.name = s.waker
 LEFT JOIN _name_family fi ON fi.name = s.inside
-WHERE s.inside IS NOT NULL AND s.inside NOT GLOB '{{lock_glob}}';
+WHERE s.inside IS NOT NULL
+  AND NOT (s.inside = '{{lock_glob}}' OR s.inside GLOB '{{lock_glob}}');
 
 -- What the thread that let the main thread go was doing while it slept
 -- (#418). The row names that thread, and the fix depends on its state. On
