@@ -101,20 +101,24 @@ def test_a_phone_that_comes_shows_on_the_next_page_though_nothing_was_read_again
     check("with the repository read once", site.src.kept.reads == 1, site.src.kept.reads)
 
 
-@pytest.mark.parametrize("what", ["build script", "manifest", "settings", "version catalog", "build code"])
+@pytest.mark.parametrize("what", ["build script", "manifest", "settings", "version catalog", "build code",
+                                  "submodules"])
 def test_a_file_scan_reads_by_name_read_again_when_it_changes(project, what):
     project.ready()
     root = project.root
     (root / "gradle").mkdir()
     (root / "gradle" / "libs.versions.toml").write_text("[plugins]\n", encoding="utf-8")
     source(root, "buildSrc", "Flavors.kt", "object Flavors\n")
+    # Which modules are another repository's (#1003).
+    (root / ".gitmodules").write_text("", encoding="utf-8")
     site = site_of(project)
     pages(site)
     path = {"build script": root / "app" / "build.gradle.kts",
             "manifest": root / "app" / "src" / "main" / "AndroidManifest.xml",
             "settings": root / "settings.gradle.kts",
             "version catalog": root / "gradle" / "libs.versions.toml",
-            "build code": root / "buildSrc" / "src" / "main" / "java" / "com" / "example" / "Flavors.kt"}[what]
+            "build code": root / "buildSrc" / "src" / "main" / "java" / "com" / "example" / "Flavors.kt",
+            "submodules": root / ".gitmodules"}[what]
     touched(path)
     pages(site, 2)
     check(f"a {what} changed: read once more, and only once", site.src.kept.reads == 2, site.src.kept.reads)

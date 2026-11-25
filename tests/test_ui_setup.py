@@ -603,7 +603,7 @@ def test_several_apps_in_one_repository_are_said_beside_the_name(project):
     box = page_of(site_of(project)).one("div", id="setup-app")
     said = box.one("p", "says").text
     check("scan's note stands under the question, in its words", said.startswith("echolot scan says: several modules declare a "
-          "launcher Activity") and "the first is read; the others are apps too" in said, said)
+          "launcher Activity") and "and :app (app) is read" in said and "The others: :wear (wear" in said, said)
     check("which scan prints", said[len("echolot scan says: "):] in re.sub(r"\s+", " ", said_by(["scan"])))
 
 

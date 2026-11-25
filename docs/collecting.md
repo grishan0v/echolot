@@ -366,7 +366,10 @@ so `-n` and `runner.iterations` do not reach it, and `collect` says so when
 either is given. `timeout_s` bounds the whole gradle run — the build, the
 install and every iteration — and a run that outlasts it is stopped with its
 whole process tree. `gradle` is the command in front of the task, run from
-`project_root`.
+`project_root`. Where the Gradle build is in a folder of its own, as in a
+repository with `android/settings.gradle` beside a C++ core, `echolot scan` run
+from the root writes `project_root: "android"` into the draft, and every other
+path in it from the root.
 
 A task that fails harvests nothing, whatever the benchmark wrote before it
 failed: the traces of a half-finished run stay in the module's output
