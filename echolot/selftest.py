@@ -5658,6 +5658,55 @@ def _(report):
                                         "code as it is now") in gradle_text, gradle_text[:3000]
 
 
+@check("markers: a temporary marker in C or C++ is in the code, not taken out of it")
+def _(report):
+    """The last marker of a hunt behind a JNI call goes into the C++ body.
+
+    The walk was Kotlin and Java alone, and `analyze` said the name in the
+    traces was "nowhere in the code" and asked for a build and a new
+    recording, over a build that was current (#1009). C and C++ are read
+    like the rest; a literal the compiler joins to the next one — a macro's
+    `"AGENTTMP_" #x` — is the fixed start of the names it makes.
+    """
+    import copy
+
+    from .main import _markers_against_code
+
+    def removed(root: Path) -> dict | None:
+        rep = copy.deepcopy(report)
+        with recorder.isolated():
+            _markers_against_code(rep, Config.load(root / "echolot.yml"))
+        return rep["markers"].get("removed")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        (root / "echolot.yml").write_text(
+            "project:\n  package: com.example.app\nrunner:\n  mode: launch\n", encoding="utf-8")
+        (root / "app/src/main/java/com/example/app/App.kt").write_text(
+            "class App {\n"
+            '    fun a() = trace("AGENTTMP_seed_first") { }\n'
+            '    fun b() = trace("AGENTTMP_seed_again") { }\n'
+            '    fun c() = trace("AGENTTMP_parse_json") { }\n'
+            '    fun d(n: String) = trace("AGENTTMP_insert_$n") { }\n}\n', encoding="utf-8")
+        native = root / "app/src/main/cpp/bridge.cpp"
+        native.parent.mkdir(parents=True)
+        native.write_text('void Seed() {\n  ATrace_beginSection("AGENTTMP_seed_third");\n'
+                          "  Load();\n  ATrace_endSection();\n}\n", encoding="utf-8")
+        in_cpp = removed(root)
+        native.unlink()
+        header = root / "app/src/main/cpp/trace.h"
+        header.write_text('#define SEED(x) ATrace_beginSection("AGENTTMP_seed_" #x)\n',
+                          encoding="utf-8")
+        joined = removed(root)
+        header.unlink()
+        gone = removed(root)
+    assert in_cpp is None, in_cpp
+    assert joined is None, joined
+    # Without either, the name is one the code no longer makes, as before.
+    assert gone is not None and gone["names"] == ["AGENTTMP_seed_third"], gone
+
+
 # --- the domains map -------------------------------------------------------
 
 def _sample_repo(root: Path) -> None:
@@ -7254,6 +7303,52 @@ def _(report):
     assert mk.is_applied_line(f'  android.os.Trace.endSection(); {mk.TAG}')  # Java
     assert not mk.is_applied_line(f'    doWork() {mk.TAG}')
     assert not mk.is_applied_line(f'    // TODO {mk.TAG} clean this up')
+
+
+@check("mark: a marker added by hand in C or C++ is left in the code, by its place, "
+       "until it is taken out")
+def _(report):
+    """`hunt`, its cleanup check and `--remove` all read the markers off one walk.
+
+    It was Kotlin and Java alone. A hunt put its last marker in the C++ body
+    of a JNI call, a project's wrapper object inside a block opened for its
+    scope; `hunt` counted the Java ones, and once those were gone `hunt
+    --verdict` said the sources were clean with it compiled in (#1009).
+    `--remove` deletes only the lines `--apply` writes, and a native marker
+    has no one shape, so it is named for removal by hand, file and line,
+    and the file is left as it was.
+    """
+    from . import hunt as hunt_mod
+    from . import mark as mk
+    from . import verdict as verdict_mod
+
+    rel = "app/src/main/cpp/bridge.cpp"
+    text = ('#include "scoped_trace.h"\n\nvoid SetDir(const char* dir) {\n'
+            "  {\n"
+            '    ScopedTrace section("AGENTTMP_set_dir");\n'
+            "    Store(dir);\n"
+            "  }\n}\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = root / rel
+        path.parent.mkdir(parents=True)
+        path.write_text(text, encoding="utf-8")
+        (root / "app/build").mkdir()
+        (root / "app/build/gen.cpp").write_text('"AGENTTMP_built"\n', encoding="utf-8")
+        markers = mk.Markers(root)
+        left = markers.leftovers()
+        hand: list[tuple[str, int, str]] = []
+        touched, kept = markers.remove(hand=hand)
+        after = path.read_text(encoding="utf-8")
+    assert (left["markers"], left["removable"], left["hand"]) == (1, 0, [f"{rel}:5"]), left
+    assert left["places"] == [rel], left
+    note = " ".join(hunt_mod.leftover_lines(left))
+    assert ("1 AGENTTMP_ marker(s) still in 1 file(s) — `echolot mark --remove` takes out 0, "
+            f"1 were added by hand and need removing by hand: {rel}:5") in note, note
+    assert verdict_mod.cleanup_agrees("removed", left) is False
+    assert touched == [] and kept == [], (touched, kept)
+    assert hand == [(rel, 5, 'ScopedTrace section("AGENTTMP_set_dir");')], hand
+    assert after == text, after
 
 
 @check("domains: no instrumentation is a report, not an empty output")

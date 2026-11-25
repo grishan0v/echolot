@@ -481,11 +481,14 @@ no string in the code makes any more. `mark --remove` took them out, or a
 hand did, after the app that was recorded was built, so it has none of the
 changes made to the code since. A fix is among them as often as not, and a
 round compared as if it had one says the fix did nothing. Any string in the
-code counts, tagged or not: a marker added by hand without the tag is in the
-code all the same. A name put together at run time — a template, a format, a
-string joined to more with `+` — makes every name that starts with its fixed
-part. A config kept where there is no Kotlin or Java says nothing, since
-every name would read as taken out. The warning names the gradle task as the
+code counts, tagged or not, in Kotlin, Java, C or C++: a marker added by hand
+without the tag is in the code all the same, and so is one in the C++ body of
+a JNI call, which a walk of Kotlin and Java alone called taken out over a
+current build (#1009). A name put together at run time — a template, a
+format, a string joined to more with `+`, a C literal the compiler joins to
+the next one or to a macro — makes every name that starts with its fixed
+part. A config kept where there is no Kotlin, Java, C or C++ says nothing,
+since every name would read as taken out. The warning names the gradle task as the
 other one does, and `report.json` carries the names as `markers.removed`.
 
 Names that carry the temporary prefix keep their digits. `names` folds

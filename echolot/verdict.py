@@ -588,9 +588,11 @@ def _cleanup_line(claimed: Any, check: Any) -> str | None:
     kept = _list(found.get("kept"))
     files = len(_list(found.get("files")))
     bits = []
+    hand = _list(found.get("hand"))
     if markers:
         bits.append(f"{markers} {found.get('prefix') or ''} marker(s) in {files} file(s) "
-                    "still in the sources")
+                    "still in the sources"
+                    + (f", added by hand at {places(hand)}" if hand else ""))
     elif lines:
         bits.append(f"{lines} line(s) tagged `// echolot:mark` still in the sources")
     if kept:

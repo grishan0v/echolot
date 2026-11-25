@@ -140,6 +140,26 @@ file that will not take the write is named and the run goes on. Braces are match
 the file with strings and comments blanked out, so a `}` inside a literal
 does not count.
 
+**Markers in C and C++.** Every reader of the markers reads one walk: every
+Kotlin, Java, C and C++ file under the root (`.c`, `.cc`, `.cpp`, `.cxx`,
+`.h`, `.hh`, `.hpp`, `.hxx`), with `build/` and the like left out —
+`--remove`, `echolot hunt` and its cleanup check, the page in `echolot ui`,
+`reflect`, and `analyze` holding the traces' names against the code. In an
+app whose work sits behind a JNI call, a hunt follows the time into the
+native body and puts its last marker there, `ATrace_beginSection("AGENTTMP_…")`
+or the project's own tracing wrapper; it is in the library and in the trace
+like any other, and a walk of Kotlin and Java alone called it "nowhere in the
+code" and the sources clean (#1009). `--apply` writes nothing in C or C++, so
+`--remove` deletes nothing there: a native marker has no one shape — a begin
+with its end and an `#include`, a wrapper object in a block opened for its
+scope — and deleting the line with the name would leave the rest behind.
+`--remove` names it with its file and line instead, as it names every marker
+added by hand without the tag, in any of the four languages, and `echolot
+hunt`, its cleanup check and the verdict's record name them the same way until
+they are gone. In C and C++ a literal the compiler joins to more — the next
+literal, a macro's argument made a string (`"AGENTTMP_" #x`), a macro — is
+read as the fixed start of the names it makes.
+
 That promise decides what is refused. A block is proposed but not applied,
 with the reason on its row, when a pair of whole lines cannot go in without
 changing a line of the project's:

@@ -77,9 +77,16 @@ def test_the_loop_says_bare_compare_takes_the_last_two_analyze_runs():
 
 
 def test_every_cleanup_check_covers_the_checkout_and_the_untagged_half():
-    """Markers may go into every path of `instrumentation.allowed`, and the
-    `endSection()` half of a pair carries the tag and not the prefix."""
-    grep = "grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' ."
+    """Markers may go into every path of `instrumentation.allowed`, C and C++
+    under `src/main/cpp` among them (#1009), and the `endSection()` half of a
+    pair carries the tag and not the prefix. The texts give the check
+    `reflect` suggests, which greps the suffixes `mark.marker_files` reads."""
+    from echolot.domains import NATIVE_EXT, SOURCE_EXT
+    from echolot.reflect.signals import _cleanup_grep
+
+    grep = _cleanup_grep("AGENTTMP_")
+    check("the check greps every suffix the marker walk reads",
+          all(f"--include='*{ext}'" in grep for ext in SOURCE_EXT + NATIVE_EXT), grep)
     for path in (LOOP, GUIDE_HUNT, HUNT_COMMAND):
         check(f"{path.name} gives the whole check", grep in _flat(path), path)
     for path in [*(ROOT / "echolot").rglob("*.md"), *(ROOT / "echolot").rglob("*.py"),

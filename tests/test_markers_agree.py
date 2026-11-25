@@ -51,11 +51,18 @@ class Case:
     kept: list[str] = field(default_factory=list)       # lines that go by hand, file:line
     outside: list[str] = field(default_factory=list)    # places outside `allowed`
     removed: int = 0                  # lines `mark --remove` deletes
+    hand: list[str] = field(default_factory=list)       # markers added by hand, file:line
 
 
 MAIN = "app/src/main/kotlin/com/example/app/screens/MainActivity.kt"
 FOO = "app/src/main/kotlin/com/example/app/Foo.kt"
 CORE = "core/src/main/kotlin/com/example/core/Cache.kt"
+NATIVE = "app/src/main/cpp/bridge.cpp"
+# A hunt behind a JNI call: the project's wrapper object, in a block opened
+# for its scope (#1009).
+SCOPED = ('void SetDir(const char* dir) {\n  {\n'
+          '    ScopedTrace section("AGENTTMP_set_dir");\n'
+          "    Store(dir);\n  }\n}\n")
 
 CASES = {
     "a line --apply wrote": Case(
@@ -84,6 +91,16 @@ CASES = {
          CORE: kotlin('        log("AGENTTMP_not_ours")\n')},
         'instrumentation:\n  allowed: ["app/src/main"]\n  temp_prefix: PERF_\n',
         places=[MAIN], removed=2),
+    "a marker added by hand in C++": Case(
+        {NATIVE: SCOPED},
+        'instrumentation:\n  allowed: ["app/src/main"]\n',
+        places=[NATIVE], hand=[f"{NATIVE}:3"]),
+    "a tagged pair in C++ beside a Kotlin one": Case(
+        {MAIN: kotlin(APPLIED.format(prefix="AGENTTMP_")),
+         NATIVE: 'void f() {\n  ATrace_beginSection("AGENTTMP_f"); // echolot:mark\n'
+                 "  g();\n  ATrace_endSection(); // echolot:mark\n}\n"},
+        'instrumentation:\n  allowed: ["app/src/main/kotlin"]\n',
+        places=[NATIVE, MAIN], kept=[f"{NATIVE}:2", f"{NATIVE}:4"], outside=[NATIVE], removed=2),
     "a clean tree": Case(
         {MAIN: kotlin("        work()\n")},
         'instrumentation:\n  allowed: ["app/src/main"]\n',
@@ -118,7 +135,7 @@ def test_every_reader_says_the_same(tmp_path: Path, name: str) -> None:
     left_lines = [ln for ln in lines if "echolot:mark" in ln or "still in" in ln]
     check(f"{name}: hunt says something is left" if case.places else f"{name}: hunt says nothing",
           bool(left_lines) is bool(case.places), said)
-    for place in case.kept:
+    for place in [*case.kept, *case.hand]:
         check(f"{name}: hunt names {place}", place in said, said)
 
     # The page in `echolot ui`.
@@ -149,8 +166,9 @@ def test_every_reader_says_the_same(tmp_path: Path, name: str) -> None:
           removed == case.removed == page["lines"], (removed, out.getvalue()))
     kept = [ln.split(": ", 1)[0].strip().removeprefix("! ")
             for ln in out.getvalue().splitlines() if ln.startswith("  ! ")]
-    check(f"{name}: and leaves the lines the others say go by hand", kept == case.kept, kept)
+    check(f"{name}: and leaves the lines the others say go by hand",
+          kept == case.kept + case.hand, kept)
     # After the press, every reader agrees on what is left: only the lines by hand.
     after = mark.Markers.of(copy, cfg).leftovers()
     check(f"{name}: what is left is what goes by hand", after["kept"] == case.kept
-          and after["lines"] == 0, after)
+          and after["hand"] == case.hand and after["lines"] == 0, after)
