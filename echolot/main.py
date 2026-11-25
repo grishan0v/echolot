@@ -1785,7 +1785,8 @@ def _say_no_sources(rep: dict, cfg: Config) -> None:
     if not wanted and not calls:
         return
     root = cfg.sources
-    if root.is_dir() and next(iter(place_mod.source_files(root)), None) is not None:
+    from .domains import source_files
+    if root.is_dir() and next(iter(source_files(root)), None) is not None:
         return
     rep["no_sources"] = {"root": str(root), "rows": wanted, "composable_calls": calls}
     what = []

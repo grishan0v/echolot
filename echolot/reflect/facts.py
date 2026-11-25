@@ -1121,11 +1121,11 @@ def milestones(session: Session, calls: list[EcholotCall],
     # main context first, so the first in storage order was a later
     # main-context marker before an earlier subagent one; and `AGENTTMP_`
     # alone missed every project with a prefix of its own.
-    added = [_mark(c.ts, "temporary instrumentation added", c.agent, _short(c.path))
+    added = [_mark(c.ts, "temporary instrumentation added", c.agent, short_path(c.path))
              for c in session.calls
              if c.tool in ("Edit", "Write") and _has_prefix_added(c, prefix)]
     added += [_mark(e["ts"], "temporary instrumentation added (shell)", e["agent"],
-                    ", ".join(_short(f) for f in e["files"][:2]))
+                    ", ".join(short_path(f) for f in e["files"][:2]))
               for e in shell_edits(session, prefix)]
     if added:
         marks.append(min(added, key=lambda m: ts_to_epoch(m["ts"])))
@@ -1133,7 +1133,8 @@ def milestones(session: Session, calls: list[EcholotCall],
     return marks
 
 
-def _short(path: str | None, keep: int = 3) -> str:
+def short_path(path: str | None, keep: int = 3) -> str:
+    """The last `keep` parts of a path, as a fact or a signal names a file."""
     if not path:
         return ""
     return "/".join(Path(path).parts[-keep:])

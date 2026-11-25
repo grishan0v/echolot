@@ -140,7 +140,7 @@ def read_session(path: Path) -> Session:
     session = Session(id=path.stem, agent=AGENT_NAME)
     session.sources.append(str(path))
     pending_agents: dict[str, SubAgent] = {}       # tool_use id → placeholder
-    _parse_rows(_rows(path), session, MAIN, None, pending_agents)
+    _parse_rows(jsonl_rows(path), session, MAIN, None, pending_agents)
 
     # Subagent transcripts live beside the main file, one per agent.
     sub_dir = path.with_suffix("") / "subagents"
@@ -156,7 +156,7 @@ def read_session(path: Path) -> Session:
                     f"Agent call in the main file")
             sub.source = str(sub_path)
             session.sources.append(str(sub_path))
-            _parse_rows(_rows(sub_path), session, f"sub:{agent_id}", sub, {})
+            _parse_rows(jsonl_rows(sub_path), session, f"sub:{agent_id}", sub, {})
 
     if session.calls or session.turns:
         stamps = [c.ts for c in session.calls] + [t.ts for t in session.turns]
@@ -174,7 +174,10 @@ def read_session(path: Path) -> Session:
     return session
 
 
-def _rows(path: Path) -> Iterable[dict[str, Any]]:
+def jsonl_rows(path: Path) -> Iterable[dict[str, Any]]:
+    """Each object of a JSONL log, one per line. A blank line, a line that is
+    no JSON and a value that is no object are passed over. The Codex reader
+    reads its log through this too."""
     with path.open(encoding="utf-8", errors="ignore") as f:
         for line in f:
             line = line.strip()

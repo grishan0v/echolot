@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import mapping as mapping_mod
-from .domains import source_files
+from .domains import source_index
 
 # --- the format -------------------------------------------------------------
 #
@@ -1699,7 +1699,7 @@ def _loop(holders: list[Thread],
 # at a file in the repository, and that is a shorter road than the one
 # `domains` takes from a slice name.
 #
-# The walk is `domains.source_files`, not `mark`'s. That direction is the one
+# The index is `domains.source_index`, not `mark`'s. That direction is the one
 # that matters: `mark` will want to read an ANR report, so a module this one
 # imports must not be one that imports it. `domains` imports nothing of ours.
 
@@ -1734,19 +1734,6 @@ class Located:
     # sign of another build, and not counted with `astray`.
     at: int | None = None
     inlined: str = ""
-
-
-def source_index(root: Path) -> dict[str, list[Path]]:
-    """Every Kotlin and Java source under the root, by file name.
-
-    The walk is `domains.source_files`. Borrowing it is safe in the direction
-    that matters: `domains` imports nothing of ours, so this does not become
-    the cycle the note above is about — `mark` importing `anr`.
-    """
-    found: dict[str, list[Path]] = {}
-    for path in source_files(root):
-        found.setdefault(path.name, []).append(path)
-    return found
 
 
 # `package com.example.app` — Kotlin with no semicolon, Java with one. Only

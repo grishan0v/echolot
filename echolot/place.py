@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from . import mapping as mapping_mod
-from .domains import source_files
+from .domains import source_index as index
 
 # The informative shape of ART's contention slice:
 #   monitor contention with owner <thread> (<tid>) at <frame> waiters=<n>
@@ -91,14 +91,6 @@ class Place:
     # Named by the build's mapping, the frame having been R8's. Written into
     # the json only when it is so.
     retraced: bool = False
-
-
-def index(root: Path) -> dict[str, list[Path]]:
-    """Every Kotlin and Java source under the root, by file name."""
-    found: dict[str, list[Path]] = {}
-    for path in source_files(root):
-        found.setdefault(path.name, []).append(path)
-    return found
 
 
 def parse_contention(detail: str) -> dict[str, Any] | None:

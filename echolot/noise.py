@@ -53,6 +53,7 @@ from typing import Any
 from . import compare as compare_mod
 from . import report as report_mod
 from . import table
+from .words import figure as _n
 
 # How many random splits, and the seed they are drawn from. Two hundred put
 # the share of splits with a row that holds in steps of half a percent and
@@ -275,10 +276,6 @@ def _ordered(tally: dict[str, Any], drawn: list[dict[str, Any]], cut: int, runs:
 
 
 # --- what analyze prints and writes -------------------------------------------
-
-def _n(value: float) -> str:
-    return f"{value:g}"
-
 
 def _pct(value: float | None) -> str:
     return "—" if value is None else f"{value:.1f}%"

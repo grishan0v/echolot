@@ -32,6 +32,7 @@ from .. import merge as merge_mod
 from .. import render as render_mod
 from . import kit, md
 from .kit import e
+from ..words import is_number as _is_number
 
 # report.css is taken for the typography of the Markdown under the last fold,
 # which comparison.md shares with report.md.
@@ -72,10 +73,6 @@ def misshapen(cmp: dict[str, Any]) -> str | None:
     (#733) and in the rows (#870). `has_reading` is asked first."""
     got = files.check_comparison(cmp)
     return got.why if isinstance(got, files.Refusal) else None
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _words(noun: Any) -> tuple[str, str]:

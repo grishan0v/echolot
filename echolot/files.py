@@ -34,6 +34,7 @@ refuses it with a sentence that names the command that writes it again.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -420,6 +421,24 @@ def read_report(path: Path) -> Report | Refusal:
 def check_report(data: Any) -> Report | Refusal:
     """A report already in hand, or why it does not read as one."""
     return REPORT.check(data)
+
+
+def runs(report: Mapping[str, Any]) -> int:
+    """How many recordings a report is of: what it says, else the traces it
+    lists, else one. A count that is no whole number above zero, or traces
+    that are no list, read as not said (#994)."""
+    n = report.get("runs")
+    if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+        return n
+    traces = report.get("traces")
+    return (len(traces) if isinstance(traces, list) else 0) or 1
+
+
+def text_sha256(text: str) -> str:
+    """The SHA-256 of the text as UTF-8, in hex: what tells a file's text from
+    the text it held before. `codex` keeps such hashes of the rule files
+    earlier releases wrote, so the hash stays SHA-256."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
