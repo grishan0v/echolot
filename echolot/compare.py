@@ -37,10 +37,9 @@ Three things it refuses to do quietly:
     `checked` existed is unknown, and is compared as it always was.
 
 Rows are paired on everything the detector declared in `@identity`, which the
-report carries. Seven of the fifteen shipped detectors name a second column
-there, and one location legitimately holding several rows is what that field
-exists to say; see `_match` for what pairing on the name alone produced
-instead.
+report carries. A detector whose `@identity` names a second column there says
+that one location legitimately holds several rows; see `_match` for what
+pairing on the name alone produced instead.
 """
 
 from __future__ import annotations
@@ -1693,7 +1692,7 @@ def _match(before_rows: list[dict], after_rows: list[dict],
     """Pairs rows of one detector, exactly first and by name family second.
 
     A row is named by every column in `identity`, never by `location` alone.
-    Seven of the fifteen shipped detectors group by a second column —
+    The detectors whose `@identity` names a second column group by it —
     `runnable_starvation` by the thread's state, `binder_txn` by whether the
     thread is the main one, `anr` by which record it is — so one location
     carrying several rows is ordinary rather than a corner.

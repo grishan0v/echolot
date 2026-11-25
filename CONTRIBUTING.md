@@ -34,6 +34,22 @@ A new detector takes more than a new `.sql` file; the checklist is in
 pictures are drawn by a script, and [docs/assets/README.md](docs/assets/README.md)
 says how.
 
+### Comments and docstrings
+
+A docstring says what holds: the invariant, in one paragraph. The issue a
+change fixes goes in the commit message, where `git log -S` and `git blame`
+find it, and stays out of the code. A story of a past bug stays in a comment
+only where the code looks wrong without it: the reader would otherwise
+"simplify" it back into the bug.
+
+A comment does not count what can be counted. "The detectors whose
+`@identity` names a second column" stays true when a detector lands; "seven
+of the fifteen" did not, and `tests/test_docs.py` fails on a stated total of
+shipped detectors that differs from `echolot/sql/detectors/`.
+
+Files that do not follow this yet get it when a pull request touches them,
+not in one sweep over the tree.
+
 ## The documentation site
 
 `docs/` is also published as a site, with search and a sidebar, to GitHub
