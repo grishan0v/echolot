@@ -9,15 +9,16 @@ one: pages took 40 to 155 s there, and a press two minutes to start its run,
 where every other page answers in a tenth of a second.
 
 What `scan` says comes from a few files: the build scripts, the settings, the
-version catalogs, the manifests, the build code under `buildSrc` and the
-builds the settings include, and the sources of a benchmark module. And from
+version catalogs, the manifests, `.gitmodules`, the build code under
+`buildSrc` and the builds the settings include, and the sources of a
+benchmark module. And from
 which sources there are at all: a module is a folder with sources under
 `src/main`, a benchmark is a source that holds a MacrobenchmarkRule. So the
 reading is kept together with a stamp of the tree, and taken again when the
 stamp differs:
 
-- a build script, a settings file, a version catalog or a manifest changed
-  (its time or its size), or one came or went;
+- a build script, a settings file, a version catalog, a manifest or
+  `.gitmodules` changed (its time or its size), or one came or went;
 - a file under the build code changed;
 - a source of a benchmark module changed;
 - a source came or went anywhere.
@@ -51,9 +52,10 @@ from typing import Callable
 from . import scan as scan_mod
 from .domains import SKIP_DIRS, _is_worktree
 
-# What `scan` reads by name, wherever it is in the tree.
+# What `scan` reads by name, wherever it is in the tree: `.gitmodules` says
+# which modules are another repository's (#1003).
 NAMED = frozenset({"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
-                   "AndroidManifest.xml"})
+                   "AndroidManifest.xml", ".gitmodules"})
 CATALOG = ".versions.toml"
 # A file the stamp takes in: one read by name, or a source or a piece of
 # build code (`scan._BUILD_CODE_EXT` holds the sources' extensions too).
@@ -103,7 +105,8 @@ def _under(rel: str, dirs: tuple[str, ...]) -> bool:
 def watched(root: Path, facts: scan_mod.Facts | None) -> Callable[[str], bool]:
     """Which files count by their contents, not only by being there: the
     ones read by name, the build code, and a benchmark module's sources."""
-    code = tuple(d.relative_to(root).as_posix() for d in scan_mod.build_code_dirs(root))
+    gradle = scan_mod.gradle_dir(root, facts.app if facts else None)
+    code = tuple(d.relative_to(root).as_posix() for d in scan_mod.build_code_dirs(root, gradle))
     benchmarks = tuple(str(b["dir"]).strip("/") for b in (facts.benchmarks if facts else ())
                        if b.get("dir") and str(b["dir"]).strip("/") not in ("", "."))
 

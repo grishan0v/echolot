@@ -5378,11 +5378,11 @@ def _(report):
     assert facts.app["application_id"] == "com.example.app", facts.app
     assert by["freeDebug"]["application_id"] == "com.example.app.free.debug", by["freeDebug"]
     assert by["freeRelease"]["application_id"] == "com.example.app.free", by["freeRelease"]
-    assert by["paidQa"]["unread"] == ["`applicationIdSuffix = rootProject.ext.qaSuffix` "
+    assert by["paidQa"]["unread"] == ["`applicationIdSuffix rootProject.ext.qaSuffix` "
                                       "in buildTypes.qa of app/build.gradle"], by["paidQa"]
     assert not by["paidRelease"].get("unread"), by["paidRelease"]
     assert any("rootProject.ext.qaSuffix" in n and "pm list packages" in n for n in facts.notes), facts.notes
-    assert "  _source: default" in draft and "not read: `applicationIdSuffix = rootProject.ext.storeSuffix`" \
+    assert "  _source: default" in draft and "not read: `applicationIdSuffix rootProject.ext.storeSuffix`" \
         in draft, draft
 
 
@@ -5407,6 +5407,143 @@ def _(report):
     assert facts.app["activity"] == "com.example.app.Launcher", facts.app
     assert '  activity: "com.example.app.Launcher"' in draft, draft
     assert named == "com.example.app.Launcher", named
+
+
+def _gradle_in_a_folder_repo(root: Path) -> None:
+    """A repository whose Gradle build is in `android/`, beside a git
+    submodule with an example app of its own that sorts first (#1003). The
+    root build script keeps the applicationId in `ext` (#1004), and a build
+    type is made profileable by its own source set's manifest, with two
+    flavours of which the second is marked `isDefault` (#1006)."""
+    (root / ".gitmodules").write_text('[submodule "vendor/lib"]\n\tpath = vendor/lib\n'
+                                      '\turl = https://example.com/lib.git\n', encoding="utf-8")
+    demo = root / "vendor/lib/examples/demo/android"
+    (demo / "app/src/main").mkdir(parents=True)
+    (demo / "settings.gradle").write_text("include ':app'\n", encoding="utf-8")
+    (demo / "app/build.gradle").write_text(
+        "android { namespace 'org.example.demo'\n defaultConfig { applicationId 'org.example.demo' } }\n",
+        encoding="utf-8")
+    (demo / "app/src/main/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+        f'<activity android:name=".MainActivity">{_LAUNCHER_FILTER}</activity></application></manifest>\n',
+        encoding="utf-8")
+    android = root / "android"
+    app = android / "app"
+    (app / "src/main/java/com/example/app").mkdir(parents=True)
+    (app / "src/profileable").mkdir(parents=True)
+    (android / "settings.gradle").write_text("rootProject.name = 'Example'\ninclude ':app'\n", encoding="utf-8")
+    (android / "build.gradle").write_text(
+        "rootProject.ext {\n    def ver = version()\n    versionCode = ver.V1\n"
+        "    appId = 'com.example.app'\n}\n", encoding="utf-8")
+    (app / "build.gradle").write_text(
+        "plugins { id 'com.android.application' }\n"
+        "android {\n"
+        "    namespace 'com.example.app'\n"
+        "    defaultConfig { applicationId rootProject.ext.appId }\n"
+        "    flavorDimensions += 'store'\n"
+        "    productFlavors {\n"
+        "        a { dimension 'store' }\n"
+        "        b { dimension 'store'\n            isDefault = true }\n"
+        "    }\n"
+        "    buildTypes {\n"
+        "        release { minifyEnabled true }\n"
+        "        profileable { initWith release\n            applicationIdSuffix '.profileable' }\n"
+        "    }\n}\n", encoding="utf-8")
+    (app / "src/main/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+        f'<activity android:name=".MainActivity">{_LAUNCHER_FILTER}</activity></application></manifest>\n',
+        encoding="utf-8")
+    (app / "src/profileable/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>\n'
+        '  <profileable\n    android:shell="true" />\n</application></manifest>\n', encoding="utf-8")
+    (app / "src/main/java/com/example/app/MainActivity.kt").write_text(
+        "package com.example.app\nclass MainActivity\n", encoding="utf-8")
+
+
+@check("scan: the app is the module the project's own Gradle build includes, read in the folder that "
+       "build is in, not a git submodule's example that sorts first")
+def _(report):
+    """A repository that keeps its Gradle build in `android/`, beside a C++
+    core and git submodules, had a launcher Activity in a submodule's example
+    too. `3party` sorts before `android`, the first was read, and the whole
+    draft was the example's: its package, its launcher, its folders (#1003).
+    A module a settings file of the project includes now comes before one
+    in a submodule or a third-party folder, its module path is its own
+    build's, and the paths in the draft are from the root, where the config
+    goes.
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _gradle_in_a_folder_repo(root)
+        facts = scan.describe(root, devices=False)
+        draft = "\n".join(scan.skeleton(facts))
+    app = facts.app
+    assert app and app["dir"] == "android/app" and app["module"] == ":app", app
+    assert app["gradle_root"] == "android", app
+    assert any("in the git submodule vendor/lib" in n for n in facts.notes), facts.notes
+    assert any(n.startswith("the Gradle build is in android/") for n in facts.notes), facts.notes
+    assert facts.allowed == ["android/app/src/main"], facts.allowed
+    assert "org.example.demo" not in draft, draft
+    assert "  mapping: android/app/build/outputs/mapping/bProfileable/mapping.txt" in draft, draft
+
+
+@check("scan: an applicationId the root build script keeps in ext is read, as each form writes and reads it")
+def _(report):
+    """`applicationId rootProject.ext.appId` in the app's script, `appId =
+    'com.example.app'` in an `ext` block of the root one: the note quoted the
+    expression, and the draft said `com.example.app`'s placeholder for want
+    of a file one away (#1004). The older Groovy way to share a value
+    between modules, and still a common one.
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _gradle_in_a_folder_repo(root)
+        facts = scan.describe(root, devices=False)
+    assert facts.app["application_id"] == "com.example.app", facts.app
+    assert facts.app["application_id_from"] == "`rootProject.ext.appId` in android/build.gradle", facts.app
+    by = {v["name"]: v for v in facts.variants}
+    assert by["bProfileable"]["application_id"] == "com.example.app.profileable", by["bProfileable"]
+    assert not any(v.get("unread") for v in facts.variants), facts.variants
+    assert scan.extra_values(scan._strip(
+        "ext.appId = 'a'\next { other = \"b\"; def local = 'c' }\nextra[\"k\"] = \"d\"\n"
+        "val v by extra(\"e\")\n")) == {"other": "b", "appId": "a", "k": "d", "v": "e"}
+    code = scan.BuildCode(extra={"appId": "com.example.app"}, extra_file="build.gradle")
+    for read in ("rootProject.ext.appId", "rootProject.appId", 'rootProject.extra["appId"] as String',
+                 "project.appId", "appId"):
+        assert scan.resolve(read, code) == ("com.example.app", "build.gradle"), read
+    # The module's own `ext` is its own: the root's is not it.
+    assert scan.resolve("ext.appId", code) is None
+
+
+@check("scan: a build type its own source set's manifest makes profileable is the one to measure on, "
+       "of the flavour isDefault marks")
+def _(report):
+    """`profileable { initWith release }` carried `<profileable
+    android:shell="true"/>` in `src/profileable/AndroidManifest.xml`, which
+    AGP merges into that build type's variants alone. Read off `src/main`
+    only, it was "unknown" and ranked below release, which shows no
+    application slices; and of two flavours the one first by name was taken
+    over the one `isDefault = true` marks (#1006).
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _gradle_in_a_folder_repo(root)
+        facts = scan.describe(root, devices=False)
+        text = scan.render(facts)
+        (root / "android/app/src/profileable/AndroidManifest.xml").unlink()
+        bare = scan.describe(root, devices=False)
+    chosen = scan.preferred(facts.variants)
+    assert chosen["name"] == "bProfileable", chosen
+    assert chosen["measure"].startswith("yes") and "src/profileable/AndroidManifest.xml" in chosen["measure"], chosen
+    assert facts.app["profileable_by"] == ["profileable"], facts.app
+    assert not any("has no <profileable" in n for n in facts.notes), facts.notes
+    assert "profileable: yes for `profileable`, by its own manifest, " \
+           "android/app/src/profileable/AndroidManifest.xml" in text, text[:800]
+    assert scan.preferred(bare.variants)["name"] == "bRelease", bare.variants
+    assert any("has no <profileable" in n for n in bare.notes), bare.notes
 
 
 @check("collect: several launchers are listed and the project's own is named; runner.activity takes a class name")

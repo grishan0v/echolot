@@ -34,10 +34,24 @@ it came from:
 - the app module, its `applicationId` and `namespace`, `android:process` if
   the manifest sets one, and whether `<profileable android:shell="true" />`
   is there — **without it there will be no application slices in the
-  trace**; the note says so, repeat it to the human immediately
+  trace**; the note says so, repeat it to the human immediately. A build
+  type, flavour or variant whose own source set's manifest
+  (`src/<buildType>/AndroidManifest.xml`) carries the tag is profileable
+  too, and the line says which. Where several modules declare a launcher
+  Activity, the app is the one a settings file of the project includes,
+  never one in a git submodule (`.gitmodules`) or a third-party folder
+  (`3party/`, `third_party/`, `vendor/`…); the note lists the others and
+  why each was passed over. Where the Gradle build is in a folder of its
+  own (`android/settings.gradle` beside a C++ core), the module line says
+  so: module paths are that build's (`:app`), `./gradlew` runs there, and
+  every path in the draft is from the root, where `echolot.yml` goes — run
+  `echolot scan` from the root, not `--root android`
 - the variants — flavour × build type, what each installs as, and which one
   to measure on: a `benchmark` build type (release-like, profileable) over
-  `release` over anything debuggable, which skews everything. Where the app
+  any other build type that is profileable and not debuggable (by
+  `isProfileable` or its own manifest) over `release` over anything
+  debuggable, which skews everything; of the flavours, the one
+  `isDefault = true` marks. Where the app
   module applies `androidx.baselineprofile`, the build types that plugin
   adds are variants too, though no script names them: `benchmarkRelease`,
   release-like and profileable, is the one to measure on, and
@@ -50,7 +64,9 @@ it came from:
   report and leaves R8's names as they are. What the project's own build
   code decides is read too, `buildSrc` or an included `build-logic`: a
   suffix or an applicationId that is a constant or an enum entry's argument,
-  and flavours a convention plugin registers for each entry of an enum; the
+  a string the root build script keeps in `ext` (`applicationId
+  rootProject.ext.appId`), and flavours a convention plugin registers for
+  each entry of an enum; the
   lines under the table say where each came from. A part set any other way
   shows as `+ ?` in the table and in a note; when the variant to measure is
   one of those, the draft's package says `_source: default` — ask the human
