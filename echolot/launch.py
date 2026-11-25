@@ -21,6 +21,24 @@ Nobody chooses between the two ends, and the report says which one the trace
 gave: `window.defined_by` is `launch` or `launch+reportFullyDrawn`. The two
 cover different stretches, so `compare` refuses one against the other.
 
+A start the app hands over is one launch for the user and two for the
+platform (#1008). A splash that draws a frame, then starts the app's main
+activity by itself and finishes, has the platform record a second launch,
+`completed-same-process`, from the app's own call to that activity's first
+frame. Closed on the first, the window was the splash: on a real app 181 ms
+of the 690 a person waited before the map, with 181 ms of the app's own
+start on the main thread after it, outside, and called fine. So the launch
+runs on through each launch the app went on to by itself: of the same app,
+begun after the one before had ended, with no input to the app between the
+two, and with the activity the one before ended on finished once the next
+was under way, as a splash, a trampoline or a gate is. An activity the app
+starts over its main screen, which stays beneath it, is not followed. The
+window then closes at the last such launch's end, or on `reportFullyDrawn`
+after it, and `defined_by` is `launch+handover`. The platform merges an
+activity started before the first frame into the launch by itself (#909),
+so with this the window is the same whichever side of the splash's first
+frame the app hands over on.
+
 The call is read from its slice and not from Perfetto's time to full
 display. That table needs frame-timeline data, which most recordings here
 lacked, and it adds one frame to the same moment.
@@ -49,6 +67,8 @@ from .tp import sql_value
 # config's anchors has no such key.
 LAUNCH = "launch"
 FULLY_DRAWN = "launch+reportFullyDrawn"
+# A launch run on through the launches the app went on to by itself (#1008).
+HANDOVER = "launch+handover"
 # The whole trace, from its first moment to its last.
 WHOLE = "whole"
 
@@ -233,9 +253,12 @@ def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
         raise NoLaunch(_no_launch(process, trace, launches))
     chosen = mine[0]
     start, launch_end = chosen["ts"], chosen["ts_end"]
+    # The launches the app went on to by itself are the same start (#1008).
+    chain = handed_over(tp, package, start, launch_end)
+    end = chain[-1]["ts_end"] if chain else launch_end
     # The call belongs to this launch only up to the next one of the same
     # app: an app brought to the front twice calls it once, if at all.
-    later = [s["ts"] for s in of_package + mine if s["ts"] > start]
+    later = [s["ts"] for s in of_package + mine if s["ts"] > (end if chain else start)]
     before = f" AND ts < {min(later)}" if later else ""
 
     source = None
@@ -263,14 +286,126 @@ def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
     # The later of the two. A call made before the first frame is the app's
     # claim, and the launch is not over: its end still closes the window.
     drawn = call[0]["ts_end"] if call else None
-    closed_on_call = drawn is not None and drawn > launch_end
-    return {
+    closed_on_call = drawn is not None and drawn > end
+    found: dict[str, Any] = {
         "ts_start": start,
-        "ts_end": drawn if closed_on_call else launch_end,
-        "defined_by": FULLY_DRAWN if closed_on_call else LAUNCH,
+        "ts_end": drawn if closed_on_call else end,
+        "defined_by": FULLY_DRAWN if closed_on_call else HANDOVER if chain else LAUNCH,
         "report_fully_drawn": source,
         "startup_id": chosen["startup_id"],
     }
+    if chain:
+        found["handover"] = {
+            "from": chain[0]["from"], "to": chain[-1]["activity"],
+            "first_frame_ms": round((launch_end - start) / 1e6, 2),
+            "after_ms": round((chain[0]["ts"] - launch_end) / 1e6, 2),
+            "launches": len(chain)}
+    alias = _alias(tp, trace)
+    if alias:
+        found["alias"] = alias
+    return found
+
+
+def handed_over(tp, package: str, start: int, end: int) -> list[dict[str, Any]]:
+    """The launches the app went on to by itself after its launch from
+    `start` to `end`, in order; empty for a launch it did not hand over (#1008).
+
+    Each is the app's: its completion names the package, the platform's
+    `launchingActivity#<id>:completed-same-process:<package>` for an
+    activity the app started itself. Each begins after the one before it
+    ended, with no input to the app between the two: a tap that opens a
+    screen is a person's doing, not the start's. And the activity the one
+    before ended on is finished once the next is under way: a splash, a
+    trampoline or a gate leaves, where a screen the app opens over its main
+    one keeps the main one beneath it, and the start was over. The activity
+    is the one the main thread's last `performCreate:` inside a launch names;
+    with no class in the trace (before Android 12), any activity's
+    destruction after the next launch began stands for it.
+    """
+    rows = tp.query(f"""
+        SELECT l.ts AS ts, l.ts + l.dur AS ts_end,
+               (SELECT c.name FROM slice c WHERE c.name GLOB l.name || ':completed*'
+                ORDER BY c.ts LIMIT 1) AS completed
+        FROM slice l
+        WHERE l.name GLOB 'launchingActivity#*' AND l.name NOT GLOB '*:*'
+          AND l.dur > 0 AND l.ts >= {int(end)}
+        ORDER BY l.ts
+    """)
+    chain: list[dict[str, Any]] = []
+    before, left = end, _created(tp, start, end)
+    for row in rows:
+        if row["ts"] < before:
+            continue
+        if not str(row["completed"] or "").endswith(f":{package}"):
+            break
+        if _touched(tp, before, row["ts"]) or not _finished(tp, left, row["ts"]):
+            break
+        drew = _created(tp, row["ts"], row["ts_end"])
+        chain.append({"ts": row["ts"], "ts_end": row["ts_end"], "from": left,
+                      "activity": drew})
+        before, left = row["ts_end"], drew
+    return chain
+
+
+def _created(tp, start: int, end: int) -> str | None:
+    """The class of the main thread's last `performCreate:` from `start` to
+    `end`: the activity a launch ended on, where the trace names it."""
+    rows = tp.query(f"""
+        SELECT name FROM _slice
+        WHERE is_main_thread = 1 AND name GLOB 'performCreate:*'
+          AND ts >= {int(start)} AND ts < {int(end)}
+        ORDER BY ts DESC LIMIT 1
+    """)
+    name = rows[0]["name"].split(":", 1)[1].strip() if rows else ""
+    return name or None
+
+
+def _touched(tp, start: int, end: int) -> bool:
+    """Whether the app was given an input event from `start` to `end`."""
+    return bool(tp.query(f"""
+        SELECT 1 AS n FROM _slice
+        WHERE name GLOB 'deliverInputEvent*' AND ts >= {int(start)} AND ts < {int(end)}
+        LIMIT 1
+    """))
+
+
+def _finished(tp, activity: str | None, after: int) -> bool:
+    """Whether the main thread destroyed `activity` at `after` or later: by
+    its class, or any activity where the trace names none."""
+    named = (f"name = 'performDestroy:{sql_value(activity)}'" if activity else
+             "(name GLOB 'activityDestroy*' OR name GLOB 'performDestroy*')")
+    return bool(tp.query(f"""
+        SELECT 1 AS n FROM _slice
+        WHERE is_main_thread = 1 AND {named} AND ts >= {int(after)}
+        LIMIT 1
+    """))
+
+
+def _alias(tp, trace: str | None) -> dict[str, str] | None:
+    """The activity `collect` started and the one it stands for, by class,
+    when the one started is an `<activity-alias>` (#1007): the trace names
+    the alias, as the app's `performCreate:` does, and `am start -W` the
+    activity behind it.
+
+    `collect` keeps the one behind it as `target`. A record kept before it
+    did says the same another way: `am start -W` named an activity the
+    trace never created, and the trace created the one started.
+    """
+    from . import recording
+    from .runner import activity_class
+
+    record = recording.kept(trace, "launch") if trace else None
+    if not isinstance(record, dict):
+        return None
+    name = activity_class(record.get("asked"))
+    of = activity_class(record.get("target"))
+    if of is None and name:
+        ended = activity_class(record.get("activity"))
+        created = {r["name"].split(":", 1)[1].strip() for r in tp.query(
+            "SELECT DISTINCT name FROM _slice "
+            "WHERE is_main_thread = 1 AND name GLOB 'performCreate:*'")}
+        of = ended if name in created and ended and ended not in created else None
+    return {"name": name, "of": of} if name and of and name != of else None
 
 
 def whole(tp) -> dict[str, Any]:
@@ -330,6 +465,9 @@ def facts(tp, window: dict[str, Any], found: dict[str, Any]) -> dict[str, Any]:
     drawn = ended_on(tp, window)
     if drawn:
         out["activity"] = drawn
+    for key in ("handover", "alias"):
+        if found.get(key):
+            out[key] = dict(found[key])
     return out
 
 
@@ -345,14 +483,7 @@ def ended_on(tp, window: dict[str, Any]) -> str | None:
     start, end = window.get("ts_start"), window.get("ts_end")
     if start is None or end is None:
         return None
-    rows = tp.query(f"""
-        SELECT name FROM _slice
-        WHERE is_main_thread = 1 AND name GLOB 'performCreate:*'
-          AND ts >= {start} AND ts < {end}
-        ORDER BY ts DESC LIMIT 1
-    """)
-    name = rows[0]["name"].split(":", 1)[1].strip() if rows else ""
-    return name or None
+    return _created(tp, start, end)
 
 
 # --- what the report says about it ------------------------------------------------
@@ -378,7 +509,50 @@ def merged(windows: list[dict[str, Any]], total: int) -> dict[str, Any]:
         return out
     sources = [w.get("report_fully_drawn") for w in windows if w.get("defined_by")]
     out["report_fully_drawn"] = min(sources, key=(None, SYSTEM_SERVER, APP).index)
+    handed = [w["handover"] for w in windows if w.get("handover")]
+    if handed:
+        out["handover"] = _merged_handover(handed, total)
     return out
+
+
+def _merged_handover(handed: list[dict[str, Any]], total: int) -> dict[str, Any]:
+    """The hand-over over the repeats that made it (#1008): the activities
+    most of them named, the medians of when, and in how many of the set."""
+    from collections import Counter
+    from statistics import median
+
+    def most(key: str) -> str | None:
+        named = Counter(h.get(key) for h in handed if h.get(key))
+        return named.most_common(1)[0][0] if named else None
+
+    return {"from": most("from"), "to": most("to"),
+            "first_frame_ms": round(median(h["first_frame_ms"] for h in handed), 2),
+            "after_ms": round(median(h["after_ms"] for h in handed), 2),
+            "launches": max(h.get("launches") or 1 for h in handed),
+            "runs": f"{len(handed)}/{total}"}
+
+
+def _named(cls: str | None, alias: dict[str, str] | None) -> str | None:
+    """An activity's class in backticks, and the activity it stands for when
+    it is the alias `collect` started (#1007)."""
+    if not cls:
+        return None
+    if alias and cls == alias.get("name") and alias.get("of"):
+        return f"`{cls}` (an alias of `{alias['of']}`)"
+    return f"`{cls}`"
+
+
+def handover_said(handover: dict[str, Any], alias: dict[str, str] | None = None) -> str:
+    """What a launch the app handed over did, in a sentence (#1008)."""
+    first = _named(handover.get("from"), alias) or "The first activity"
+    then = _named(handover.get("to"), alias) or "another activity"
+    through = (f", through {handover['launches']} launches,"
+               if (handover.get("launches") or 1) > 1 else "")
+    return (f"{first} drew the launch's first frame at "
+            f"{round(handover['first_frame_ms']):,} ms. "
+            f"{round(handover['after_ms']):,} ms later, with nothing touched, the app "
+            f"went on by itself{through} to {then} and finished the one before: the "
+            f"start was not over at that frame, so the window runs on.")
 
 
 def lines(window: dict[str, Any]) -> list[str]:
@@ -393,7 +567,8 @@ def lines(window: dict[str, Any]) -> list[str]:
                 "everything the app did while the recording ran."]
     mixed = window.get("defined_by_runs")
     if mixed:
-        closed = {FULLY_DRAWN: "on `reportFullyDrawn`", LAUNCH: "at the launch's end"}
+        closed = {FULLY_DRAWN: "on `reportFullyDrawn`", LAUNCH: "at the launch's end",
+                  HANDOVER: "at the end of the launch the app handed over to"}
         counted = " and ".join(
             f"{closed.get(kind, f'`{kind}`')} in {runs.split('/')[0]}"
             for kind, runs in sorted(mixed.items(), reverse=True))
@@ -401,28 +576,42 @@ def lines(window: dict[str, Any]) -> list[str]:
         return [
             f"> ⚠️ The launch window did not close the same way in every repeat: "
             f"{counted} of {total}. Those are two windows, the medians below "
-            f"mix them, and `compare` refuses this report. Look for the repeat "
-            f"where the app did not call `reportFullyDrawn`, or called it "
-            f"before its first frame."
+            f"mix them, and `compare` refuses this report. "
+            + ("The app went on to another activity by itself after its first "
+               "frame in some repeats and not in others: a screen it shows only "
+               "now and then, or a recording that stopped before it."
+               if HANDOVER in mixed else
+               "Look for the repeat where the app did not call `reportFullyDrawn`, "
+               "or called it before its first frame.")
         ]
     head = "Window: the launch as the platform records it, from the intent to "
     source = window.get("report_fully_drawn")
+    alias = window.get("alias")
     if by == FULLY_DRAWN and source == SYSTEM_SERVER:
         line = head + ("`reportFullyDrawn` as system_server records it. The "
                        "app's own slice of that call is not in the trace.")
     elif by == FULLY_DRAWN:
         line = head + ("the end of the app's `reportFullyDrawn` call, which "
                        "came after the first frame.")
+    elif by == HANDOVER:
+        line = head + ("the end of the launch the app handed its start over to, "
+                       "that launch's first frame. ") + (
+            "`reportFullyDrawn` was called before that frame, so it closes nothing."
+            if source else
+            "The trace holds no `reportFullyDrawn` call after the launch began.")
     elif source:
         line = head + ("the launch's end, its first frame. `reportFullyDrawn` "
                        "was called before that frame, so it closes nothing.")
     else:
         line = head + ("the launch's end, its first frame. The trace holds no "
                        "`reportFullyDrawn` call after the launch began.")
+    # A start the app handed over after its first frame (#1008).
+    if window.get("handover"):
+        line += " " + handover_said(window["handover"], alias)
     # Where the launch ended, when the trace says (#909): a launch the app
     # took on to another screen by itself ran on through that screen.
     if window.get("activity") and not window.get("activities"):
-        line += f" The launch ended on `{window['activity']}`."
+        line += f" The launch ended on {_named(window['activity'], alias)}."
     return [line]
 
 
@@ -438,6 +627,7 @@ _IN_WORDS = {
     ANCHORS: "by the config's start and end anchors",
     LAUNCH: "as the launch, closed at its end",
     FULLY_DRAWN: "as the launch, closed on `reportFullyDrawn`",
+    HANDOVER: "as the launch, run on through the launches the app handed over to",
     WHOLE: "as the whole trace (`--whole-trace` or `window: whole`)",
 }
 

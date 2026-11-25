@@ -11,7 +11,7 @@ nor in the trace. Of roughly 25 fields, four need a human decision.
 | section | what it decides |
 |---|---|
 | `project.process` | which process is measured; an app usually has several |
-| `scenario.start` / `end` | the window. Anchors are globs over slice names |
+| `scenario.start` / `end` | the window. An anchor is a slice name as `probe` prints it, or a glob over names |
 | `scenario.window` | `launch`, in place of the two anchors: how the app opens, and the trace says where it ends |
 | `runner` | who drives the scenario: `launch`, `command` or `gradle` |
 | `domains` | slice name → module and file, for turning a finding into a place |
@@ -34,10 +34,24 @@ it came from:
 - the app module, its `applicationId` and `namespace`, `android:process` if
   the manifest sets one, and whether `<profileable android:shell="true" />`
   is there — **without it there will be no application slices in the
-  trace**; the note says so, repeat it to the human immediately
+  trace**; the note says so, repeat it to the human immediately. A build
+  type, flavour or variant whose own source set's manifest
+  (`src/<buildType>/AndroidManifest.xml`) carries the tag is profileable
+  too, and the line says which. Where several modules declare a launcher
+  Activity, the app is the one a settings file of the project includes,
+  never one in a git submodule (`.gitmodules`) or a third-party folder
+  (`3party/`, `third_party/`, `vendor/`…); the note lists the others and
+  why each was passed over. Where the Gradle build is in a folder of its
+  own (`android/settings.gradle` beside a C++ core), the module line says
+  so: module paths are that build's (`:app`), `./gradlew` runs there, and
+  every path in the draft is from the root, where `echolot.yml` goes — run
+  `echolot scan` from the root, not `--root android`
 - the variants — flavour × build type, what each installs as, and which one
   to measure on: a `benchmark` build type (release-like, profileable) over
-  `release` over anything debuggable, which skews everything. Where the app
+  any other build type that is profileable and not debuggable (by
+  `isProfileable` or its own manifest) over `release` over anything
+  debuggable, which skews everything; of the flavours, the one
+  `isDefault = true` marks. Where the app
   module applies `androidx.baselineprofile`, the build types that plugin
   adds are variants too, though no script names them: `benchmarkRelease`,
   release-like and profileable, is the one to measure on, and
@@ -50,7 +64,9 @@ it came from:
   report and leaves R8's names as they are. What the project's own build
   code decides is read too, `buildSrc` or an included `build-logic`: a
   suffix or an applicationId that is a constant or an enum entry's argument,
-  and flavours a convention plugin registers for each entry of an enum; the
+  a string the root build script keeps in `ext` (`applicationId
+  rootProject.ext.appId`), and flavours a convention plugin registers for
+  each entry of an enum; the
   lines under the table say where each came from. A part set any other way
   shows as `+ ?` in the table and in a note; when the variant to measure is
   one of those, the draft's package says `_source: default` — ask the human
@@ -194,17 +210,22 @@ class that measures the launch, with `StartupTimingMetric in <file>` as its
 evidence, and the `gradle` runner stays.
 
 The window starts at the intent and ends at the launch's end, the first
-frame, or at the app's `reportFullyDrawn()` call when that comes later. After
-the dry run below, read `window.defined_by` in the report and tell the human
-in one sentence what closed the window: `launch` is the first frame,
-`launch+reportFullyDrawn` the app's own call.
+frame, or at the app's `reportFullyDrawn()` call when that comes later. A
+splash that draws a frame and then goes on to the main activity by itself
+does not end it: the window runs on to the end of the launch the app handed
+its start over to. After the dry run below, read `window.defined_by` in the
+report and tell the human in one sentence what closed the window: `launch`
+is the first frame, `launch+reportFullyDrawn` the app's own call,
+`launch+handover` the first frame of the activity the app went on to, with
+`window.handover` saying which and where the splash's own frame was.
 
 Ask about the end only if the human says the app is not ready at that
 moment. That happens with an app that draws a placeholder first and never
 calls `reportFullyDrawn()`: its window closes at the first frame, and what
 loads after it is outside. The answer is then an end anchor from the probe,
 with `start` and `end` in place of `window`, or the call added to the app:
-their choice, not yours.
+their choice, not yours. A hand-over is not that case: the trace says it,
+and the window already follows it.
 
 ## Provenance
 

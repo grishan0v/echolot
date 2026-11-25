@@ -31,7 +31,12 @@ check?** and has one answer: **How the app opens**, from the tap on its icon
 until the first screen is there. It is the one scenario nobody has to
 describe: its window is the launch as the phone records it
 ([`scenario.window: launch`](analysing.md#a-window-that-is-the-launch)), and
-`echolot scan` drafts the whole config for it from the build files.
+`echolot scan` drafts the whole config for it from the build files. An app
+that opens on a splash screen and then goes on to its main screen by itself
+is measured up to the main screen's first frame, and the report's first line
+says where the splash's frame was: "The launch takes 0.7 s. It runs past
+SplashActivity's first frame at 0.2 s: the app went on to MainActivity by
+itself, and the start was not over."
 
 **Set it up** writes that draft as `echolot.yml`: the text `echolot scan`
 prints under "A config to start from", with two lines of comment above it.
@@ -83,7 +88,7 @@ own, with `echolot scan`'s words under it, and the step stays the one under
 | what `scan` found | the page says |
 |---|---|
 | no module with a launcher Activity | that no Android app is in this folder |
-| an `applicationId`, or a suffix of the build to measure, set in a way `scan` does not read (a constant or an enum entry of `buildSrc` or `build-logic` it does read) | that it could not read the app's name from the build files |
+| an `applicationId`, or a suffix of the build to measure, set in a way `scan` does not read (a constant or an enum entry of `buildSrc` or `build-logic`, or a string in the root build script's `ext`, it does read) | that it could not read the app's name from the build files |
 
 A macrobenchmark that measures the launch (`StartupTimingMetric`) is set up
 like an app with none: the same window, run by the benchmark. One that
@@ -353,8 +358,8 @@ repository of a million lines `scan` takes seconds of CPU on an idle machine
 and more than a minute on a busy one. So the server keeps what it read, with a
 stamp of the files, and reads the repository again on the next page after:
 
-- a build script, a `settings.gradle(.kts)`, a version catalog or a manifest
-  changed, came or went;
+- a build script, a `settings.gradle(.kts)`, a version catalog, a manifest or
+  `.gitmodules` changed, came or went;
 - a file of the build code changed (`buildSrc`, and the builds the settings
   include);
 - a source of a benchmark module changed;

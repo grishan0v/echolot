@@ -163,11 +163,12 @@ got; a failure's sentence is on that line and in the run log.
 
 **Leftover instrumentation.** `echolot hunt "<question>"` says on stderr when
 the previous investigation left markers in the sources; otherwise, from the
-checkout's root, `grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .`. Markers from an investigation that ran out
+checkout's root, `grep -rn --include='*.kt' --include='*.java' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.cxx' --include='*.h' --include='*.hh' --include='*.hpp' --include='*.hxx' -e AGENTTMP_ -e 'echolot:mark' .`. Markers from an investigation that ran out
 of context are still compiled in, still in the trace, and still in the
 report — and they are attributed to code nobody touched this time.
-`echolot mark --remove` takes out what `mark --apply` wrote; anything added by
-hand goes by hand. Outside gradle mode, build and install the app after that:
+`echolot mark --remove` takes out what `mark --apply` wrote and names, by
+`file:line`, every marker added by hand — in Kotlin, Java, C or C++ — which
+goes by hand. Outside gradle mode, build and install the app after that:
 `collect` records the build on the phone, and the one there still has them.
 A round recorded from it anyway gets a warning at the top of its report,
 naming the markers the traces hold and the code no longer has.
@@ -249,7 +250,7 @@ Check two things separately:
 
 **Cleanup.** The answer must state whether the temporary instrumentation was
 removed. If it is unclear, check yourself from the checkout's root:
-`grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .`.
+`grep -rn --include='*.kt' --include='*.java' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.cxx' --include='*.h' --include='*.hh' --include='*.hpp' --include='*.hxx' -e AGENTTMP_ -e 'echolot:mark' .`.
 
 **Confidence.** If it is low, say so to the human rather than smoothing it
 over. An interim conclusion with an honest assessment is more useful than a

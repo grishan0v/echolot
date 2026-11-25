@@ -279,6 +279,51 @@ SF_FRAMES = [
     (900 + i, 250 + i * 40, 16, 70, FT.JANK_SF_CPU_DEADLINE_MISSED) for i in range(4)
 ]
 
+# --- a surface of the app's own (#1011) ------------------------------------
+# With `build(surface=…)`. A map, a game or a video drawn by Vulkan or GL into
+# a `SurfaceView`, from a thread of the app's own that no Choreographer vsync
+# id reaches: its frames go to SurfaceFlinger and never into the frame
+# timeline, which holds the 24 frames of the app's window above. Each present
+# is the slices a phone writes for one: the call, the two `queueBuffer`s of
+# the Surface and its BufferQueue, and the BLAST queue's `onFrameAvailable`
+# named after the surface. Thread `Thread-7`, as an app's native thread that
+# never named itself arrives.
+TID_RENDERER = 4216
+TID_RENDER = 4217
+SURFACE = "SurfaceView[com.example.app/com.example.app.MainActivity]@0"
+# What SurfaceFlinger calls the surface's layer, and the frame timeline its
+# frames, when it holds any: `TX - ` and this.
+SURFACE_LAYER = f"{SURFACE}(BLAST)#7"
+# 60 presents in the window [100, 1105], one each 16 ms from 110 ms, and 3
+# after it: the negative control, frames of the surface that are not the
+# window's.
+SURFACE_PRESENTS_MS = [110 + i * 16 for i in range(60)] + [1150, 1166, 1182]
+# The app's window's own queue, presented to by its RenderThread: the frames
+# the timeline is about, and a surface that is never listed.
+WINDOW_QUEUE = "VRI[MainActivity]@5c1f3e2#1"
+WINDOW_PRESENTS_MS = [200 + i * 50 for i in range(5)]
+# With `surface="judged"`: an app that hands its surface's frames a vsync id,
+# so the timeline holds 40 of the 60, on time.
+SURFACE_FRAMES = [(2000 + i, 110 + i * 16, 16, 12, FT.JANK_NONE) for i in range(40)]
+
+
+def _present(call: str, queue: str, at: float, children=()) -> tuple:
+    """One present, as the slices of a thread that made it."""
+    queued = (f"onFrameAvailable - {queue}(f:0,a:1)", at + 0.7, 0.5, [])
+    return (call, at, 2, [*children, ("queueBuffer", at + 0.5, 1.2,
+                                      [("queueBuffer", at + 0.6, 0.8, [queued])])])
+
+
+def _surface_slices() -> dict[int, list]:
+    """The renderer's presents and the RenderThread's, by thread."""
+    return {
+        TID_RENDERER: [_present("QueuePresentKHR", f"{SURFACE}#2", at)
+                       for at in SURFACE_PRESENTS_MS],
+        TID_RENDER: [(f"DrawFrames {i + 1}", at, 4,
+                      [_present("eglSwapBuffersWithDamageKHR", WINDOW_QUEUE, at + 1)])
+                     for i, at in enumerate(WINDOW_PRESENTS_MS)],
+    }
+
 # --- slices ----------------------------------------------------------------
 # Shape: (name, start_ms, dur_ms, [children])
 # The scenario window is set by the anchors AppStart (start) and
@@ -1102,11 +1147,13 @@ def _span(builder, cookies, kind, start_ms, dur_ms, **fields) -> None:
     _frame_timeline(packet).frame_end.cookie = cookie
 
 
-def _frames(builder, app_frames=APP_FRAMES) -> None:
-    """The frame timeline: expected and actual, for three processes."""
+def _frames(builder, app_frames=APP_FRAMES, surface_frames=()) -> None:
+    """The frame timeline: expected and actual, for three processes, and the
+    app's `SurfaceView` when it is given frames there (`SURFACE_FRAMES`)."""
     cookies = iter(range(10**5, 10**6))
 
     for frames, pid, layer in ((app_frames, APP_PID, LAYER),
+                               (surface_frames, APP_PID, f"TX - {SURFACE_LAYER}"),
                                (OTHER_FRAMES, OTHER_PID, OTHER_LAYER)):
         # An optional sixth field: how late the actual frame started after
         # the expected one.
@@ -1750,6 +1797,55 @@ def pool() -> bytes:
     return builder.serialize()
 
 
+# --- names with brackets ---------------------------------------------------------
+#
+# `bracketed()` only, a scene of its own (#1012). A renderer that names its
+# sections by subsystem, as native code often does: a thread of its own draws
+# three frames, each `[render] DrawFrame` with the frame's own number inside
+# it, and ends with `[render] Present`. Read as a GLOB, `[render]` is one
+# letter of r, e, n, d: an anchor or a `domains` entry written as the trace
+# has the name matched nothing.
+BRACKET_RENDER = 4701
+BRACKET_THREADS = {TID_MAIN: APP_NAME[-15:], BRACKET_RENDER: "RenderLoop"}
+BRACKET_DRAW = "[render] DrawFrame"
+BRACKET_END = "[render] Present"
+BRACKET_END_MS = 370           # where `[render] Present` ends: AppStart opens at 0
+
+
+def bracketed() -> bytes:
+    """The scene above: `AppStart` from 0 to 400 ms on the main thread, and on
+    the render thread three `[render] DrawFrame` of 30 ms at 50, 150 and 250,
+    each holding `[render] Frame-10`, `-11`, `-12`, then `[render] Present`
+    from 360 to 370."""
+    slices = {
+        TID_MAIN: [("AppStart", 0, 400, [("Screen.firstFrame", 390, 5, [])])],
+        BRACKET_RENDER: [
+            *[(BRACKET_DRAW, 50 + 100 * i, 30, [(f"[render] Frame-{10 + i}", 55 + 100 * i, 10, [])])
+              for i in range(3)],
+            (BRACKET_END, 360, 10, []),
+        ],
+    }
+    sched = [(0, TID_MAIN, 0, 400, S), (1, BRACKET_RENDER, 40, 375, S)]
+    builder = TraceProtoBuilder()
+    config(builder, frames=False)
+    process_tree(builder, [(APP_PID, APP_NAME, BRACKET_THREADS)])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {}
+    for cpu, tid, start, end, end_state in sched:
+        idle = f"swapper/{cpu}"
+        by_cpu.setdefault(cpu, []).extend([
+            (ms(start), next(seq), "sched", idle, 0, R, BRACKET_THREADS[tid], tid),
+            (ms(end), next(seq), "sched", BRACKET_THREADS[tid], tid, end_state, idle, 0),
+        ])
+    cpu_of = {tid: cpu for cpu, tid, *_ in sched}
+    for tid, tree in slices.items():
+        for ts, order, kind, name in _flatten(tree, [], seq):
+            buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+            by_cpu[cpu_of[tid]].append((ts, order, "print", tid, buf))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # --- a journey a command drives --------------------------------------------------
 #
 # `journey()` only, a scene of its own (#615). `com.example.app` is running
@@ -1824,6 +1920,83 @@ def journey() -> bytes:
     return builder.serialize()
 
 
+# --- a splash that hands the start over after its first frame ----------------------
+#
+# `handover()` only, a scene of its own (#1008). A cold start whose first
+# activity is a splash: it draws one frame, and the launch the platform
+# records ends there, at 300. The splash then waits for a message it posted,
+# and from 380 to 560 the app's own start runs on the main thread with no
+# section around it, 180 ms: a native library's start, the shape a test
+# drive on an open-source app found. Then the app starts its main activity
+# itself. The platform records that as a second launch, 555 to 900,
+# `completed-same-process` as Android 15 names it, and the main thread
+# destroys the splash at 950, once the main activity is up. The first launch
+# is `completed-cold`, in the same version's words.
+#
+# The main thread works only inside sections up to the splash's frame, so a
+# window that closes there sees nothing nobody named; one that runs on to
+# the main activity's frame holds the 180 ms.
+HANDOVER_SPLASH = "com.example.app.SplashActivity"
+HANDOVER_MAIN = "com.example.app.MainActivity"
+# The launcher the manifest declares as an `<activity-alias>` of the splash
+# (#1007): the trace's `performCreate:` names it, and `am start -W` the splash.
+HANDOVER_ALIAS = "com.example.app.Launcher"
+HANDOVER_LAUNCH_MS = (40, 300)
+HANDOVER_NEXT_MS = (555, 900)
+HANDOVER_INIT_MS = (380, 560)
+HANDOVER_DESTROYED_MS = 950
+HANDOVER_TAP_MS = 340
+
+
+def handover(*, touched: bool = False, kept: bool = False,
+             splash: str = HANDOVER_SPLASH) -> bytes:
+    """The scene above. `touched` puts a tap on the app at 340, between the
+    two launches: the second is a person's doing. `kept` leaves the first
+    activity alive, as a screen the app opens over its main one does.
+    `splash` is the class the trace names the first activity by:
+    `HANDOVER_ALIAS` for a launcher that is an alias of it."""
+    main = [
+        ("bindApplication", 100, 100, []),
+        ("activityStart", 200, 40, [(f"performCreate:{splash}", 202, 36, [])]),
+        ("activityResume", 240, 10, []),
+        ("Choreographer#doFrame 1", 255, 40, [("traversal", 256, 38, [])]),
+        *([(_input(HANDOVER_TAP_MS, 0x1A2B), HANDOVER_TAP_MS + 0.5, 2, [])] if touched else []),
+        ("activityStart", 560, 100, [(f"performCreate:{HANDOVER_MAIN}", 565, 90, [])]),
+        ("activityResume", 660, 10, []),
+        ("Choreographer#doFrame 2", 840, 50, [("traversal", 841, 48, [])]),
+        *([] if kept else [("activityDestroy", HANDOVER_DESTROYED_MS, 10, [
+            (f"performDestroy:{splash}", HANDOVER_DESTROYED_MS + 1, 8, [])])]),
+    ]
+    on_cpu = [(100, 250), (255, 295), (HANDOVER_INIT_MS[0], 670), (840, 890),
+              (HANDOVER_DESTROYED_MS, HANDOVER_DESTROYED_MS + 10)]
+    if touched:
+        on_cpu.append((HANDOVER_TAP_MS, HANDOVER_TAP_MS + 3))
+
+    builder = TraceProtoBuilder()
+    config(builder, frames=False)
+    process_tree(builder, [(APP_PID, APP_NAME, {TID_MAIN: APP_NAME[-15:]}),
+                           (SS_PID, SS_NAME, {SS_PID: SS_NAME})])
+    seq = iter(range(10**6))
+    by_cpu: dict[int, list] = {0: []}
+    for start, end in sorted(on_cpu):
+        by_cpu[0] += [(ms(start), next(seq), "sched", "swapper/0", 0, R, APP_NAME[-15:], TID_MAIN),
+                      (ms(end), next(seq), "sched", APP_NAME[-15:], TID_MAIN, S, "swapper/0", 0)]
+    for ts, order, kind, name in _flatten(main, [], seq):
+        buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+        by_cpu[0].append((ts, order, "print", TID_MAIN, buf))
+    # system_server's two launches, on a CPU of its own.
+    for n, ((began, drew), kind) in enumerate(((HANDOVER_LAUNCH_MS, "cold"),
+                                               (HANDOVER_NEXT_MS, "same-process")), start=1):
+        name = f"launchingActivity#{n}"
+        by_cpu.setdefault(1, []).extend(
+            (ms(at), next(seq), "print", SS_PID, buf + "\n") for at, buf in (
+                (began, f"S|{SS_PID}|{name}|{n}"), (drew, f"F|{SS_PID}|{name}|{n}"),
+                (drew, f"B|{SS_PID}|{name}:completed-{kind}:{APP_NAME}"),
+                (drew, f"E|{SS_PID}")))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # --- the recording's own account of itself ---------------------------------------
 #
 # The tracing service writes the config a recording ran with at the head of
@@ -1885,7 +2058,7 @@ def build(frames: bool = True, environment: bool = True,
           smooth: bool = False, answered: bool = True, heap: bool = True,
           activities: tuple[str, ...] = (), boot: bool = False,
           drawing: bool = False, realtime_ns: int | None = None,
-          unfinished: bool = False) -> bytes:
+          unfinished: bool = False, surface: str | None = None) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -1954,6 +2127,12 @@ def build(frames: bool = True, environment: bool = True,
     `unfinished=True` stops the recording before the launch's first frame:
     its `launchingActivity` section opens and never closes, as on a debug
     build whose cold start outlasted `runner.duration_ms` (#921).
+
+    `surface` gives the app a `SurfaceView` its own thread presents 60 frames
+    on in the window, by Vulkan, beside its RenderThread's frames of the
+    window (#1011): `"unjudged"` with none of them in the frame timeline, as
+    a map or a game has it, `"judged"` with 40 of them there. None by
+    default.
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -1968,6 +2147,8 @@ def build(frames: bool = True, environment: bool = True,
         snapshot = builder.add_packet().clock_snapshot
         snapshot.clocks.add(clock_id=6, timestamp=0)  # BOOTTIME, the trace's clock
         snapshot.clocks.add(clock_id=1, timestamp=realtime_ns)  # REALTIME
+    if surface:
+        threads = {**threads, TID_RENDERER: "Thread-7", TID_RENDER: "RenderThread"}
     process_tree(builder, [(APP_PID, APP_NAME, threads),
                            (OTHER_PID, OTHER_NAME, other_threads),
                            (SF_PID, SF_NAME, sf_threads),
@@ -1975,7 +2156,8 @@ def build(frames: bool = True, environment: bool = True,
                            (KS_PID, KS_NAME, KS_THREADS)])
 
     if frames:
-        _frames(builder, STUFFED_FRAMES if stuffed else SMOOTH_FRAMES if smooth else APP_FRAMES)
+        _frames(builder, STUFFED_FRAMES if stuffed else SMOOTH_FRAMES if smooth else APP_FRAMES,
+                SURFACE_FRAMES if surface == "judged" else ())
     if sampling:
         _samples(builder, arrived=sampling in ("arrived", "minified", "benchmark"),
                  minified=sampling in ("minified", "benchmark"),
@@ -2030,6 +2212,13 @@ def build(frames: bool = True, environment: bool = True,
             by_cpu.setdefault(cpu, []).append(
                 (ts, order, "print", tid, buf)
             )
+
+    # The presents of `surface`, on CPU 0: their threads have no time on a CPU
+    # of their own here, and a print needs a CPU to sit on.
+    for tid, tree_slices in (_surface_slices() if surface else {}).items():
+        for ts, order, kind, name in _flatten(tree_slices, [], seq):
+            buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+            by_cpu.setdefault(0, []).append((ts, order, "print", tid, buf))
 
     # atrace async sections: S and F carry the name and a cookie, and the
     # process rather than the thread. Emitted from the main thread's CPU

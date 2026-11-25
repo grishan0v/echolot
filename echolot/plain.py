@@ -830,6 +830,28 @@ def _frames_of(row: dict[str, Any], ctx: _Ctx) -> str:
     return f"{count} of {drawn} frames" if drawn else _count(count, "frame", "frames")
 
 
+def unjudged_said(report: dict[str, Any]) -> str | None:
+    """What frames the check did not see, beside whatever it says of the rest:
+    the ones the app drew on a surface of its own, a map or a game in a
+    `SurfaceView`, that the frame timeline does not hold (#1011). Without
+    it, "hardly any frame came late" was said of a map that `frame_jank`
+    never looked at. None when there are none."""
+    frames = (report.get("window") or {}).get("frames")
+    surfaces = frames.get("unjudged") if isinstance(frames, dict) else None
+    if not surfaces:
+        return None
+    one = len(surfaces) == 1
+    names = ", ".join(_name(s.get("surface")) for s in surfaces)
+    drawn = sum(float(s.get("presents") or 0) for s in surfaces)
+    judged = sum(float(s.get("judged") or 0) for s in surfaces)
+    held = "none of those were" if not judged else f"only {round(judged)} of those were"
+    return (f"This checked the {round(float(frames.get('count') or 0))} frames of the "
+            f"app's windows. The app drew {round(drawn)} more on "
+            f"{'a surface' if one else 'surfaces'} of its own ({names}), and {held} "
+            f"checked, so this says nothing about whether {'it' if one else 'they'} "
+            f"moved smoothly.")
+
+
 def _f_jank(rows, ctx):
     # The frames that missed a deadline first, and those that only waited in
     # a queue after them, whatever either measures: a report written before
@@ -952,6 +974,21 @@ def _budget(report: dict[str, Any]) -> float | None:
     return float(value)
 
 
+def _handover(report: dict[str, Any]) -> str:
+    """The sentence after "The launch takes …" for a start the app handed
+    over after its first frame (#1008): the time a person waited runs through
+    it, and the first screen's frame is said with its time, so that neither
+    number is mistaken for the other. Empty for any other window."""
+    h = (report.get("window") or {}).get("handover")
+    if not isinstance(h, dict) or not isinstance(h.get("first_frame_ms"), (int, float)):
+        return ""
+    def short(cls: Any) -> str:
+        return str(cls).rsplit(".", 1)[-1] if cls else ""
+    first, then = short(h.get("from")) or "the first screen", short(h.get("to")) or "the next"
+    return (f" It runs past {first}'s first frame at {hum(float(h['first_frame_ms']))}: "
+            f"the app went on to {then} by itself, and the start was not over.")
+
+
 def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     """The launch against the budget: how long it takes and what that means.
 
@@ -979,8 +1016,9 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     if ctx.window_ms <= 0:
         return {"level": NOT_CHECKED, "budget_ms": budget, "ratio": None, "warning": None,
                 "text": f"This recording has no measured {ctx.noun} to judge."}
+    handed = _handover(report)
     if budget is None:
-        lead = f"The {ctx.noun} takes {hum(ctx.window_ms)}."
+        lead = f"The {ctx.noun} takes {hum(ctx.window_ms)}.{handed}"
         return {"level": NO_LIMIT, "budget_ms": None, "ratio": None, "warning": None,
                 "text": f"{lead} No time limit is set, so there is nothing to compare it with."}
     # The key, and what is said from it: the sentence's ratio is `verdict.ratio`
@@ -988,7 +1026,7 @@ def verdict(report: dict[str, Any], ctx: _Ctx | None = None) -> dict[str, Any]:
     # ("1.9 s" over "0.5 s" is 3.8 where 1919 ms over 520 ms is 3.7).
     ratio = round(ctx.window_ms / budget, 3)
     took, limit = hum_against(ctx.window_ms, budget, ratio)
-    lead, allowed = f"The {ctx.noun} takes {took}.", f"You allowed {limit}, so"
+    lead, allowed = f"The {ctx.noun} takes {took}.{handed}", f"You allowed {limit}, so"
     # Judged by the exact times: a window a tenth of a millisecond over the
     # limit has a ratio that rounds to 1.0 and is still not within it.
     if ctx.window_ms <= budget:
@@ -1035,6 +1073,9 @@ def annotate(report: dict[str, Any]) -> dict[str, Any]:
         det["attention"] = level
         det["plain"] = {"title": title, "why": why, "clean": clean,
                         "found": text, "reason": reason}
+        also = unjudged_said(report) if det.get("id") == "frame_jank" else None
+        if also:
+            det["plain"]["also"] = also
     report["verdict"] = verdict(report, ctx)
     return report
 
@@ -1082,7 +1123,14 @@ def render(report: dict[str, Any], width: int | None = None) -> str:
         lines.append("")
     for d in listed:
         lines.append(f" {_MARK[d['attention']]}  {d['plain']['title']}")
-        lines += wrap(d["plain"]["found"] or "", "    ", "    ")
+        lines += wrap(" ".join(t for t in (d["plain"]["found"], d["plain"].get("also")) if t),
+                      "    ", "    ")
+    # A fine check that did not see everything says what it did not see,
+    # rather than being only counted among the fine (#1011).
+    for d in dets:
+        if d["attention"] == FINE and d["plain"].get("also"):
+            lines += ["", f" ok {d['plain']['title']}"]
+            lines += wrap(f"{d['plain']['clean']} {d['plain']['also']}", "    ", "    ")
     fine = sum(1 for d in dets if d["attention"] == FINE)
     blind = [d for d in dets if d["attention"] == NOT_CHECKED]
     parts = []

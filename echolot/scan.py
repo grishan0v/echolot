@@ -25,7 +25,7 @@ from typing import Any
 
 from . import mark
 from .config import DEFAULT_PREFIX
-from .domains import SKIP_DIRS, constants, gradle_module, source_files
+from .domains import SKIP_DIRS, constants, gradle_module, source_files, submodules
 
 # --- reading a build script as text -------------------------------------------
 
@@ -159,32 +159,149 @@ def _build_script(mdir: Path) -> tuple[Path | None, str]:
     return None, ""
 
 
+# --- which module is the app --------------------------------------------------
+
+# A repository that keeps its Gradle build in a folder of its own, `android/`
+# beside a C++ core and a `3party/` of git submodules, had a launcher Activity
+# in a submodule's example app too. The first in path order was read, and
+# `3party` sorts before `android`: the whole draft was the example's, its
+# package one no phone had (#1003). The module to read is ranked instead, and
+# the Gradle build it belongs to is found the way Gradle finds it.
+
+# Folders whose name says the code in them is another project's, a copy kept
+# in the tree rather than a submodule.
+_VENDORED = frozenset({"3party", "3rdparty", "third_party", "third-party", "thirdparty",
+                       "vendor", "external", "extern"})
+_SETTINGS = ("settings.gradle.kts", "settings.gradle")
+# `include ':app'`, `include ':a', ':b'`, `include(":app")`, over lines too.
+# `includeBuild` is a word of its own, and not this.
+_INCLUDE = re.compile(r"""\binclude\b\s*\(?\s*((?:["'][^"'$\n]+["']\s*,\s*)*["'][^"'$\n]+["'])""")
+# `project(':x').projectDir = file('libs/x')`, or `new File(rootDir, 'libs/x')`.
+_PROJECT_DIR = re.compile(
+    r"""\bproject\s*\(\s*["'](:?[\w.:-]+)["']\s*\)\s*\.\s*projectDir\s*=\s*"""
+    r"""(?:file\s*\(|(?:new\s+)?File\s*\(\s*\w+\s*,)\s*["']([^"'$]+)["']""")
+
+
+def settings_file(d: Path) -> Path | None:
+    """The `settings.gradle(.kts)` of a folder, or None."""
+    return next((d / n for n in _SETTINGS if (d / n).is_file()), None)
+
+
+def gradle_build_of(root: Path, module_dir: Path) -> Path:
+    """The folder of the Gradle build a module belongs to: the nearest one,
+    from the module up to the root, that holds a settings file, which is
+    where Gradle looks for one. The root where none does."""
+    d = module_dir
+    while True:
+        if settings_file(d):
+            return d
+        if d == root or d.parent == d or root not in d.parents:
+            return root
+        d = d.parent
+
+
+def gradle_dir(root: Path, app: dict[str, Any] | None) -> Path:
+    """The folder of the app's Gradle build: the root, or the folder under
+    it `app_module` found the build in (`gradle_root`)."""
+    sub = (app or {}).get("gradle_root")
+    return root / sub if sub else root
+
+
+def included(settings: Path) -> set[str] | None:
+    """The folders of the projects a settings file includes, from its own
+    folder: `include ':app'` is `app`, `include ':sdk:car'` is `sdk/car`,
+    and a `projectDir` it sets moves one. None when it includes nothing read
+    here, a list built in code."""
+    try:
+        text = _strip(settings.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return None
+    names = [n for m in _INCLUDE.finditer(text) for n in re.findall(r"""["']([^"']+)["']""", m.group(1))]
+    if not names:
+        return None
+    moved = {":" + p.lstrip(":"): os.path.normpath(d).replace(os.sep, "/") for p, d in _PROJECT_DIR.findall(text)}
+    return {moved.get(":" + n.lstrip(":"), n.strip(":").replace(":", "/")) for n in names}
+
+
+def _vendored(rel: str, subs: list[str]) -> str | None:
+    """Why a module's folder is another project's code, in words, or None."""
+    sub = next((s for s in subs if rel == s or rel.startswith(s + "/")), None)
+    if sub:
+        return f"in the git submodule {sub}"
+    folder = next((p for p in rel.split("/")[:-1] if p.lower() in _VENDORED), None)
+    return f"under {folder}/, another project's code" if folder else None
+
+
+def _candidate(root: Path, mf: Path, text: str, launchers: list[str], subs: list[str]) -> dict[str, Any]:
+    """A module with a launcher Activity, with what ranks it among the others."""
+    mdir = mark.module_dir_of(mf)
+    build = gradle_build_of(root, mdir)
+    rel = mark._rel(mdir, root)
+    module = gradle_module(mf, build)
+    settings = settings_file(build)
+    listed = included(settings) if settings else None
+    inside = mark._rel(mdir, build)
+    # True: its settings file includes it; False: one is there and does
+    # not, so Gradle builds no such project; None: nothing says.
+    taken = None if listed is None else (inside in listed or inside == ".")
+    vendored = _vendored(rel, subs)
+    return {"manifest": mf, "text": text, "launchers": launchers, "dir": mdir, "rel": rel,
+            "build": build, "module": module, "settings": settings, "included": taken,
+            "vendored": vendored,
+            # Another project's last, then one its build leaves out; then the
+            # shallower, the one named `app` (the template's name), the path.
+            "rank": (vendored is not None, taken is False, len(module.strip(":").split(":")),
+                     mdir.name != "app", rel)}
+
+
+def _module_words(c: dict[str, Any], root: Path) -> str:
+    """A candidate in words: its module path and folder, and why it is not read."""
+    why = c["vendored"]
+    if not why and c["included"] is False:
+        why = f"which {mark._rel(c['settings'], root)} does not include"
+    return f"{c['module']} ({c['rel']}" + (f", {why})" if why else ")")
+
+
 def app_module(root: Path, facts: Facts) -> dict[str, Any] | None:
-    """The module whose manifest declares a launcher Activity — `mark`'s rule."""
+    """The module whose manifest declares a launcher Activity — `mark`'s rule.
+
+    Where several do, the one a settings file of this project includes,
+    not one in a git submodule or a third-party folder; then the shallower,
+    then the one named `app`. Its module path is its Gradle build's, and
+    where that build is in a folder under the root, `gradle_root` says which
+    (#1003)."""
+    # Another repository's, by `.gitmodules` (`domains.submodules`).
+    top = root.resolve()
+    subs = [p.relative_to(top).as_posix() for p in submodules(root)]
     found = []
     for mf in mark.manifests(root):
         text = mf.read_text(encoding="utf-8", errors="replace")
         launchers = mark.launcher_activities(text)
         if launchers:
-            found.append((mf, text, launchers))
+            found.append(_candidate(root, mf, text, launchers, subs))
     if not found:
         facts.notes.append("no AndroidManifest.xml under src/main declares a launcher "
                            "Activity — a library, or the app lives elsewhere (pass --root)")
         return None
+    found.sort(key=lambda c: c["rank"])
+    chosen = found[0]
     if len(found) > 1:
-        facts.notes.append("several modules declare a launcher Activity: "
-                           + ", ".join(gradle_module(m, root) for m, _, _ in found)
-                           + " — the first is read; the others are apps too")
-    mf, text, launchers = found[0]
-    mdir = mark.module_dir_of(mf)
+        why = (f": {mark._rel(chosen['settings'], root)} includes it" if chosen["included"] else "")
+        facts.notes.append(f"several modules declare a launcher Activity, and {_module_words(chosen, root)} "
+                           f"is read{why}. The others: "
+                           + ", ".join(_module_words(c, root) for c in found[1:]))
+    if chosen["vendored"]:
+        facts.notes.append(f"the module read, {chosen['rel']}, is {chosen['vendored']}: no other module "
+                           "declares a launcher Activity. If the app is elsewhere, --root names its folder")
+    mf, text, launchers, mdir = chosen["manifest"], chosen["text"], chosen["launchers"], chosen["dir"]
     script, stext = _build_script(mdir)
     stripped = android_block(_strip(stext))
     default_config = block(stripped, "defaultConfig")
     namespace = _value(stripped, "namespace")
     started = launcher_components(text, namespace or mark.module_package(mdir, text))
     app = {
-        "module": gradle_module(mf, root),
-        "dir": mark._rel(mdir, root),
+        "module": chosen["module"],
+        "dir": chosen["rel"],
         "manifest": mark._rel(mf, root),
         "build_script": mark._rel(script, root) if script else None,
         "launcher": launchers[0],
@@ -195,14 +312,70 @@ def app_module(root: Path, facts: Facts) -> dict[str, Any] | None:
         "application_id": _value(default_config or stripped, "applicationId"),
         "namespace": namespace,
         "process": _application_process(text),
-        "profileable": bool(re.search(r"<profileable\b[^>]*android:shell\s*=\s*\"true\"", text)),
+        "profileable": profileable_tag(text),
         "application_class": mark.application_class(text),
     }
-    expr = None if app["application_id"] or default_config is None \
-        else _assigned(default_config, "applicationId")
-    if expr:
-        app["application_id_expr"] = expr
+    if chosen["build"] != root:
+        # The build is in a folder of its own: `./gradlew` runs there, and
+        # the module paths are that build's. The paths written into the
+        # config stay from the root, where echolot.yml is.
+        app["gradle_root"] = mark._rel(chosen["build"], root)
+        settings = chosen["settings"]
+        facts.notes.append(f"the Gradle build is in {app['gradle_root']}/"
+                           + (f" ({mark._rel(settings, root)})" if settings else "")
+                           + f": `./gradlew` runs there, and `{app['module']}` is that build's module path. "
+                             "The paths in the config below are from this folder, where echolot.yml goes")
+    found_expr = None if app["application_id"] or default_config is None \
+        else _assignment(default_config, "applicationId")
+    if found_expr:
+        app["application_id_expr"], app["application_id_written"] = found_expr
     return app
+
+
+# `<profileable android:shell="true" />`, over lines; `android:enabled="false"`
+# turns profiling off whatever `shell` says.
+_PROFILEABLE = re.compile(r"<profileable\b([^>]*)>")
+
+
+def profileable_tag(manifest: str) -> bool:
+    """Whether a manifest makes the app profileable from the shell."""
+    for m in _PROFILEABLE.finditer(mark._XML_COMMENT.sub("", manifest)):
+        if re.search(r'android:shell\s*=\s*"true"', m.group(1)) \
+                and not re.search(r'android:enabled\s*=\s*"false"', m.group(1)):
+            return True
+    return False
+
+
+def profileable_source_sets(root: Path, app: dict[str, Any] | None) -> dict[str, str]:
+    """The app module's source sets other than `main` whose own manifest
+    makes the app profileable: name → the manifest, from the root.
+
+    AGP merges `src/<buildType>/AndroidManifest.xml`, a flavour's and a
+    variant's into that variant's manifest, and only into it. A build type
+    made to measure on, `profileable { initWith release }`, carried the tag
+    in its own source set; read off `src/main` alone it was "unknown", and
+    `scan` sent the user to a release build that shows no application
+    slices (#1006). A test source set is never the app.
+    """
+    if not app:
+        return {}
+    src = root / app["dir"] / "src"
+    try:
+        sets = sorted(d for d in src.iterdir() if d.is_dir())
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for d in sets:
+        if d.name == "main" or d.name.startswith(_TEST_SOURCE_SETS):
+            continue
+        mf = d / "AndroidManifest.xml"
+        try:
+            text = mf.read_text(encoding="utf-8", errors="replace") if mf.is_file() else ""
+        except OSError:
+            continue
+        if profileable_tag(text):
+            out[d.name] = mark._rel(mf, root)
+    return out
 
 
 def launcher_components(manifest: str, namespace: str | None) -> list[dict[str, Any]]:
@@ -247,18 +420,19 @@ _PROCESS_ATTR = re.compile(r'android:process\s*=\s*"([^"]+)"')
 _TEST_SOURCE_SETS = ("androidTest", "test", "testFixtures")
 
 
-def declared_processes(root: Path, skip: set[str]) -> list[dict[str, str]]:
+def declared_processes(root: Path, skip: set[str], gradle: Path | None = None) -> list[dict[str, str]]:
     """Every `android:process` a manifest of the project declares, and where.
 
     The app's own processes besides its main one, `:remote` or `:push`, are
     what a mask over the package is for. Read across every module but the
     ones in `skip`, a benchmark module's, and the test source sets: a
     library's manifest is merged into the app's. A library outside the
-    project declares its own too, and is not read here.
+    project declares its own too, and is not read here; nor is one outside
+    the app's Gradle build, `gradle`, the root's by default.
     """
     from .domains import files_named
     out = []
-    for mf in files_named(root, "AndroidManifest.xml"):
+    for mf in files_named(gradle or root, "AndroidManifest.xml"):
         rel = mark._rel(mf, root)
         if any(p in _TEST_SOURCE_SETS for p in mf.relative_to(root).parts):
             continue
@@ -284,10 +458,22 @@ def _profileable_note(facts: Facts) -> None:
     app = facts.app
     if not app or app["profileable"]:
         return
-    by_type = [b["name"] for b in facts.build_types
-               if b.get("profileable") and not b.get("debuggable")]
-    if by_type:
-        app["profileable_by"] = by_type
+    types = facts.build_types
+    by_type = [b["name"] for b in types
+               if (b.get("profileable") or b.get("profileable_manifest"))
+               and inherited(b, types, "debuggable") is not True]
+    # A flavour's or a variant's own manifest makes those variants alone
+    # profileable (#1006).
+    by_variant = [v["name"] for v in facts.variants
+                  if v.get("profileable_manifest") and v["build_type"] not in by_type
+                  and v.get("debuggable") is not True]
+    if by_type or by_variant:
+        app["profileable_by"] = by_type + by_variant
+        manifests = {b["name"]: b["profileable_manifest"] for b in types if b.get("profileable_manifest")}
+        manifests.update({v["name"]: v["profileable_manifest"] for v in facts.variants
+                          if v["name"] in by_variant})
+        if manifests:
+            app["profileable_manifests"] = {n: manifests[n] for n in app["profileable_by"] if n in manifests}
         return
     facts.notes.append(f"{app['manifest']} has no <profileable android:shell=\"true\" />: "
                        f"a release-like build will show no application slices in the "
@@ -317,13 +503,25 @@ def flavors_of(stext: str, code: BuildCode | None = None) -> list[dict[str, Any]
         flavor: dict[str, Any] = {"name": name,
                                   "dimension": _value(inner, "dimension"),
                                   "application_id_suffix": _value(inner, "applicationIdSuffix"),
-                                  "application_id": _value(inner, "applicationId")}
+                                  "application_id": _value(inner, "applicationId"),
+                                  "default": _is_default(inner)}
         for key, gradle in _GRADLE_KEY.items():
-            expr = None if flavor[key] is not None else _assigned(inner, gradle)
-            if expr:
-                flavor[key + "_expr"] = expr
+            found = None if flavor[key] is not None else _assignment(inner, gradle)
+            if found:
+                flavor[key + "_expr"], flavor[key + "_written"] = found
         out.append(flavor)
     return out
+
+
+_IS_DEFAULT = re.compile(r"\b(?:isDefault\s*(?:=\s*|\(\s*|[ \t]+)|setDefault\s*\(\s*)true\b")
+
+
+def _is_default(body: str) -> bool:
+    """Whether a flavour says `isDefault = true`: the one of its dimension
+    Android Studio builds unless told otherwise, and so the one `scan` starts
+    from. Taken by its name, `fdroid` came before `google`, the flavour the
+    project marked, which on that app is the one with a map to draw (#1006)."""
+    return bool(_IS_DEFAULT.search(body))
 
 
 def build_types_of(stext: str, baseline_profile: bool = False) -> list[dict[str, Any]]:
@@ -346,12 +544,12 @@ def build_types_of(stext: str, baseline_profile: bool = False) -> list[dict[str,
                 "init_with": _init_with(inner),
             }
             expr = None if found[name]["application_id_suffix"] is not None \
-                else _assigned(inner, "applicationIdSuffix")
+                else _assignment(inner, "applicationIdSuffix")
             if expr:
                 # Read through the build code later (`settle`): set to an
                 # expression is set, and the build type it starts from with
                 # `initWith` no longer decides.
-                found[name]["application_id_suffix_expr"] = expr
+                found[name]["application_id_suffix_expr"], found[name]["application_id_suffix_written"] = expr
     # `debug` and `release` exist whether or not the script names them.
     for name in ("debug", "release"):
         found.setdefault(name, {"name": name, "application_id_suffix": None,
@@ -383,13 +581,25 @@ def _assigned(body: str, key: str) -> str | None:
     written, `AppBuildType.DEBUG.applicationIdSuffix` of `applicationIdSuffix
     = AppBuildType.DEBUG.applicationIdSuffix`. None where the key is not set.
     `x.key` is read, not set, and `key != null` compares."""
+    found = _assignment(body, key)
+    return found[0] if found else None
+
+
+def _assignment(body: str, key: str) -> tuple[str, str] | None:
+    """`_assigned`'s expression, and the statement as the script writes it:
+    `applicationId rootProject.ext.appId` is quoted so, not with an `=` it
+    does not have (#1004)."""
     forms = (rf"(?<![.\w]){re.escape(key)}\s*=(?!=)\s*([^\n;]+)",
              rf"(?<![.\w]){re.escape(key)}\s*\(\s*([^\n;]+?)\s*\)\s*(?:;|\n|$)",
              rf"(?<![.\w]){re.escape(key)}[ \t]+([\w\"'][^\n;]*)")
     found = [m for m in (re.search(f, body) for f in forms) if m]
     if not found:
         return None
-    return min(found, key=lambda m: m.start()).group(1).strip()
+    m = min(found, key=lambda m: m.start())
+    written = body[m.start():m.end(1)].strip()
+    if written.count("(") > written.count(")"):
+        written += ")"
+    return m.group(1).strip(), " ".join(written.split())
 
 
 # --- the project's own build code ---------------------------------------------
@@ -442,28 +652,37 @@ class BuildCode:
     catalog: dict[str, str] = field(default_factory=dict)
     enums: dict[str, dict | None] = field(default_factory=dict)
     consts: dict[str, str | None] = field(default_factory=dict)
+    # The strings the root build script keeps in `ext` (`extra_values`), and
+    # that script, from the root (#1004).
+    extra: dict[str, str | None] = field(default_factory=dict)
+    extra_file: str | None = None
 
 
-def build_code_dirs(root: Path) -> list[Path]:
+def build_code_dirs(root: Path, gradle: Path | None = None) -> list[Path]:
     """Where the project's build code is: `buildSrc`, and every build
-    `settings.gradle(.kts)` includes. `echolot ui` watches what is under
-    them to know when to read the repository again (#931)."""
-    dirs = [root / "buildSrc"]
+    `settings.gradle(.kts)` includes — of the Gradle build in `gradle`, the
+    root's by default. `echolot ui` watches what is under them to know when
+    to read the repository again (#931)."""
+    gradle = gradle or root
+    dirs = [gradle / "buildSrc"]
     for name in ("settings.gradle.kts", "settings.gradle"):
-        settings = root / name
+        settings = gradle / name
         if settings.is_file():
             text = _strip(settings.read_text(encoding="utf-8", errors="replace"))
-            dirs += [root / d for d in _INCLUDE_BUILD.findall(text)]
+            dirs += [gradle / d for d in _INCLUDE_BUILD.findall(text)]
     top = root.resolve()
     # Inside the project, and not the project itself: a build included
     # from elsewhere is not this repository's to read.
     return [d for d in dirs if d.is_dir() and top in d.resolve().parents]
 
 
-def build_code(root: Path) -> BuildCode:
-    """`buildSrc` and every build `settings.gradle(.kts)` includes, read once."""
+def build_code(root: Path, gradle: Path | None = None) -> BuildCode:
+    """`buildSrc` and every build `settings.gradle(.kts)` includes, read
+    once, with the version catalogs and the `ext` of the root build script:
+    of the Gradle build in `gradle`, the root's by default."""
+    gradle = gradle or root
     texts: dict[str, str] = {}
-    for d in build_code_dirs(root):
+    for d in build_code_dirs(root, gradle):
         for base, subdirs, names in os.walk(d):
             # Gradle's output is a `build` folder of a module; under `src/`
             # one is a package, `com.example.build`, and holds the code.
@@ -477,10 +696,98 @@ def build_code(root: Path) -> BuildCode:
                         texts[mark._rel(path, root)] = _strip(path.read_text(encoding="utf-8", errors="replace"))
                     except OSError:
                         continue
-    code = BuildCode(texts=texts, catalog=plugin_catalog(root))
+    code = BuildCode(texts=texts, catalog=plugin_catalog(gradle))
     code.enums = enums_of(texts)
     code.consts = constants({Path(k): v for k, v in texts.items()})
+    script, text = _build_script(gradle)
+    if script:
+        code.extra, code.extra_file = extra_values(_strip(text)), mark._rel(script, root)
     return code
+
+
+# --- what a build script keeps in `ext` ----------------------------------------
+
+# The older Groovy way to share a value between modules, and still a common
+# one: the root build script sets it in `ext`, a module reads it back.
+# `rootProject.ext { appId = 'com.example.app' }` and `applicationId
+# rootProject.ext.appId` in the app's script: the note quoted the expression
+# and the draft said `com.example.app` for want of a file one away (#1004).
+_LIT = r"""("(?:[^"\\$]|\\.)*"|'(?:[^'\\]|\\.)*')"""
+_EXT_BLOCK = re.compile(r"(?<![\w])ext\s*\{")
+_EXT_IN_BLOCK = re.compile(rf"(?:^|[;{{])[ \t]*(\w+)\s*=(?!=)\s*{_LIT}[ \t]*(?=$|[;}}])", re.MULTILINE)
+_EXT_SET = (
+    # ext.appId = '…', rootProject.ext.appId = '…', project.ext.appId = '…'
+    re.compile(rf"(?<![\w])ext\s*\.\s*(\w+)\s*=(?!=)\s*{_LIT}"),
+    # ext['appId'] = '…', extra["appId"] = "…"
+    re.compile(rf"""(?<![\w])(?:ext|extra)\s*\[\s*["'](\w+)["']\s*\]\s*=(?!=)\s*{_LIT}"""),
+    # ext.set('appId', '…'), extra.set("appId", "…")
+    re.compile(rf"""(?<![\w])(?:ext|extra)\s*\.\s*set\s*\(\s*["'](\w+)["']\s*,\s*{_LIT}\s*\)"""),
+    # val appId by extra("…")
+    re.compile(rf"\bval\s+(\w+)\s*(?::\s*String\s*)?by\s+extra\s*\(\s*{_LIT}\s*\)"),
+)
+
+
+def extra_values(text: str) -> dict[str, str | None]:
+    """The strings a build script keeps in `ext`, by name: in an `ext { … }`
+    block (`rootProject.ext { … }` too), as `ext.name = '…'`, `ext['name']`,
+    `ext.set(…)`, and Kotlin's `extra["name"]` and `val name by extra(…)`.
+
+    A value that is no plain string is not one: `versionCode = ver.V1` is
+    left out. A name set to two different strings is None, as `constants`
+    has it. `def name = …` in the block is a local, and not one either.
+    """
+    found: list[tuple[str, str]] = []
+    for m in _EXT_BLOCK.finditer(text):
+        body = _balanced(text, m.end())
+        if body:
+            found += _EXT_IN_BLOCK.findall(body)
+    for pattern in _EXT_SET:
+        found += pattern.findall(text)
+    out: dict[str, str | None] = {}
+    for name, raw in found:
+        _, value = _literal(raw)
+        out[name] = value if name not in out or out[name] == value else None
+    return out
+
+
+def _extra_read(expr: str) -> tuple[str, str] | None:
+    """Whose `ext` an expression reads and the name, or None when it reads
+    none: `rootProject.ext.appId`, `rootProject.appId`, `rootProject.extra
+    ["appId"] as String` are the root project's (`root`); `ext.appId`,
+    `project.ext.appId` the module's own (`own`); `project.appId` and a bare
+    `appId` are looked up as Gradle does, the module's then its parents'
+    (`any`)."""
+    e = expr.strip()
+    for _ in range(2):
+        # `(rootProject.extra["appId"] as String)`, `….toString()`
+        if e.startswith("(") and e.endswith(")"):
+            e = e[1:-1].strip()
+        e = re.sub(r"(?:\s+as\s+String\??|\.toString\(\))$", "", e).strip()
+    e = re.sub(r"""\[\s*["'](\w+)["']\s*\]|\.\s*get\s*\(\s*["'](\w+)["']\s*\)""",
+               lambda m: "." + (m.group(1) or m.group(2)), e)
+    parts = [p.strip() for p in e.split(".")]
+    if not all(re.fullmatch(r"[A-Za-z_]\w*", p) for p in parts):
+        return None
+    whose = "any"
+    if parts[0] == "project" and len(parts) > 1:
+        parts = parts[1:]
+    if parts[0] == "rootProject" and len(parts) > 1:
+        whose, parts = "root", parts[1:]
+    if parts[0] in ("ext", "extra") and len(parts) > 1:
+        whose, parts = ("root" if whose == "root" else "own"), parts[1:]
+    return (whose, parts[0]) if len(parts) == 1 else None
+
+
+def _extra_value(whose: str, name: str, code: BuildCode | None,
+                 script: str) -> tuple[str | None, str | None] | None:
+    """What `_extra_read` names holds: (the string, the file it is read
+    from, None for the module's own script), or None where it is not read."""
+    own = extra_values(script) if script else {}
+    if whose in ("own", "any") and name in own:
+        return (own[name], None) if own[name] is not None else None
+    if whose in ("root", "any") and code is not None and name in code.extra:
+        return (code.extra[name], code.extra_file) if code.extra[name] is not None else None
+    return None
 
 
 def plugin_catalog(root: Path) -> dict[str, str]:
@@ -637,6 +944,12 @@ def resolve(expr: str, code: BuildCode | None, script: str = "",
     kind, value = _literal(e)
     if kind != "expr":
         return value, None
+    extra = _extra_read(e)
+    if extra and (extra[0] != "any" or "." in e):
+        # Read through `ext` by name, `rootProject.ext.appId` (#1004): there
+        # and nowhere else, not a constant of the build code that happens
+        # to share the name.
+        return _extra_value(*extra, code, script)
     parts = e.split(".")
     if depth > 3 or not all(re.fullmatch(r"[A-Za-z_]\w*", p) for p in parts):
         return None
@@ -660,19 +973,25 @@ def resolve(expr: str, code: BuildCode | None, script: str = "",
         declared = re.compile(rf"\b(?:const\s+val|static\s+final\s+String|final\s+static\s+String)\s+{simple}\b")
         where = next((rel for rel, text in code.texts.items() if declared.search(text)), None)
         return code.consts[simple], where
+    if extra and len(parts) == 1:
+        # A bare name a constant does not hold: Gradle looks it up in the
+        # project's `ext`, then in its parents'.
+        return _extra_value(*extra, code, script)
     return None
 
 
 def settle(d: dict[str, Any], key: str, code: BuildCode | None, script: str, where: str) -> None:
     """Read `d[key]` through the build code where the script set it to an
     expression (`<key>_expr`): the value it holds and where that was read
-    (`<key>_from`), else what was left unread (`<key>_unread`)."""
+    (`<key>_from`), else what was left unread (`<key>_unread`), quoted as
+    the script writes it."""
     expr = d.get(key + "_expr")
     if d.get(key) is not None or not expr:
         return
     found = resolve(expr, code, script)
     if found is None:
-        d[key + "_unread"] = f"`{_GRADLE_KEY[key]} = {expr}` in {where}"
+        written = d.get(key + "_written") or f"{_GRADLE_KEY[key]} = {expr}"
+        d[key + "_unread"] = f"`{written}` in {where}"
         return
     d[key] = found[0]
     d[key + "_from"] = f"`{expr}`" + (f" in {found[1]}" if found[1] else "")
@@ -996,16 +1315,20 @@ def mapping_path(app: dict[str, Any] | None, variant: str) -> str:
 
 
 def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: list[dict],
-                dimensions: list[str] | None = None) -> list[dict]:
+                dimensions: list[str] | None = None,
+                manifests: dict[str, str] | None = None) -> list[dict]:
     """flavours × build type, with the applicationId each one installs as.
 
     Across dimensions, one flavour of each, as the Android Gradle plugin
     builds them: `freeStagingBenchmark`, never `freeBenchmark` beside
     `stagingBenchmark`. None at all when that cannot be read. A minified one
-    carries where its mapping will be.
+    carries where its mapping will be. `manifests` are the source sets whose
+    own manifest makes the app profileable (`profileable_source_sets`): a
+    variant is when one of its own is.
     """
     base = (app or {}).get("application_id")
     combos = flavor_combinations(flavors, dimensions or [])
+    sets = manifests or {}
     out = []
     for bt in build_types:
         # What `initWith` copies, read through the chain: see `inherited`.
@@ -1022,12 +1345,22 @@ def variants_of(app: dict[str, Any] | None, flavors: list[dict], build_types: li
             words = [f["name"] for f in combo] + [bt["name"]]
             name = words[0] + "".join(w[:1].upper() + w[1:] for w in words[1:])
             minify, minified_by = minified(bt, build_types)
+            # The source sets AGP merges into this variant's manifest besides
+            # `main`, the most particular first: `initWith` copies no source
+            # set, so a build type's own is its name's.
+            own = [name, bt["name"], _flavor_word([f["name"] for f in combo]) if len(combo) > 1 else "",
+                   *(f["name"] for f in combo)]
+            manifest = next((sets[s] for s in own if s and s in sets), None)
             variant = {"name": name,
                        "flavor": _flavor_word([f["name"] for f in combo]) or None,
                        "flavor_names": [f["name"] for f in combo],
                        "build_type": bt["name"], "application_id": app_id,
                        "debuggable": debuggable,
-                       "measure": _measures({**bt, "debuggable": debuggable}),
+                       "profileable": bool(inherited(bt, build_types, "profileable") or manifest),
+                       "profileable_manifest": manifest,
+                       "default_flavors": [f["name"] for f in combo if f.get("default")],
+                       "measure": _measures({**bt, "debuggable": debuggable,
+                                             "profileable_manifest": manifest}),
                        "minified": minify, "minified_by": minified_by,
                        "mapping": mapping_path(app, name) if minify else None,
                        "added_by": bt.get("added_by")}
@@ -1110,26 +1443,43 @@ def _measures(bt: dict) -> str:
         return f"yes — release-like, and profileable by {bt['added_by']}"
     if bt.get("name") == "benchmark" or bt.get("profileable"):
         return "yes — release-like and profileable"
+    if bt.get("profileable_manifest"):
+        return f"yes — release-like, and profileable by its own manifest, {bt['profileable_manifest']}"
     if bt.get("name") == "release":
         return "release — profileable only if the manifest says so"
     return "unknown"
 
 
 def _rank(variant: dict) -> tuple:
-    """Benchmark over the plugin's benchmark build types over release over
-    the rest, debuggable last; then the flavour a benchmark module runs
-    against (`_benchmark_targets`), then by name."""
+    """Benchmark over the plugin's benchmark build types over any other
+    profileable one that is not debuggable over release over the rest,
+    debuggable last; then the flavour a benchmark module runs against
+    (`_benchmark_targets`), then the flavours `isDefault` marks, then by
+    name.
+
+    A build type made profileable by its own flag or its own source set's
+    manifest is made to be measured on: release is profileable only where
+    the manifest says so, and it ranked over such a build type (#1006).
+    """
     bt = variant["build_type"]
-    order = {"benchmark": 0, "release": 2}.get(bt, 3)
-    if variant.get("added_by") and bt.startswith(BENCHMARK_PREFIX):
+    if bt == "benchmark":
+        order = 0
+    elif variant.get("added_by") and bt.startswith(BENCHMARK_PREFIX):
         order = 1
+    elif variant.get("profileable") and variant.get("debuggable") is not True and not for_profiles(variant):
+        order = 2
+    elif bt == "release":
+        order = 3
+    else:
+        order = 4
     return (order, variant.get("debuggable") is True, not variant.get("benchmarked"),
-            variant["name"])
+            -len(variant.get("default_flavors") or []), variant["name"])
 
 
 def preferred(variants: list[dict]) -> dict | None:
     """The variant to start from, as `_rank` orders them: a `benchmark` build
-    type, then the one androidx.baselineprofile adds, then release."""
+    type, then the one androidx.baselineprofile adds, then another
+    profileable one, then release; of the flavours, the default one."""
     ranked = sorted(variants, key=_rank)
     return ranked[0] if ranked else None
 
@@ -1213,15 +1563,18 @@ def _as_glob(section: str) -> str:
     return escaped.replace("%", "*")
 
 
-def benchmarks_of(root: Path, build: BuildCode | None = None) -> list[dict[str, Any]]:
+def benchmarks_of(root: Path, build: BuildCode | None = None,
+                  gradle: Path | None = None) -> list[dict[str, Any]]:
     """Every source with a MacrobenchmarkRule: the tests, what they measure, who they drive.
 
     A module's own flavours are read as the app's are (`module_flavors`): a
     benchmark module that calls the build code's flavour function has the
-    app's flavours in its task names."""
+    app's flavours in its task names. Of the Gradle build in `gradle`, the
+    root's by default: module paths are that build's, files from the root."""
+    gradle = gradle or root
     out = []
     by_module: dict[str, dict] = {}
-    sources = source_files(root)
+    sources = source_files(gradle)
     # The project's constants, read only when a benchmark names one its own
     # file does not declare. A large app keeps its section names in a
     # constants object of another module (`TraceSectionMetric(AppTraces.
@@ -1252,7 +1605,7 @@ def benchmarks_of(root: Path, build: BuildCode | None = None) -> list[dict[str, 
             continue
         if "MacrobenchmarkRule" not in text:
             continue
-        module = gradle_module(path, root)
+        module = gradle_module(path, gradle)
         entry = by_module.setdefault(module, {"module": module, "dir": None, "classes": [],
                                               "metrics": [], "package_name": None,
                                               "startup": False, "runner_args": {}})
@@ -1312,17 +1665,17 @@ def benchmarks_of(root: Path, build: BuildCode | None = None) -> list[dict[str, 
         if "StartupTimingMetric" in text or "StartupMode.COLD" in text:
             entry["startup"] = True
         mdir = path
-        while mdir != root and not (mdir / "build.gradle.kts").exists() and not (mdir / "build.gradle").exists():
+        while mdir != gradle and not (mdir / "build.gradle.kts").exists() and not (mdir / "build.gradle").exists():
             mdir = mdir.parent
         entry["dir"] = mark._rel(mdir, root)
-    aliases = catalog_aliases(root) if by_module else set()
+    aliases = catalog_aliases(gradle) if by_module else set()
     for entry in by_module.values():
         spath, stext = _build_script(root / entry["dir"]) if entry["dir"] else (None, "")
         whole = _strip(stext)
         s = android_block(whole)
         entry["runner_args"] = dict(_RUNNER_ARG.findall(s))
         if build is None:
-            build = build_code(root)
+            build = build_code(root, gradle)
         flavors, dims = module_flavors(whole, s, build, entry["dir"], [])
         combos = flavor_combinations(flavors, dims) or []
         entry["flavors"] = [_flavor_word([f["name"] for f in c]) for c in combos if c]
@@ -1507,48 +1860,57 @@ def devices_attached() -> list[dict[str, Any]] | None:
             for d in parse_devices(out)]
 
 
-def allowed_paths(root: Path) -> list[str]:
+def allowed_paths(root: Path, gradle: Path | None = None) -> list[str]:
     """`instrumentation.allowed` as globs over the modules that have sources.
 
     One line per top-level tree rather than one per module: a project with
     a hundred modules under `feature/` gets `feature/*/src/main`, which is
-    what a person writes.
+    what a person writes. The modules of the app's Gradle build, `gradle`,
+    the root's by default, each glob from the root: a build in `android/`
+    gets `android/feature/*/src/main`, and a submodule's example beside it
+    is not the app's code (#1003).
     """
+    gradle = gradle or root
+    base = Path(mark._rel(gradle, root)).parts if gradle != root else ()
     seen = set()
     tests = test_modules(root)
     logic: dict[tuple[str, ...], bool] = {}
-    for path in source_files(root):
-        parts = path.relative_to(root).parts
+    for path in source_files(gradle):
+        parts = path.relative_to(gradle).parts
         if "src" not in parts or "main" not in parts:
             continue
         i = parts.index("src")
         if i == 0 or parts[i + 1:i + 2] != ("main",):
             continue
         module = parts[:i]
-        if "/".join(module) in tests or module[0] == "buildSrc":
+        if "/".join(base + module) in tests or module[0] == "buildSrc":
             continue
         if module not in logic:
-            _, script = _build_script(root.joinpath(*module))
+            _, script = _build_script(gradle.joinpath(*module))
             logic[module] = bool(_BUILD_LOGIC.search(_strip(script)))
         if logic[module]:
             continue
-        pattern = "/".join([module[0]] + ["*"] * (len(module) - 1) + ["src", "main"])
+        pattern = "/".join([*base, module[0]] + ["*"] * (len(module) - 1) + ["src", "main"])
         seen.add(pattern)
     return sorted(seen)
 
 
-def _app_and_variants(root: Path, facts: Facts, code: BuildCode | None = None) -> None:
+def _app_and_variants(root: Path, facts: Facts) -> BuildCode:
     """The app module, its flavours and build types, and the variants they
-    make, with what of them the project's build code sets (#816)."""
+    make, with what of them the project's build code sets (#816), the root
+    build script's `ext` (#1004) and the source sets' own manifests (#1006).
+    The build code it read, of the app's Gradle build, for the rest of
+    `describe` to read with."""
     facts.app = app_module(root, facts)
+    gradle = gradle_dir(root, facts.app)
     whole = ""
     if facts.app and facts.app.get("build_script"):
         whole = _strip((root / facts.app["build_script"]).read_text(encoding="utf-8", errors="replace"))
     stext = android_block(whole)
-    plugin = bool(whole) and applies_baseline_profile(whole, catalog_aliases(root))
+    plugin = bool(whole) and applies_baseline_profile(whole, catalog_aliases(gradle))
     if facts.app and plugin:
         facts.app["plugins"] = [BASELINE_PROFILE]
-    code = code if code is not None else build_code(root)
+    code = build_code(root, gradle)
     script = (facts.app or {}).get("build_script") or "build.gradle"
     flavors, dims = module_flavors(whole, stext, code, script, facts.notes)
     facts.flavors = flavors
@@ -1560,7 +1922,11 @@ def _app_and_variants(root: Path, facts: Facts, code: BuildCode | None = None) -
     for f in facts.flavors:
         for key in _GRADLE_KEY:
             settle(f, key, code, whole, f"productFlavors.{f['name']} of {script}")
-    facts.variants = variants_of(facts.app, facts.flavors, facts.build_types, dims)
+    manifests = profileable_source_sets(root, facts.app)
+    for bt in facts.build_types:
+        if bt["name"] in manifests:
+            bt["profileable_manifest"] = manifests[bt["name"]]
+    facts.variants = variants_of(facts.app, facts.flavors, facts.build_types, dims, manifests)
     if facts.flavors and flavor_combinations(facts.flavors, dims) is None:
         facts.notes.append("the flavours span several dimensions and flavorDimensions could "
                            "not be read, so no variant is named: `./gradlew :app:tasks --all` "
@@ -1572,6 +1938,7 @@ def _app_and_variants(root: Path, facts: Facts, code: BuildCode | None = None) -
             "what decides the package is set where this does not read it: " + "; ".join(unread)
             + f". The variants that take it install under a name not shown here — on a phone, "
               f"`adb shell pm list packages {base}` lists the installed ones")
+    return code
 
 
 def module_flavors(whole: str, stext: str, code: BuildCode, script: str,
@@ -1684,20 +2051,22 @@ def _id_note(facts: Facts) -> None:
 
 def describe(root: Path, *, devices: bool = True) -> Facts:
     facts = Facts(root=str(root))
-    code = build_code(root)
-    _app_and_variants(root, facts, code)
+    code = _app_and_variants(root, facts)
+    # The app's Gradle build, which need not be the root (#1003): its
+    # benchmarks, its processes and its sources, the paths from the root.
+    gradle = gradle_dir(root, facts.app)
     # Before the notes: which flavour a benchmark module runs against
     # decides the variant the applicationId note reads.
-    facts.benchmarks = benchmarks_of(root, code)
+    facts.benchmarks = benchmarks_of(root, code, gradle)
     _benchmark_targets(facts)
     if facts.app and any(b.get("own_package") for b in facts.benchmarks):
         # Whether the draft can name the app's process exactly, and leave
         # the benchmark's own out of the mask (#467).
         facts.app["processes"] = declared_processes(
-            root, {b["dir"] for b in facts.benchmarks if b.get("dir")})
+            root, {b["dir"] for b in facts.benchmarks if b.get("dir")}, gradle)
     _profileable_note(facts)
     _id_note(facts)
-    facts.allowed = allowed_paths(root)
+    facts.allowed = allowed_paths(root, gradle)
     if devices:
         ask_devices(facts)
     return facts
@@ -1949,6 +2318,9 @@ def skeleton(facts: Facts) -> list[str]:
                 "  mode: gradle",
                 f'  gradle_task: "{task}"' if task else '  gradle_task: "?"',
                 ]
+        if app.get("gradle_root"):
+            # `./gradlew` is in the build's folder, not beside echolot.yml (#1003).
+            out.append(f'  project_root: "{app["gradle_root"]}"')
         if pick and len(classes) == 1:
             out.append("  gradle_args:")
             out.append(f'    - "{_CLASS_ARG}{pick["name"]}"')
@@ -1962,6 +2334,8 @@ def skeleton(facts: Facts) -> list[str]:
             whose = ""
         if _pinned(bench):
             whose += "; missingDimensionStrategy runs it against " + ", ".join(sorted(_pinned(bench)))
+        if app.get("gradle_root"):
+            whose += f"; the Gradle build is in {app['gradle_root']}/, where gradle mode runs"
         if len(classes) > 1:
             rule = (f"MacrobenchmarkRule in {len(classes)} classes of {bench['module']}: each "
                     "scenario above runs its own")
@@ -2063,7 +2437,9 @@ def render(facts: Facts) -> str:
     out = ["# The repository", ""]
     app = facts.app
     if app:
-        out.append(f"App module `{app['module']}` ({app['dir']}) · applicationId `{app.get('application_id') or '?'}`"
+        out.append(f"App module `{app['module']}` ({app['dir']})"
+                   + (f" · Gradle build in `{app['gradle_root']}/`" if app.get("gradle_root") else "")
+                   + f" · applicationId `{app.get('application_id') or '?'}`"
                    + (f" · namespace `{app['namespace']}`" if app.get("namespace") else "")
                    + (f" · process `{app['process']}`" if app.get("process") else "")
                    + f" · launcher `{app['launcher']}`")
@@ -2071,7 +2447,8 @@ def render(facts: Facts) -> str:
             line = "yes — `<profileable android:shell=\"true\"/>` in " + app["manifest"]
         elif app.get("profileable_by"):
             added = {b["name"]: b["added_by"] for b in facts.build_types if b.get("added_by")}
-            own = [b for b in app["profileable_by"] if b not in added]
+            manifests = app.get("profileable_manifests") or {}
+            own = [b for b in app["profileable_by"] if b not in added and b not in manifests]
             made = [b for b in app["profileable_by"] if b in added]
             said = []
             if own:
@@ -2079,6 +2456,9 @@ def render(facts: Facts) -> str:
             if made:
                 said.append(", ".join(f"`{b}`" for b in made) + f", which {added[made[0]]} "
                             "makes profileable")
+            for b in (b for b in app["profileable_by"] if b in manifests and b not in added):
+                # Its own source set's manifest has the tag (#1006).
+                said.append(f"`{b}`, by its own manifest, {manifests[b]}")
             line = "yes for " + "; ".join(said) + f"; {app['manifest']} has no tag"
         else:
             line = "**no** — release-like builds will trace without application slices"
@@ -2105,6 +2485,13 @@ def render(facts: Facts) -> str:
         if chosen:
             out.append("")
             out.append(f"Start from **{chosen['name']}**: {chosen['measure']}.")
+            flavours = {v.get("flavor") for v in facts.variants}
+            if chosen.get("default_flavors") and len(flavours) > 1:
+                # Of its flavours, the one the project marks (#1006).
+                marked = chosen["default_flavors"]
+                out.append(", ".join(f"`{f}`" for f in marked)
+                           + f" {'is the flavour' if len(marked) == 1 else 'are the flavours'} "
+                             "`isDefault = true` marks, the one Android Studio builds.")
             packages = list(dict.fromkeys(v["application_id"] for v in facts.variants
                                           if v.get("application_id") and not v.get("unread")))
             if chosen.get("application_id") and len(packages) > 1:

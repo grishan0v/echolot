@@ -22,6 +22,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SOURCE_EXT = (".kt", ".java")
+# C and C++ under an app's `src/main/cpp`, inside the very paths `scan` writes
+# into `instrumentation.allowed`. `ATrace_beginSection("…")`, `ATRACE_NAME`
+# or a project's own wrapper put a name in the trace the way
+# `android.os.Trace.beginSection` does, and a hunt in an app whose work sits
+# behind a JNI call puts its last marker there (#1009).
+NATIVE_EXT = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
 
 # Directories a source walk has no business entering. The union of what the
 # three walkers used to carry separately, plus the ones none of them named:
@@ -35,7 +41,8 @@ SKIP_DIRS = {
 }
 
 
-def source_files(root: Path, *, under_src: bool = False) -> list[Path]:
+def source_files(root: Path, *, under_src: bool = False,
+                 native: bool = False) -> list[Path]:
     """Every Kotlin and Java source under the root, in a stable order.
 
     One walker for `domains`, `mark` and `anr`. All three wrote the same
@@ -49,11 +56,18 @@ def source_files(root: Path, *, under_src: bool = False) -> list[Path]:
     `under_src` is `mark`'s extra rule: it only proposes markers for files
     under a `src/` directory.
 
+    `native` adds the C and C++ sources, for what looks for temporary
+    markers: one in a `.cpp` file is compiled into the library and in the
+    trace like any other, and a walk of Kotlin and Java alone called the
+    tree clean over it (#1009). The map and the frame lookups keep to
+    Kotlin and Java, the languages their patterns are written for.
+
     Sorted at the end rather than per directory, so the order is exactly what
     the global `sorted(rglob(...))` produced — `domains` names the first site
     of each slice name in its map, and that must not move.
     """
-    return _walk(root, lambda n: n.endswith(SOURCE_EXT), under_src=under_src)
+    ext = SOURCE_EXT + NATIVE_EXT if native else SOURCE_EXT
+    return _walk(root, lambda n: n.endswith(ext), under_src=under_src)
 
 
 def source_index(root: Path) -> dict[str, list[Path]]:
@@ -477,9 +491,6 @@ def scan(root: Path) -> tuple[list[Site], dict[str, ModuleStat]]:
     return sites, stats
 
 
-_GLOB_SPECIAL = re.compile(r"([\[*?])")
-
-
 def _quoted(value: str) -> str:
     """A double-quoted YAML scalar: JSON's escapes are YAML's."""
     return json.dumps(value, ensure_ascii=False)
@@ -488,6 +499,7 @@ def _quoted(value: str) -> str:
 def render(sites: list[Site], stats: dict[str, ModuleStat],
            root: Path, limit: int = 12) -> list[str]:
     """A ready-to-paste domains section plus a coverage report."""
+    from .names import escaped  # here: names imports tp, which a map of the code does not need
     out: list[str] = []
     total_lines = sum(s.lines for s in stats.values())
     total_sites = sum(s.sites for s in stats.values())
@@ -540,9 +552,10 @@ def render(sites: list[Site], stats: dict[str, ModuleStat],
             hint += f", via {first.via}"
         # Quoted by a writer that knows YAML: Kotlin's `\$` copied into a
         # double-quoted scalar broke the whole echolot.yml. And `analyze`
-        # reads the entry as a GLOB, so a `[`, `*` or `?` is escaped to match
-        # itself.
-        glob = _GLOB_SPECIAL.sub(r"[\1]", name)
+        # reads the entry as the name and as a GLOB, so a `[`, `*` or `?` is
+        # escaped: the name as written would match itself, and with the GLOB
+        # some other name as well (#1012).
+        glob = escaped(name)
         out.append(f"  - slice: {_quoted(glob)}")
         if glob != name:
             out.append("    # a GLOB: [, * and ? are escaped to match themselves")

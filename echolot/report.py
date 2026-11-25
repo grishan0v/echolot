@@ -11,7 +11,6 @@ are merged in merge.py, and both formats are written in render.py.
 from __future__ import annotations
 
 import base64
-import fnmatch
 import gzip
 import hashlib
 import json
@@ -21,6 +20,7 @@ from typing import Any
 
 from . import files
 from . import launch as launch_mod
+from . import names as names_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
 from .merge import _FLOORED, _OVER, _merge_debuggable, merge_rows, short_runs
@@ -235,6 +235,32 @@ def _merge_frames(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     late = [f.get("late") for f in drawn]
     if all(isinstance(n, int) for n in late):
         out["late"], out["late_values"] = whole(late), late
+    unjudged = _merge_unjudged([f.get("unjudged") or [] for f in drawn], whole)
+    if unjudged:
+        out["unjudged"] = unjudged
+    return out
+
+
+def _merge_unjudged(runs: list[list[dict[str, Any]]], whole) -> list[dict[str, Any]]:
+    """The surfaces the timeline does not hold, across the repeats (#1011):
+    per surface, the median of what it presented and of what the timeline
+    held of it, each repeat's in `values`, none in a repeat that did not list
+    it, and in how many it was listed. The thread and the call are the first
+    repeat's that listed it: a thread the app did not name is `Thread-18` in
+    one start and `Thread-19` in the next."""
+    by_surface: dict[str, list[dict[str, Any] | None]] = {}
+    for at, listed in enumerate(runs):
+        for s in listed:
+            by_surface.setdefault(s["surface"], [None] * len(runs))[at] = s
+    out = []
+    for surface, seen in by_surface.items():
+        first = next(s for s in seen if s)
+        presents = [s["presents"] if s else 0 for s in seen]
+        out.append({"surface": surface, "thread": first.get("thread"), "call": first.get("call"),
+                    "presents": whole(presents), "values": presents,
+                    "judged": whole([(s.get("judged") or 0) if s else 0 for s in seen]),
+                    "runs": f"{sum(1 for s in seen if s)}/{len(runs)}"})
+    out.sort(key=lambda s: (-s["presents"], s["surface"]))
     return out
 
 
@@ -571,7 +597,7 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
         "rows": rows,
         "absent": [g for g in head.get("globs") or []
                    if g in set(head.get("absent") or []) and not any(
-                       fnmatch.fnmatchcase(n, g) for n in seen)],
+                       names_mod.matches(n, g) for n in seen)],
     }
     # The prefixed names any repeat held, the window or not. Only when every
     # repeat says: one read back from before the key would count as holding

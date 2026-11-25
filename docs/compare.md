@@ -547,9 +547,12 @@ top, the way the Marker Report already states an anchor that never matched.
 
 A report says how its window was defined when the scenario's window is the
 launch (`scenario.window: launch`): `window.defined_by` is `launch` for a
-window that closed at the launch's end, and `launch+reportFullyDrawn` for one
-that ran on to the app's `reportFullyDrawn()` call. A window cut by the
-config's anchors carries no such key.
+window that closed at the launch's end, `launch+reportFullyDrawn` for one
+that ran on to the app's `reportFullyDrawn()` call, and `launch+handover` for
+one that ran on through the launches the app went on to by itself after its
+first frame, a splash's hand-over to the main activity (see
+[A start the app hands over](analysing.md#a-start-the-app-hands-over)). A
+window cut by the config's anchors carries no such key.
 
 These are different stretches of the same launch. Against anchors from
 `bindApplication`, a launch window starts earlier, at the intent. A launch
@@ -570,9 +573,12 @@ It refuses a merged report whose own repeats did not close the same way
 against anything, itself included: its medians mix two windows.
 
 To compare the two sides, analyze both sets of traces with one config. When
-the change under test adds or removes the `reportFullyDrawn()` call, a launch
-window cannot be the same on both sides: name `start` and `end` in the
-scenario for that comparison.
+the change under test adds or removes the `reportFullyDrawn()` call, or the
+splash activity that hands the start over, a launch window cannot be the
+same on both sides: name `start` and `end` in the scenario for that
+comparison. A report written before echolot followed the hand-over says
+`launch` for a start it closed at the splash's frame; analyze its traces
+again before comparing it with a newer one.
 
 A report of the whole trace (`analyze --whole-trace`, or `window: whole`;
 `window.defined_by: "whole"`) is refused against any other window for the

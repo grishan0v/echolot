@@ -138,7 +138,8 @@ inside a slice is in both. How much of the window the findings cover is
 `end_anchor.matches == 0` the window ran to the edge of the trace and none of
 the numbers are about your scenario.
 A scenario with `window: launch` has no anchors: `window.defined_by` says
-what closed it, the launch's end or the app's `reportFullyDrawn()`, and
+what closed it, the launch's end, the end of the launch a splash handed
+the start over to, or the app's `reportFullyDrawn()`, and
 `defined_by_runs` in a merged report means the repeats did not agree.
 Same for `process_alternatives` — you may be analysing the wrong process. Fix
 the config rather than hunting a problem.
@@ -168,6 +169,12 @@ overrun includes the wait in the queue.
 Its silence is ambiguous: no bad frames, and no frame timeline in the trace at
 all, look the same. Android 11 and below have none, and neither does a capture
 that did not ask for it. Check before calling a scenario smooth.
+
+It judges the app's windows and nothing else. A map, a game or a video a
+thread of the app draws into a `SurfaceView` with Vulkan or GL has no frame in
+the timeline; the report says how many it presented there, on which thread and
+with which call (`window.frames.unjudged`), and a silent `frame_jank` says
+nothing of them.
 
 ## From a finding to the code
 

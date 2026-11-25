@@ -33,6 +33,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import names as names_mod
 from .config import NO_ANCHOR, Config, ConfigError
 
 # What `scan` writes for an end anchor a probe has to pick. As a GLOB it
@@ -168,7 +169,7 @@ def _held(glob: str, start: str, needle: str, named) -> bool:
     `"list_${state}"` can be `list_shown_mark`. The first word alone is no
     such start: `"list"` is a string of every other file.
     """
-    if any(fnmatch.fnmatchcase(s, glob) for s in named.exact):
+    if any(names_mod.matches(s, glob) for s in named.exact):
         return True
     whole = start == glob
     return any(h != needle and (start.startswith(h) or (not whole and h.startswith(start)))

@@ -43,7 +43,14 @@ working, not a stall.
 **`window.defined_by`** — only for a scenario with `window: launch`: what
 closed the window. `launch` is the launch's end, the first frame.
 `launch+reportFullyDrawn` is the end of the app's `reportFullyDrawn()` call,
-which came after that frame. `window.report_fully_drawn` says where the call
+which came after that frame. `launch+handover` is the end of the launch the
+app handed its start over to by itself after its first frame, a splash's
+hand-over to the main activity: `window.handover` says `from` and `to`, the
+first frame from the window's start (`first_frame_ms`), the time from it to
+the app's call (`after_ms`) and, merged, `runs`. The work between the two
+frames is the start's and is inside the window; `Startup` is still the first
+launch alone. `window.alias` names the activity a launcher alias stands for
+(`{"name": …, "of": …}`). `window.report_fully_drawn` says where the call
 was read: `app` for the app's own slice on its main thread, `system_server`
 for ActivityManager's record of it when the app's slice is missing, `null`
 when the trace holds no call after the launch began. `launch` beside `app`
@@ -61,7 +68,9 @@ In a merged report, repeats that did not close the same way are named:
 `defined_by` joins the two, `defined_by_runs` counts each
 (`{"launch": "1/5", "launch+reportFullyDrawn": "4/5"}`), and the header
 warns. Find the repeat without the call and leave it out, or look at why the
-app did not make it.
+app did not make it. A set where `launch+handover` is one of the two handed
+over in some repeats and not in others: a screen the app shows only now and
+then, or a recording that stopped before the second launch ended.
 
 **`window.process_alternatives` present** — the mask matched several processes
 and the largest by slice count was taken. If you are analysing `:pushservice`

@@ -23,6 +23,7 @@ from typing import Any
 
 from .. import files
 from ..config import DEFAULT_PREFIX, MAX_ROUNDS, PROCESS, SOURCE_ROOT, TEMP_PREFIX, Config
+from ..domains import NATIVE_EXT
 from ..mark import TAG, Markers
 from ..recorder import LOG_FILE
 from . import shell
@@ -156,9 +157,11 @@ _CONFIG_ARG = re.compile(r"(?:^|\s)(?:-c|--config)\s+(\S+)")
 _ASSIGN = re.compile(
     r"(?:^|[;&|]\s*)(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
     re.M)
+# A native one among them: `ATrace_beginSection` and the `ATRACE_*` macros
+# over it, which a hunt behind a JNI call puts in C or C++ (#1009).
 _TRACE_CALL = re.compile(
     r"\btrace\s*\(\s*\"|Trace\.beginSection\s*\(|beginAsyncSection\s*\(|"
-    r"androidx\.tracing", re.S)
+    r"androidx\.tracing|\bATrace_beginSection\s*\(|\bATRACE_(?:NAME|BEGIN|CALL)\b", re.S)
 _CONCLUSION_FIELDS = {
     "place": r"\bPlace\b|Место",
     "evidence": r"\bEvidence\b|Улик|Доказательств",
@@ -1642,7 +1645,7 @@ def _relative(path: str, cwd: str | None) -> str:
 def _is_source(rel: str) -> bool:
     if rel.startswith("/") or "/scratchpad/" in rel or rel.startswith(".echolot/"):
         return False
-    return rel.endswith((".kt", ".java", ".kts", ".xml"))
+    return rel.endswith((".kt", ".java", ".kts", ".xml", *NATIVE_EXT))
 
 
 # --------------------------------------------------------------------- gaps

@@ -219,7 +219,7 @@ guesses.
 - **Cleanup.** It says whether the temporary markers were removed. Closing
   with a verdict counts them too and warns on stderr when any are left. If it
   is unclear, check from the checkout's root:
-  `grep -rn --include='*.kt' --include='*.java' -e AGENTTMP_ -e 'echolot:mark' .` must come back empty.
+  `grep -rn --include='*.kt' --include='*.java' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.cxx' --include='*.h' --include='*.hh' --include='*.hpp' --include='*.hxx' -e AGENTTMP_ -e 'echolot:mark' .` must come back empty.
 - **Confidence.** If it is low, say so rather than smoothing it over.
 - **Against.** With no reference, say that the answer is where this build
   spends its time, against its limit or its late frames, and not shown to be

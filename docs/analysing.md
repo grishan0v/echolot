@@ -37,6 +37,16 @@ macrobenchmark's end marker. An anchor may name one. A detector never sees
 one, and an agent reading the `slices` column alone would have reported an
 app with two dozen named markers as uninstrumented.
 
+An anchor candidate is written the way an anchor takes it, ready to paste.
+A name with a number that differs in every recording, a frame's vsync id or
+a tid, has `*` in its place, `Choreographer#doFrame *`, and is a GLOB. A name
+with no such number is written as the trace has it, and matches as written:
+every name echolot reads from the config — an anchor, a `domains` entry, a
+detector's mask — matches the slice of that very name, and the slices it
+matches as a GLOB besides. So a renderer's `[render] DrawFrame` is written as
+it is. Where a name is a GLOB, a `[`, `*` or `?` of its own is escaped, since
+in a GLOB `[render]` is one letter: `[[]render] Frame *`.
+
 **Start candidates** come after the longest slices: the sections Android writes
 itself when a journey begins, the ones a journey driven by a command starts
 with. A tap reaches the window as `deliverInputEvent`, an intent reaches a
@@ -142,7 +152,9 @@ detectors:
 The convention is in the parameter's name: one with `name_glob` in it masks
 the slice name (`name_glob_alt` is a second mask of the same kind), one with
 `skip_glob` is an exclusion. `names` also reads `thread_glob` as a mask over
-the thread name, although no shipped detector declares one. It takes them from
+the thread name, although no shipped detector declares one. A mask, as an
+anchor, matches the slice of its very name as well as what it matches as a
+GLOB: `name_glob: "[render] DrawFrame"` is that section, brackets and all. It takes them from
 the detector files and the config itself, so a new detector with masks
 appears in its output without any registration.
 
@@ -218,8 +230,10 @@ What reaches the map, then: a literal in `Trace.beginSection`,
 or `traceAsync("…", …)` under the import above, and a constant handed to a
 call whose name says `trace`. A literal is written as the string it holds:
 Kotlin's `"cost \$5"` is `cost $5` in the map. A name with `[`, `*` or `?`
-is written with each of them escaped, `cache[[]hit]`, since `analyze` reads
-every entry as a GLOB and the name must match itself.
+is written with each of them escaped, `cache[[]hit]`. `analyze` reads an
+entry as the name it is and as a GLOB, so `cache[hit]` as written matches
+that name too, and also `cacheh`, which the GLOB matches; escaped, it matches
+itself and nothing else.
 
 A name built at runtime cannot reach the map, and only some of those calls
 are counted: `Trace.beginSection(…)`, `Trace.beginAsyncSection(…)` and their
@@ -434,6 +448,12 @@ Frames it tags `Buffer Stuffing` only waited in a queue behind the frame
 before: they reach the screen late and smoothly, so their row counts them
 with nothing past the deadline, after every late frame.
 Android 12 and up — see [requirements](../README.md#requirements).
+It judges the frames of the app's windows, the ones the timeline holds. A
+map, a game or a video a thread of the app draws into a `SurfaceView` with
+Vulkan or GL has none there, and the report says so above the findings: how
+many frames went to that surface, from which thread and with which call
+(`QueuePresentKHR`, `eglSwapBuffers…`), and that `frame_jank` did not judge
+them, silent or not.
 
 ## Your own names, measured every time
 
@@ -442,7 +462,8 @@ planted is one you want the number for whatever it cleared. So a report
 carries a **Markers** table above the detectors' sections whenever there is
 anything to put in it, and two things decide what that is:
 
-- every name `domains[].slice` lists, each read as a GLOB;
+- every name `domains[].slice` lists: the slice of that very name, and the
+  ones it matches as a GLOB;
 - every name that starts with `instrumentation.temp_prefix` — `AGENTTMP_`
   when the config sets none.
 
@@ -481,11 +502,14 @@ no string in the code makes any more. `mark --remove` took them out, or a
 hand did, after the app that was recorded was built, so it has none of the
 changes made to the code since. A fix is among them as often as not, and a
 round compared as if it had one says the fix did nothing. Any string in the
-code counts, tagged or not: a marker added by hand without the tag is in the
-code all the same. A name put together at run time — a template, a format, a
-string joined to more with `+` — makes every name that starts with its fixed
-part. A config kept where there is no Kotlin or Java says nothing, since
-every name would read as taken out. The warning names the gradle task as the
+code counts, tagged or not, in Kotlin, Java, C or C++: a marker added by hand
+without the tag is in the code all the same, and so is one in the C++ body of
+a JNI call, which a walk of Kotlin and Java alone called taken out over a
+current build (#1009). A name put together at run time — a template, a
+format, a string joined to more with `+`, a C literal the compiler joins to
+the next one or to a macro — makes every name that starts with its fixed
+part. A config kept where there is no Kotlin, Java, C or C++ says nothing,
+since every name would read as taken out. The warning names the gradle task as the
 other one does, and `report.json` carries the names as `markers.removed`.
 
 Names that carry the temporary prefix keep their digits. `names` folds
@@ -1052,10 +1076,54 @@ draws a placeholder first is still loading after that frame, and only its
 `reportFullyDrawn()` call says when it is done: without the call, the work
 after the first frame is outside the window.
 
+### A start the app hands over
+
+A splash activity that draws a frame and then starts the app's main activity
+by itself is one start for the user and two launches for the platform: the
+second one is recorded as `launchingActivity#<id>:completed-same-process`,
+from the app's own call to the main activity's first frame. The window runs
+on through it, and through any launch after it of the same kind:
+
+- the launch is the same app's, and begins after the one before it ended;
+- nothing was delivered to the app between the two (no `deliverInputEvent`),
+  so it is not a tap that opened a screen;
+- the activity the launch before ended on is destroyed once the next launch
+  is under way: a splash, a trampoline or a gate leaves, while an activity
+  the app opens over its main screen keeps the main screen beneath it, and
+  is not followed.
+
+The window then closes at the end of the last such launch, or on
+`reportFullyDrawn()` when that comes later, and `window.defined_by` is
+`launch+handover`. The line says where the first frame was:
+
+```
+Scenario window: **690.23 ms** (from 666.95 to 719.33 across repeats)
+Window: the launch as the platform records it, from the intent to the end of the launch the app handed its start over to, that launch's first frame. The trace holds no `reportFullyDrawn` call after the launch began. `org.example.SplashActivity` drew the launch's first frame at 181 ms. 263 ms later, with nothing touched, the app went on by itself to `org.example.MainActivity` and finished the one before: the start was not over at that frame, so the window runs on. The launch ended on `org.example.MainActivity`.
+```
+
+`window.handover` in `report.json` holds the same: `from` and `to`, the
+first frame from the window's start (`first_frame_ms`), the time from it to
+the app's call (`after_ms`), how many launches were followed, and, merged,
+in how many repeats (`runs`). The startup line under it is still the first
+launch, the platform's own measure. On an open-source app whose splash
+starts its native core on the main thread, the window used to close at the
+splash's first frame, 181 ms of the 690 the user waited for the map, and
+the 181 ms of native start after that frame was outside it.
+
+A platform launch already runs on through an activity the app starts before
+its first frame, so the window is the same whichever side of the splash's
+frame the app hands over on. A set where the app handed over in some repeats
+and not in others measured two starts: the header says so and `compare`
+refuses it, as it refuses a `launch+handover` report against a `launch` one.
+
 The line ends with the activity the launch ended on, `The launch ended on
 `org.example.MainActivity`.`, where the trace names it: Android 12 and on
 write a `performCreate:<class>` slice for every activity created, and the
-last one inside the window is it (`window.activity` in `report.json`).
+last one inside the window is it (`window.activity` in `report.json`). A
+launcher that is an `<activity-alias>` is created under the alias's name,
+and `am start -W` names the activity behind it; with `collect`'s record
+beside the trace, the line names both, `` `org.example.Launcher` (an alias
+of `org.example.SplashActivity`) `` (`window.alias`).
 
 Above the findings, the report names the app's `BOOT_COMPLETED` receiver when
 the main thread ran it inside the window, with its time over the repeats

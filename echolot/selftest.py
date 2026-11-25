@@ -295,6 +295,155 @@ def _(report):
     assert not unknown, f"offered, and not among the platform's sections: {unknown}"
 
 
+# --- a name with brackets (#1012) ------------------------------------------------
+
+def _bracketed_config(end: str | None = None, domains: tuple[str, ...] = ()) -> dict:
+    """`fixture.bracketed`'s config: from `AppStart` to `end`, the render
+    thread's names in `domains`."""
+    scenario = {"name": "render", "start": {"name": "AppStart"}}
+    if end is not None:
+        scenario["end"] = {"name": end}
+    return {**FIXTURE_CONFIG, "scenario": scenario,
+            "domains": [{"slice": s, "module": "render"} for s in domains]}
+
+
+@check("an anchor and a `domains` entry written as a bracketed name match that name")
+def _(report):
+    """A renderer names its sections `[render] DrawFrame`, and `probe` said to
+    write a name as shown. Read as a GLOB alone, `[render]` was one letter:
+    the end anchor matched nothing and the window ran to the end of the trace,
+    and the `domains` entry was "never seen in this scenario" beside the
+    thousand times the trace held it (#1012)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bracketed.perfetto-trace"
+        path.write_bytes(fixture.bracketed())
+        got = _analyze(path, Config(_bracketed_config(fixture.BRACKET_END, (fixture.BRACKET_DRAW,))))
+    w = got["window"]
+    assert w["end_anchor"] == {"glob": fixture.BRACKET_END, "matches": 1}, w["end_anchor"]
+    assert w["duration_ms"] == fixture.BRACKET_END_MS, w
+    rows = {r["location"]: r["count"] for r in got["markers"]["rows"]}
+    assert rows == {fixture.BRACKET_DRAW: 3} and got["markers"]["absent"] == [], got["markers"]
+
+
+@check("over repeats a bracketed `domains` entry is absent only when no repeat held it")
+def _(report):
+    """`report --markers` folds the repeats' tables, and holds the names a
+    repeat said were absent against the names the others held. That was a
+    GLOB too, and a report whose every repeat had `[render] DrawFrame` said
+    it was never seen (#1012)."""
+    from .report import _merge_markers
+    name = fixture.BRACKET_DRAW
+    row = {"location": name, "count": 3, "self_ms": 1.0, "total_ms": 1.0, "max_ms": 1.0,
+           "detail": "RenderLoop"}
+    held = {"markers": {"prefix": "AGENTTMP_", "globs": ["AGENTTMP_*", name],
+                        "rows": [row], "absent": []}}
+    missed = {"markers": {"prefix": "AGENTTMP_", "globs": ["AGENTTMP_*", name],
+                          "rows": [], "absent": [name]}}
+    assert _merge_markers([missed, held], 2)["absent"] == [], "one repeat held it"
+    assert _merge_markers([missed, missed], 2)["absent"] == [name], "none did"
+
+
+@check("probe writes a bracketed name as the trace has it, a numbered one escaped, and each closes the window")
+def _(report):
+    """What `probe` prints is what to paste: a name with no number as it is,
+    since a name matches itself, and one with a number as a GLOB with its own
+    `[` escaped, `[[]render] Frame-*`. Each, pasted as the end anchor, closes
+    the window where that slice first ends (#1012)."""
+    import io
+    from .analyze import _resolve_process, _setup_context
+    from .main import _anchor_candidates
+    from .tp import TraceSession
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "bracketed.perfetto-trace"
+        trace.write_bytes(fixture.bracketed())
+        with TraceSession(trace, _binary) as tp:
+            upid = _resolve_process(tp, "com.example.app", str(trace))[0]["upid"]
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                _anchor_candidates(tp, upid)
+            shown = [line.split("|")[1].strip() for line in out.getvalue().splitlines()
+                     if line.startswith("| ") and "---" not in line][1:]
+            began = tp.query("SELECT start_ts FROM trace_bounds")[0]["start_ts"]
+            closed = {}
+            for name in shown:
+                bounds = _setup_context(tp, Config(_bracketed_config(name)), upid)
+                closed[name] = round((bounds["ts_end"] - began) / 1e6, 1)
+    assert {fixture.BRACKET_DRAW, "[[]render] Frame-*", fixture.BRACKET_END} <= set(shown), shown
+    assert "[`, `*` or `?` of the name's own is written `[[]`" in out.getvalue(), out.getvalue()
+    # Where the first of each ends: the window opens with `AppStart` at 0.
+    want = {fixture.BRACKET_DRAW: 80.0, "[[]render] Frame-*": 65.0,
+            fixture.BRACKET_END: float(fixture.BRACKET_END_MS)}
+    assert {n: closed[n] for n in want} == want, closed
+
+
+@check("an anchor that matched nothing is offered the trace's names in a form that matches")
+def _(report):
+    """The warning names what the trace holds that reads like the anchor, to
+    be pasted in its place; a name with a number and a bracket is offered
+    escaped, as `probe` would print it (#1012)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bracketed.perfetto-trace"
+        path.write_bytes(fixture.bracketed())
+        w = _analyze(path, Config(_bracketed_config("[render] Frame")))["window"]
+    assert w["end_anchor"]["matches"] == 0, w["end_anchor"]
+    assert w["end_anchor"].get("near", [])[:1] == ["[[]render] Frame-*"], w["end_anchor"]
+
+
+@check("a project's own bracketed name keeps its number, and a mask written as a name matches it")
+def _(report):
+    """Two more places held a written name against the trace's as a GLOB
+    alone (#1012). The fold that writes a pool's `worker-3` as `worker-#`
+    leaves the names `domains` lists as they are, and a bracketed one was
+    folded. And a detector's mask the config sets to a slice's name, which
+    `names` reads as the detectors do, matched nothing."""
+    from .analyze import _resolve_process, _setup_context
+    from .main import _name_coverage
+    from .tp import TraceSession
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "bracketed.perfetto-trace"
+        trace.write_bytes(fixture.bracketed())
+        with TraceSession(trace, _binary) as tp:
+            upid = _resolve_process(tp, "com.example.app", str(trace))[0]["upid"]
+            _setup_context(tp, Config(_bracketed_config(domains=("[render] Frame-10",))), upid)
+            folded = {r["name"]: r["family"] for r in tp.query("SELECT name, family FROM _name_family")}
+            covered, _ = _name_coverage(tp, upid, [("mask", "name", fixture.BRACKET_DRAW)])
+    assert "[render] Frame-10" not in folded, f"the config's own name, folded: {folded}"
+    assert folded.get("[render] Frame-11") == "[render] Frame-#", folded
+    assert covered.get(fixture.BRACKET_DRAW) == {"mask"}, dict(covered)
+
+
+@check("every mask a detector's query holds a name against matches that name as well as its GLOB")
+def _(report):
+    """The detectors' masks are the config's to change, and a mask set to a
+    slice's name, brackets and all, has to match it as the anchors do: a
+    `GLOB '{{param}}'` in a query goes with `= '{{param}}'` (#1012)."""
+    from .analyze import DETECTOR_DIR
+    alone = []
+    for path in sorted([*DETECTOR_DIR.glob("*.sql"), DETECTOR_DIR.parent / "context.sql"]):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        for m in re.finditer(r"([\w.]+) GLOB '\{\{(\w+)\}\}'", text):
+            col, param = m.groups()
+            if f"{col} = '{{{{{param}}}}}' OR {col} GLOB" not in text:
+                alone.append(f"{path.name}: {m.group(0)}")
+    assert not alone, f"held against a GLOB alone: {alone}"
+
+
+@check("a code string that is the anchor, brackets and all, is a name the code writes")
+def _(report):
+    """The check before recording holds an anchor against the strings of the
+    code. As a GLOB, `Feed[main] shown` was not the string `"Feed[main]
+    shown"`, and the anchor the code writes was said to be written nowhere,
+    with that very string offered in its place (#1012)."""
+    from . import anchors
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "app/src/main/java/Feed.kt"
+        src.parent.mkdir(parents=True)
+        src.write_text('object Feed { const val SHOWN = "Feed[main] shown" }\n', encoding="utf-8")
+        missing = anchors.unwritten(root, ["Feed[main] shown"], "AGENTTMP_")
+    assert missing == {}, missing
+
+
 @check("async sections stay out of every detector")
 def _(report):
     # They have no thread to be counted under. A detector that shows one has
@@ -2589,15 +2738,17 @@ def _(report):
 
 
 def _collect_ending(ended: list[str], n: int, where: Path, started: str = ".Main",
-                    dump: str = "", pulled: bytes = b"a trace",
-                    **kw) -> tuple[list[dict], list[str]]:
+                    dump: str = "", pulled: bytes = b"a trace", resolved: str = "",
+                    root: Path | None = None, **kw) -> tuple[list[dict], list[str]]:
     """`runner.collect` of `n` cold launches of `com.example.app/<started>` on
     a fake device whose `am start -W` says each ended on the next of `ended`,
     in the short form a phone prints, or as the component given where it
     holds a `/`: the recordings made, and what was said. `dump` is what
     `dumpsys package` answers, and every call of it is said as `dumpsys`;
-    `pulled` is every trace the device hands over, and `kw` goes to
-    `collect` as it is."""
+    `resolved` is what `cmd package resolve-activity` answers, and every call
+    of it is said as `resolve`; `root` is the project's checkout, an empty
+    folder by default; `pulled` is every trace the device hands over, and
+    `kw` goes to `collect` as it is."""
     from . import runner
     package, serial = "com.example.app", "emulator-5554"
     ended = list(ended)
@@ -2621,6 +2772,9 @@ def _collect_ending(ended: list[str], n: int, where: Path, started: str = ".Main
         if text == f"dumpsys package {package}":
             said.append("dumpsys")
             return dump
+        if text.startswith("cmd package resolve-activity"):
+            said.append("resolve")
+            return resolved
         if args[3:4] == ["pull"]:
             Path(args[-1]).write_bytes(pulled)
         return ""
@@ -2629,9 +2783,11 @@ def _collect_ending(ended: list[str], n: int, where: Path, started: str = ".Main
     real = runner._run
     runner._run = adb
     try:
-        made = runner.collect(package, where, n, name="run",
-                              section={"activity": f"{package}/{started}"}, log=said.append,
-                              **kw)
+        with tempfile.TemporaryDirectory() as empty:
+            made = runner.collect(package, where, n, name="run",
+                                  section={"activity": f"{package}/{started}",
+                                           "project_root": str(root or empty)},
+                                  log=said.append, **kw)
     finally:
         runner._run = real
     return made, said
@@ -2682,6 +2838,78 @@ def _(report):
         assert _one_journey(reports) == (reports, [], None), "one journey: all read"
 
 
+# What `cmd package resolve-activity -n` prints of an `<activity-alias>`, cut
+# to the lines `runner.alias_target` reads, and of an activity that is none.
+_RESOLVED_ALIAS = """\
+priority=0 preferredOrder=0 match=0x0 specificIndex=-1 isDefault=false
+ActivityInfo:
+  name=com.example.app.Launcher
+  packageName=com.example.app
+  enabled=true exported=true directBootAware=false
+  taskAffinity=com.example.app targetActivity=com.example.app.SplashActivity persistableMode=PERSIST_ROOT_ONLY
+"""
+_RESOLVED_PLAIN = _RESOLVED_ALIAS.replace("targetActivity=com.example.app.SplashActivity",
+                                          "targetActivity=null")
+_ALIAS_MANIFEST = """\
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <activity android:name=".SplashActivity" />
+    <!-- <activity-alias android:name=".Old" android:targetActivity=".Gone" /> -->
+    <activity-alias android:name=".Launcher" android:targetActivity=".SplashActivity">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity-alias>
+  </application>
+</manifest>
+"""
+
+
+@check("collect: a launcher that is an activity-alias ends on the activity it stands "
+       "for, and that is said as no other activity")
+def _(report):
+    """An app whose launcher is an `<activity-alias>` has `scan` write the
+    alias, the component the launcher starts; `am start -W` answers with the
+    activity behind it, and `collect` said under every set that the app had
+    gone on to another activity by itself, while `analyze` named the alias
+    (#1007). What the alias stands for is read once, from the device, or from
+    the project's manifests where the device does not say, and kept with the
+    record. A launch that ends on another activity still is said."""
+    from . import runner
+    splash = "com.example.app/com.example.app.SplashActivity"
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([".SplashActivity"], 3, Path(tmp), started=".Launcher",
+                                     resolved=_RESOLVED_ALIAS)
+        assert not any("ended on" in s for s in said), said
+        assert said.count("resolve") == 1, "read once, at the first launch that looked elsewhere"
+        kept = [runner.launch_record(r["path"]) for r in made]
+        assert all(k["target"] == splash and k["activity"] == splash
+                   and not k["notes"] for k in kept), kept
+        assert runner.activities_said(made) is None, runner.activities_said(made)
+    with tempfile.TemporaryDirectory() as tmp:
+        checkout = Path(tmp) / "app"
+        (checkout / "app/src/main").mkdir(parents=True)
+        (checkout / "app/build.gradle.kts").write_text(
+            'android {\n    namespace = "com.example.app"\n}\n', encoding="utf-8")
+        (checkout / "app/src/main/AndroidManifest.xml").write_text(_ALIAS_MANIFEST,
+                                                                    encoding="utf-8")
+        made, said = _collect_ending([".SplashActivity"], 2, Path(tmp) / "traces",
+                                     started=".Launcher", resolved=_RESOLVED_PLAIN,
+                                     root=checkout)
+        assert not any("ended on" in s for s in said), "the manifest says it: " + str(said)
+        assert runner.launch_record(made[0]["path"])["target"] == splash
+    with tempfile.TemporaryDirectory() as tmp:
+        made, said = _collect_ending([".Main"], 2, Path(tmp), started=".Launcher",
+                                     resolved=_RESOLVED_ALIAS)
+        under = [s.strip() for s in said if "the launch ended on" in s]
+        assert under == ["the launch ended on com.example.app.Main, not on the "
+                         "com.example.app.Launcher it started: the app went on to another "
+                         "activity by itself"], said
+        assert (runner.activities_said(made) or "").startswith(
+            "every launch of the 2 ended on com.example.app.Main"), made
+
+
 @check("launch window: says which activity the launch ended on, and names the app's "
        "BOOT_COMPLETED receiver inside it as the reset's work")
 def _(report):
@@ -2708,6 +2936,120 @@ def _(report):
     assert said in render_mod.overview(got), "and in the overview analyze prints"
     plain = report["window"]
     assert plain.get("boot_receivers") is None and "activity" not in plain, plain
+
+
+def _handed(folder: str, **build) -> tuple[dict, Path]:
+    """`fixture.handover` written into `folder` and analysed with `window:
+    launch`: the report, and the trace."""
+    trace = Path(folder) / "startup_iter000.perfetto-trace"
+    trace.write_bytes(fixture.handover(**build))
+    return _analyze(trace, Config(_HANDOVER_CONFIG)), trace
+
+
+_HANDOVER_CONFIG = {"project": {"package": fixture.APP_NAME, "process": fixture.APP_NAME},
+                    "scenario": {"name": "startup", "window": "launch"}}
+
+
+@check("launch window: a start the app hands over after its first frame runs on to the "
+       "end of the launch it went on to, and says so")
+def _(report):
+    """A splash that draws a frame and then, by itself, starts the app's
+    main activity and finishes, is one launch for a person and two for the
+    platform: the second `completed-same-process`. The window closed on the
+    first: on an open-source app 181 ms of the 690 to the map, with 181 ms of
+    the app's native start on the main thread after it, outside, and the
+    report and the page called the work nobody names fine (#1008). The
+    window runs on through each launch the app went on to by itself, with
+    nothing touched between and the screen before finished, and says where
+    the first frame was. A launch after a tap, or a screen opened over one
+    that stays, is not followed."""
+    import argparse
+
+    from . import launch as launch_mod
+    from . import plain as plain_mod
+    from . import render as render_mod
+    from .main import _scenario_ran
+    with tempfile.TemporaryDirectory() as tmp:
+        got, trace = _handed(tmp)
+        stop, note = _scenario_ran(Config(_HANDOVER_CONFIG), trace,
+                                   argparse.Namespace(tp_binary=_binary))
+    w = got["window"]
+    assert _window_ms(got) == (fixture.HANDOVER_LAUNCH_MS[0], fixture.HANDOVER_NEXT_MS[1]), \
+        _window_ms(got)
+    assert w["defined_by"] == launch_mod.HANDOVER, w["defined_by"]
+    assert w["handover"] == {
+        "from": fixture.HANDOVER_SPLASH, "to": fixture.HANDOVER_MAIN,
+        "first_frame_ms": 260.0, "after_ms": 255.0, "launches": 1}, w["handover"]
+    assert w["activity"] == fixture.HANDOVER_MAIN, w.get("activity")
+    # The app's own start after the splash's frame is in the window now, and
+    # is the main thread's work nobody named.
+    blind = next(d for d in got["detectors"] if d["id"] == "uninstrumented_cpu")
+    init = fixture.HANDOVER_INIT_MS[1] - fixture.HANDOVER_INIT_MS[0]
+    assert [(r["location"], r["total_ms"]) for r in blind["rows"]] == [("main", init)], \
+        blind["rows"]
+    text = render_mod.to_markdown(got)
+    said = (f"`{fixture.HANDOVER_SPLASH}` drew the launch's first frame at 260 ms. 255 ms "
+            f"later, with nothing touched, the app went on by itself to "
+            f"`{fixture.HANDOVER_MAIN}` and finished the one before")
+    assert said in text and "the end of the launch the app handed its start over to" in text, \
+        text[:1500]
+    assert said in render_mod.overview(got), "and in the overview analyze prints"
+    page = plain_mod.verdict(got)["text"]
+    assert page.startswith("The launch takes 0.9 s. It runs past SplashActivity's first "
+                           "frame at 0.3 s: the app went on to MainActivity by itself"), page
+    # Over two repeats: the medians, and how many made it.
+    both = launch_mod.merged([w, w], 2)
+    assert both["defined_by"] == launch_mod.HANDOVER and both["handover"]["runs"] == "2/2", both
+    # And never against a launch closed on its first frame.
+    apart = launch_mod.differ({"window": {"defined_by": launch_mod.LAUNCH}}, got)
+    assert apart and "run on through the launches the app handed over to" in apart, apart
+    # collect's first look at the set says it.
+    assert stop is None and note and note.startswith(
+        "repeat 1 handed its start over: `SplashActivity` drew the launch's first frame at "
+        "260 ms, and 255 ms later the app went on by itself to `MainActivity`"), note
+    for build in ({"touched": True}, {"kept": True}):
+        with tempfile.TemporaryDirectory() as tmp:
+            alone, _ = _handed(tmp, **build)
+        a = alone["window"]
+        assert _window_ms(alone) == fixture.HANDOVER_LAUNCH_MS and a["defined_by"] == "launch" \
+            and "handover" not in a and a["activity"] == fixture.HANDOVER_SPLASH, (build, a)
+        assert "handed" not in render_mod.to_markdown(alone), build
+
+
+@check("launch window: a launcher that is an activity-alias is named with the activity "
+       "it stands for")
+def _(report):
+    """The trace names an alias by itself, `performCreate:<the alias>`, and
+    `am start -W` by the activity behind it: `collect` said the launch ended
+    on one, `analyze` on the other, and neither said they were one (#1007).
+    The record `collect` keeps says what the alias stands for, and one kept
+    before it did says it all the same: `am start -W` named an activity the
+    trace never created, and the trace created the one started."""
+    from . import recording
+    from . import render as render_mod
+    package = fixture.APP_NAME
+    named = (f"`{fixture.HANDOVER_ALIAS}` (an alias of `{fixture.HANDOVER_SPLASH}`)")
+    asked = {"asked": f"{package}/{fixture.HANDOVER_ALIAS}",
+             "activity": f"{package}/{fixture.HANDOVER_SPLASH}"}
+    for record, build in ((asked, {"kept": True}),
+                          ({**asked, "target": asked["activity"]}, {"kept": True}),
+                          (asked, {})):
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = Path(tmp) / "startup_iter000.perfetto-trace"
+            trace.write_bytes(fixture.handover(splash=fixture.HANDOVER_ALIAS, **build))
+            recording.write(trace, {"runner": "launch", "launch": record})
+            got = _analyze(trace, Config(_HANDOVER_CONFIG))
+        assert got["window"]["alias"] == {"name": fixture.HANDOVER_ALIAS,
+                                          "of": fixture.HANDOVER_SPLASH}, got["window"]
+        text = render_mod.to_markdown(got)
+        # Where it handed over, the first frame is the alias's.
+        said = (f"{named} drew the launch's first frame" if not build else
+                f"The launch ended on {named}.")
+        assert said in text, text[:1500]
+    # Without a record there is nothing to tell an alias by: the trace's name.
+    with tempfile.TemporaryDirectory() as tmp:
+        got, _ = _handed(tmp, splash=fixture.HANDOVER_ALIAS, kept=True)
+    assert "alias" not in got["window"], got["window"]
 
 
 # A permission dialog's component as `am start -W` names it, and what
@@ -3509,6 +3851,90 @@ def _(report):
     recording, beside the frames they are a share of, so `compare --plain`
     can judge a frame-paced scenario by each run's share (#586)."""
     assert report["window"]["frames"] == {"count": 24, "late": 5}, report["window"]["frames"]
+
+
+# What the report says of the surface `fixture.build(surface=…)` plants.
+_UNJUDGED_SAID = (
+    f"> ⚠️ `frame_jank` judged the 24 frames the frame timeline holds of the app. The "
+    f"app also presented 60 frames on `{fixture.SURFACE}` with `QueuePresentKHR` on "
+    f"`Thread-7`, and the timeline holds none of those: whether that surface moved "
+    f"smoothly is not in `frame_jank`'s rows, silent or not.")
+
+
+@check("frame_jank: frames a thread of the app presents on a surface the timeline "
+       "does not hold are counted and said, by surface, thread and call")
+def _(report):
+    """A map drawn by Vulkan into a `SurfaceView` from a native thread: 1000
+    presents in a pan-and-zoom, none of them in the frame timeline, which
+    held the 321 frames of the app's window; the report said "Hardly any
+    frame came late" of a map `frame_jank` never saw (#1011). Here 60 such
+    presents in the window and 3 after it, the RenderThread's 5 frames of the
+    window beside them, and the timeline's 24: the surface is listed with
+    the 60 of the window, its thread and its call, and said in the full
+    report, the overview, the window, `frame_jank`'s own view and its plain
+    reading. The window's own queue is not a surface the timeline misses,
+    and a surface whose frames the timeline holds (40 of 60) is not listed
+    at all, nor is anything in the fixture without one.
+    """
+    from . import plain
+    from . import render as render_mod
+    from . import report as report_mod
+    got = _recorded(surface="unjudged")
+    frames = got["window"]["frames"]
+    assert frames == {"count": 24, "late": 5, "unjudged": [
+        {"surface": fixture.SURFACE, "thread": "Thread-7", "call": "QueuePresentKHR",
+         "presents": 60, "judged": 0}]}, frames
+    assert _UNJUDGED_SAID in report_mod.to_markdown(got), "in the full report"
+    for view in (render_mod.overview(got), render_mod.window_view(got),
+                 render_mod.detector_view(got, "frame_jank")):
+        assert _UNJUDGED_SAID in view, view[:1500]
+    det = next(d for d in plain.annotate(got)["detectors"] if d["id"] == "frame_jank")
+    assert det["plain"]["also"] == (
+        f"This checked the 24 frames of the app's windows. The app drew 60 more on a "
+        f"surface of its own (`{fixture.SURFACE}`), and none of those were checked, so "
+        f"this says nothing about whether it moved smoothly."), det["plain"]
+    held = _recorded(surface="judged")["window"]["frames"]
+    assert held == {"count": 64, "late": 5}, held
+    assert "unjudged" not in report["window"]["frames"], report["window"]["frames"]
+    assert not any("judged the" in line for line in report_mod.to_markdown(report).splitlines())
+
+
+@check("frame_jank: over repeats a surface the timeline does not hold keeps each run's "
+       "presents, and a fine check still says what it did not see")
+def _(report):
+    """Merged, the presents are the median with each repeat's in `values`,
+    none in a repeat that did not list the surface, and the sentence says in
+    how many repeats it was there. When `frame_jank` found nothing, the page
+    and `report --plain` say its clean sentence with what it did not see,
+    rather than calling the frames fine and stopping there (#1011).
+    """
+    import copy
+
+    from . import plain
+    from . import render as render_mod
+    from . import report as report_mod
+    from .pages import report_page
+    one = _recorded(surface="unjudged")
+    runs = [copy.deepcopy(one) for _ in range(3)]
+    del runs[2]["window"]["frames"]["unjudged"]
+    merged = report_mod.aggregate(runs)
+    listed = merged["window"]["frames"]["unjudged"]
+    assert listed == [{"surface": fixture.SURFACE, "thread": "Thread-7",
+                       "call": "QueuePresentKHR", "presents": 60, "values": [60, 60, 0],
+                       "judged": 0, "runs": "2/3"}], listed
+    said = render_mod.overview(merged)
+    assert (f"60 frames on `{fixture.SURFACE}` with `QueuePresentKHR` on `Thread-7`, "
+            f"in 2 of 3 repeats, and the timeline holds none of those") in said, said[:1500]
+    quiet = copy.deepcopy(one)
+    jank = next(d for d in quiet["detectors"] if d["id"] == "frame_jank")
+    jank["rows"] = []
+    plain.annotate(quiet)
+    assert jank["attention"] == plain.FINE, jank["attention"]
+    shown = next(c for c in report_page._checks(quiet) if c["id"] == "frame_jank")["said"]
+    assert shown == f"{jank['plain']['clean']} {jank['plain']['also']}", shown
+    lines = plain.render(quiet, width=100)
+    assert " ok Frames that came late" in lines and "Hardly any frame came late. This " \
+        "checked the 24 frames" in lines.replace("\n    ", " "), lines
 
 
 def _drag(variant: dict) -> dict:
@@ -5378,11 +5804,11 @@ def _(report):
     assert facts.app["application_id"] == "com.example.app", facts.app
     assert by["freeDebug"]["application_id"] == "com.example.app.free.debug", by["freeDebug"]
     assert by["freeRelease"]["application_id"] == "com.example.app.free", by["freeRelease"]
-    assert by["paidQa"]["unread"] == ["`applicationIdSuffix = rootProject.ext.qaSuffix` "
+    assert by["paidQa"]["unread"] == ["`applicationIdSuffix rootProject.ext.qaSuffix` "
                                       "in buildTypes.qa of app/build.gradle"], by["paidQa"]
     assert not by["paidRelease"].get("unread"), by["paidRelease"]
     assert any("rootProject.ext.qaSuffix" in n and "pm list packages" in n for n in facts.notes), facts.notes
-    assert "  _source: default" in draft and "not read: `applicationIdSuffix = rootProject.ext.storeSuffix`" \
+    assert "  _source: default" in draft and "not read: `applicationIdSuffix rootProject.ext.storeSuffix`" \
         in draft, draft
 
 
@@ -5407,6 +5833,143 @@ def _(report):
     assert facts.app["activity"] == "com.example.app.Launcher", facts.app
     assert '  activity: "com.example.app.Launcher"' in draft, draft
     assert named == "com.example.app.Launcher", named
+
+
+def _gradle_in_a_folder_repo(root: Path) -> None:
+    """A repository whose Gradle build is in `android/`, beside a git
+    submodule with an example app of its own that sorts first (#1003). The
+    root build script keeps the applicationId in `ext` (#1004), and a build
+    type is made profileable by its own source set's manifest, with two
+    flavours of which the second is marked `isDefault` (#1006)."""
+    (root / ".gitmodules").write_text('[submodule "vendor/lib"]\n\tpath = vendor/lib\n'
+                                      '\turl = https://example.com/lib.git\n', encoding="utf-8")
+    demo = root / "vendor/lib/examples/demo/android"
+    (demo / "app/src/main").mkdir(parents=True)
+    (demo / "settings.gradle").write_text("include ':app'\n", encoding="utf-8")
+    (demo / "app/build.gradle").write_text(
+        "android { namespace 'org.example.demo'\n defaultConfig { applicationId 'org.example.demo' } }\n",
+        encoding="utf-8")
+    (demo / "app/src/main/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+        f'<activity android:name=".MainActivity">{_LAUNCHER_FILTER}</activity></application></manifest>\n',
+        encoding="utf-8")
+    android = root / "android"
+    app = android / "app"
+    (app / "src/main/java/com/example/app").mkdir(parents=True)
+    (app / "src/profileable").mkdir(parents=True)
+    (android / "settings.gradle").write_text("rootProject.name = 'Example'\ninclude ':app'\n", encoding="utf-8")
+    (android / "build.gradle").write_text(
+        "rootProject.ext {\n    def ver = version()\n    versionCode = ver.V1\n"
+        "    appId = 'com.example.app'\n}\n", encoding="utf-8")
+    (app / "build.gradle").write_text(
+        "plugins { id 'com.android.application' }\n"
+        "android {\n"
+        "    namespace 'com.example.app'\n"
+        "    defaultConfig { applicationId rootProject.ext.appId }\n"
+        "    flavorDimensions += 'store'\n"
+        "    productFlavors {\n"
+        "        a { dimension 'store' }\n"
+        "        b { dimension 'store'\n            isDefault = true }\n"
+        "    }\n"
+        "    buildTypes {\n"
+        "        release { minifyEnabled true }\n"
+        "        profileable { initWith release\n            applicationIdSuffix '.profileable' }\n"
+        "    }\n}\n", encoding="utf-8")
+    (app / "src/main/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>'
+        f'<activity android:name=".MainActivity">{_LAUNCHER_FILTER}</activity></application></manifest>\n',
+        encoding="utf-8")
+    (app / "src/profileable/AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>\n'
+        '  <profileable\n    android:shell="true" />\n</application></manifest>\n', encoding="utf-8")
+    (app / "src/main/java/com/example/app/MainActivity.kt").write_text(
+        "package com.example.app\nclass MainActivity\n", encoding="utf-8")
+
+
+@check("scan: the app is the module the project's own Gradle build includes, read in the folder that "
+       "build is in, not a git submodule's example that sorts first")
+def _(report):
+    """A repository that keeps its Gradle build in `android/`, beside a C++
+    core and git submodules, had a launcher Activity in a submodule's example
+    too. `3party` sorts before `android`, the first was read, and the whole
+    draft was the example's: its package, its launcher, its folders (#1003).
+    A module a settings file of the project includes now comes before one
+    in a submodule or a third-party folder, its module path is its own
+    build's, and the paths in the draft are from the root, where the config
+    goes.
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _gradle_in_a_folder_repo(root)
+        facts = scan.describe(root, devices=False)
+        draft = "\n".join(scan.skeleton(facts))
+    app = facts.app
+    assert app and app["dir"] == "android/app" and app["module"] == ":app", app
+    assert app["gradle_root"] == "android", app
+    assert any("in the git submodule vendor/lib" in n for n in facts.notes), facts.notes
+    assert any(n.startswith("the Gradle build is in android/") for n in facts.notes), facts.notes
+    assert facts.allowed == ["android/app/src/main"], facts.allowed
+    assert "org.example.demo" not in draft, draft
+    assert "  mapping: android/app/build/outputs/mapping/bProfileable/mapping.txt" in draft, draft
+
+
+@check("scan: an applicationId the root build script keeps in ext is read, as each form writes and reads it")
+def _(report):
+    """`applicationId rootProject.ext.appId` in the app's script, `appId =
+    'com.example.app'` in an `ext` block of the root one: the note quoted the
+    expression, and the draft said `com.example.app`'s placeholder for want
+    of a file one away (#1004). The older Groovy way to share a value
+    between modules, and still a common one.
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _gradle_in_a_folder_repo(root)
+        facts = scan.describe(root, devices=False)
+    assert facts.app["application_id"] == "com.example.app", facts.app
+    assert facts.app["application_id_from"] == "`rootProject.ext.appId` in android/build.gradle", facts.app
+    by = {v["name"]: v for v in facts.variants}
+    assert by["bProfileable"]["application_id"] == "com.example.app.profileable", by["bProfileable"]
+    assert not any(v.get("unread") for v in facts.variants), facts.variants
+    assert scan.extra_values(scan._strip(
+        "ext.appId = 'a'\next { other = \"b\"; def local = 'c' }\nextra[\"k\"] = \"d\"\n"
+        "val v by extra(\"e\")\n")) == {"other": "b", "appId": "a", "k": "d", "v": "e"}
+    code = scan.BuildCode(extra={"appId": "com.example.app"}, extra_file="build.gradle")
+    for read in ("rootProject.ext.appId", "rootProject.appId", 'rootProject.extra["appId"] as String',
+                 "project.appId", "appId"):
+        assert scan.resolve(read, code) == ("com.example.app", "build.gradle"), read
+    # The module's own `ext` is its own: the root's is not it.
+    assert scan.resolve("ext.appId", code) is None
+
+
+@check("scan: a build type its own source set's manifest makes profileable is the one to measure on, "
+       "of the flavour isDefault marks")
+def _(report):
+    """`profileable { initWith release }` carried `<profileable
+    android:shell="true"/>` in `src/profileable/AndroidManifest.xml`, which
+    AGP merges into that build type's variants alone. Read off `src/main`
+    only, it was "unknown" and ranked below release, which shows no
+    application slices; and of two flavours the one first by name was taken
+    over the one `isDefault = true` marks (#1006).
+    """
+    from . import scan
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _gradle_in_a_folder_repo(root)
+        facts = scan.describe(root, devices=False)
+        text = scan.render(facts)
+        (root / "android/app/src/profileable/AndroidManifest.xml").unlink()
+        bare = scan.describe(root, devices=False)
+    chosen = scan.preferred(facts.variants)
+    assert chosen["name"] == "bProfileable", chosen
+    assert chosen["measure"].startswith("yes") and "src/profileable/AndroidManifest.xml" in chosen["measure"], chosen
+    assert facts.app["profileable_by"] == ["profileable"], facts.app
+    assert not any("has no <profileable" in n for n in facts.notes), facts.notes
+    assert "profileable: yes for `profileable`, by its own manifest, " \
+           "android/app/src/profileable/AndroidManifest.xml" in text, text[:800]
+    assert scan.preferred(bare.variants)["name"] == "bRelease", bare.variants
+    assert any("has no <profileable" in n for n in bare.notes), bare.notes
 
 
 @check("collect: several launchers are listed and the project's own is named; runner.activity takes a class name")
@@ -5656,6 +6219,55 @@ def _(report):
     assert gradle["install"] == [] and ("the traces were recorded before it was taken out. In "
                                         "gradle mode `echolot collect` builds the app from the "
                                         "code as it is now") in gradle_text, gradle_text[:3000]
+
+
+@check("markers: a temporary marker in C or C++ is in the code, not taken out of it")
+def _(report):
+    """The last marker of a hunt behind a JNI call goes into the C++ body.
+
+    The walk was Kotlin and Java alone, and `analyze` said the name in the
+    traces was "nowhere in the code" and asked for a build and a new
+    recording, over a build that was current (#1009). C and C++ are read
+    like the rest; a literal the compiler joins to the next one — a macro's
+    `"AGENTTMP_" #x` — is the fixed start of the names it makes.
+    """
+    import copy
+
+    from .main import _markers_against_code
+
+    def removed(root: Path) -> dict | None:
+        rep = copy.deepcopy(report)
+        with recorder.isolated():
+            _markers_against_code(rep, Config.load(root / "echolot.yml"))
+        return rep["markers"].get("removed")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _android_repo(root)
+        (root / "echolot.yml").write_text(
+            "project:\n  package: com.example.app\nrunner:\n  mode: launch\n", encoding="utf-8")
+        (root / "app/src/main/java/com/example/app/App.kt").write_text(
+            "class App {\n"
+            '    fun a() = trace("AGENTTMP_seed_first") { }\n'
+            '    fun b() = trace("AGENTTMP_seed_again") { }\n'
+            '    fun c() = trace("AGENTTMP_parse_json") { }\n'
+            '    fun d(n: String) = trace("AGENTTMP_insert_$n") { }\n}\n', encoding="utf-8")
+        native = root / "app/src/main/cpp/bridge.cpp"
+        native.parent.mkdir(parents=True)
+        native.write_text('void Seed() {\n  ATrace_beginSection("AGENTTMP_seed_third");\n'
+                          "  Load();\n  ATrace_endSection();\n}\n", encoding="utf-8")
+        in_cpp = removed(root)
+        native.unlink()
+        header = root / "app/src/main/cpp/trace.h"
+        header.write_text('#define SEED(x) ATrace_beginSection("AGENTTMP_seed_" #x)\n',
+                          encoding="utf-8")
+        joined = removed(root)
+        header.unlink()
+        gone = removed(root)
+    assert in_cpp is None, in_cpp
+    assert joined is None, joined
+    # Without either, the name is one the code no longer makes, as before.
+    assert gone is not None and gone["names"] == ["AGENTTMP_seed_third"], gone
 
 
 # --- the domains map -------------------------------------------------------
@@ -7404,6 +8016,52 @@ def _(report):
     assert mk.is_applied_line(f'  android.os.Trace.endSection(); {mk.TAG}')  # Java
     assert not mk.is_applied_line(f'    doWork() {mk.TAG}')
     assert not mk.is_applied_line(f'    // TODO {mk.TAG} clean this up')
+
+
+@check("mark: a marker added by hand in C or C++ is left in the code, by its place, "
+       "until it is taken out")
+def _(report):
+    """`hunt`, its cleanup check and `--remove` all read the markers off one walk.
+
+    It was Kotlin and Java alone. A hunt put its last marker in the C++ body
+    of a JNI call, a project's wrapper object inside a block opened for its
+    scope; `hunt` counted the Java ones, and once those were gone `hunt
+    --verdict` said the sources were clean with it compiled in (#1009).
+    `--remove` deletes only the lines `--apply` writes, and a native marker
+    has no one shape, so it is named for removal by hand, file and line,
+    and the file is left as it was.
+    """
+    from . import hunt as hunt_mod
+    from . import mark as mk
+    from . import verdict as verdict_mod
+
+    rel = "app/src/main/cpp/bridge.cpp"
+    text = ('#include "scoped_trace.h"\n\nvoid SetDir(const char* dir) {\n'
+            "  {\n"
+            '    ScopedTrace section("AGENTTMP_set_dir");\n'
+            "    Store(dir);\n"
+            "  }\n}\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        path = root / rel
+        path.parent.mkdir(parents=True)
+        path.write_text(text, encoding="utf-8")
+        (root / "app/build").mkdir()
+        (root / "app/build/gen.cpp").write_text('"AGENTTMP_built"\n', encoding="utf-8")
+        markers = mk.Markers(root)
+        left = markers.leftovers()
+        hand: list[tuple[str, int, str]] = []
+        touched, kept = markers.remove(hand=hand)
+        after = path.read_text(encoding="utf-8")
+    assert (left["markers"], left["removable"], left["hand"]) == (1, 0, [f"{rel}:5"]), left
+    assert left["places"] == [rel], left
+    note = " ".join(hunt_mod.leftover_lines(left))
+    assert ("1 AGENTTMP_ marker(s) still in 1 file(s) — `echolot mark --remove` takes out 0, "
+            f"1 were added by hand and need removing by hand: {rel}:5") in note, note
+    assert verdict_mod.cleanup_agrees("removed", left) is False
+    assert touched == [] and kept == [], (touched, kept)
+    assert hand == [(rel, 5, 'ScopedTrace section("AGENTTMP_set_dir");')], hand
+    assert after == text, after
 
 
 @check("domains: no instrumentation is a report, not an empty output")

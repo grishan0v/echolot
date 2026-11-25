@@ -69,7 +69,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .config import DEFAULT_PREFIX, ConfigError
-from .domains import files_ending, files_named, gradle_module, in_test_set, submodules
+from .domains import (NATIVE_EXT, files_ending, files_named, gradle_module, in_test_set,
+                      submodules)
 from .domains import source_files as domains_source_files
 
 TAG = "// echolot:mark"
@@ -168,7 +169,6 @@ _NAMED_ALREADY = re.compile(
 # named, since what it holds is not on the line.
 _JNI_ATTACH = re.compile(r"\b(AttachCurrentThread(?:AsDaemon)?)\s*\(")
 _NO_ATTACH_ARGS = re.compile(r"(?:nullptr|NULL|0|\(\s*void\s*\*\s*\)\s*(?:0|NULL|nullptr))")
-NATIVE_EXT = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
 _JVM_EXT = (".kt", ".java")
 # Linux truncates a thread's `comm` to 15 characters, and the trace carries
 # what is left: `pool-12-thread-` and `m.example.myapp`, the main thread of
@@ -2302,13 +2302,62 @@ def apply(root: Path, pl: Plan) -> Applied:
     return Applied(done, unreadable, unwritable, already)
 
 
-def remove(root: Path, unwritable: list[str] | None = None
+def marker_files(root: Path) -> list[Path]:
+    """Every file a temporary marker may be in: Kotlin, Java, C and C++,
+    the whole tree.
+
+    One walk for every reader of the markers — `remove`, `Markers.leftovers`,
+    `named` — so what `--remove` reads is what the others count. It was
+    Kotlin and Java alone, and a hunt in an app whose work sits behind a
+    JNI call put its last marker in the C++ body: `analyze` called the name
+    stale, "nowhere in the code", `hunt` counted the Java markers and not
+    that one, and `hunt --verdict` said the sources were clean while it was
+    compiled into the library (#1009). `ATrace_beginSection("…")`, a scoped
+    `ATRACE_NAME("…")` or a project's own wrapper puts the name in the trace
+    the way `android.os.Trace.beginSection` does.
+    """
+    return domains_source_files(root, native=True)
+
+
+def text_with(path: Path, needles: tuple[bytes, ...]) -> str | None:
+    """The file's text when its bytes hold one of these, else None.
+
+    Read as `read_source(strict=True)` reads it, so a file `remove` would
+    not write is one the counts pass over too. The bytes are looked at
+    first: the walk takes in C and C++, a vendored library can be tens of
+    thousands of files, and decoding each to find nothing in it cost more
+    than reading it.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if not any(n in data for n in needles):
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def remove(root: Path, unwritable: list[str] | None = None, prefix: str | None = None,
+           hand: list[tuple[str, int, str]] | None = None
            ) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
     """Delete every line `apply` wrote, under root.
 
     Returns (files edited, with the number of lines taken out of each; lines
     that carry the tag and were left in place, as file, line number after
     this pass, and the line itself).
+
+    With a `prefix` and a `hand` list, every other line with the prefix on
+    it is added to `hand` the same way: a marker added by hand, without the
+    tag, in any of the languages `marker_files` reads. It stays. A marker
+    in C or C++ has no one shape — an `ATrace_beginSection` with its
+    `ATrace_endSection` and an `#include`, a scoped `ATRACE_NAME`, a
+    project's wrapper object inside a block opened for its scope — and
+    deleting the line that has the name leaves the rest behind, a block or
+    an end with no begin. `--apply` writes none of them; `--remove` deletes
+    the shapes it writes and names the others.
 
     A line goes only when it has exactly the shape `apply` writes — see
     `_APPLIED_LINE` — and it goes whole, line ending and all, so the lines
@@ -2329,17 +2378,19 @@ def remove(root: Path, unwritable: list[str] | None = None
     root = root.resolve()
     touched: list[tuple[str, int]] = []
     kept: list[tuple[str, int, str]] = []
-    for p in domains_source_files(root):
-        try:
-            text = read_source(p, strict=True)
-        except (OSError, UnicodeDecodeError):
-            continue
-        if TAG not in text:
+    named_too = bool(prefix) and hand is not None
+    needles = (TAG.encode(), str(prefix).encode()) if named_too else (TAG.encode(),)
+    for p in marker_files(root):
+        text = text_with(p, needles)
+        if text is None:
             continue
         lines = text.split("\n")
         rest = [ln for ln in lines if not is_applied_line(ln)]
         rel = _rel(p, root)
         kept += [(rel, n, ln.strip()) for n, ln in enumerate(rest, 1) if is_kept_line(ln)]
+        if named_too:
+            hand += [(rel, n, ln.strip()) for n, ln in enumerate(rest, 1)
+                     if str(prefix) in ln and not is_kept_line(ln)]
         if len(rest) < len(lines):
             try:
                 p.write_bytes("\n".join(rest).encode("utf-8"))
@@ -2394,10 +2445,11 @@ class Markers:
         """Whether markers may go into this path, relative to the root."""
         return under_allowed(rel, self.roots)
 
-    def remove(self, unwritable: list[str] | None = None
+    def remove(self, unwritable: list[str] | None = None,
+               hand: list[tuple[str, int, str]] | None = None
                ) -> tuple[list[tuple[str, int]], list[tuple[str, int, str]]]:
-        """`mark --remove`: see `remove`."""
-        return remove(self.root, unwritable)
+        """`mark --remove`: see `remove`, with this project's prefix."""
+        return remove(self.root, unwritable, self.prefix, hand)
 
     def leftovers(self) -> dict[str, Any]:
         """Temporary markers still in the sources, and whether `--remove` can take them out.
@@ -2436,23 +2488,29 @@ class Markers:
         Its places are its own list: `files` holds the markers and the lines
         `--remove` deletes, which the sentences about those count files by;
         `places` is every file with anything of the markers in it.
+
+        `hand` is where each marker added by hand is, `file:line`: the
+        prefix on a line `--remove` neither deletes nor already names in
+        `kept`, numbered as the file is now, like `kept`. A count
+        alone sent the human to find them, and the one in a `.cpp` file was
+        the one nobody found (#1009). Kotlin, Java, C and C++ are read
+        alike (`marker_files`).
         """
         prefix = self.prefix
         files: list[str] = []
         kept: list[str] = []
+        hand: list[str] = []
         total = tagged = lines = 0
         # The walk `mark --remove` takes and the text it reads, so the count
         # is of what it removes and the lines are the ones it leaves.
         try:
-            sources = domains_source_files(self.root)
+            sources = marker_files(self.root)
         except OSError:
             sources = []
+        needles = (prefix.encode(), TAG.encode())
         for p in sources:
-            try:
-                text = read_source(p, strict=True)
-            except (OSError, UnicodeDecodeError):
-                continue
-            if prefix not in text and TAG not in text:
+            text = text_with(p, needles)
+            if text is None:
                 continue
             rows = text.split("\n")
             rel = _rel(p, self.root)
@@ -2465,9 +2523,11 @@ class Markers:
             total += len(hits)
             tagged += sum(1 for ln in hits if is_applied_line(ln))
             lines += applied
+            hand += [f"{rel}:{n}" for n, ln in enumerate(rows, 1)
+                     if prefix in ln and not is_applied_line(ln) and not is_kept_line(ln)]
         places = list(dict.fromkeys([*files, *(k.rsplit(":", 1)[0] for k in kept)]))
         return {"files": files, "markers": total, "removable": tagged, "lines": lines,
-                "kept": kept, "places": places,
+                "kept": kept, "hand": hand, "places": places,
                 "outside": [f for f in places if not self.allowed(f)],
                 "prefix": prefix}
 
@@ -2504,10 +2564,11 @@ class Named:
     is every literal that is a whole name, tagged or not: a marker added by
     hand without the tag is in the code all the same. `heads` is every
     literal a name is put together from at run time — a template's or a
-    format's fixed start, a literal joined to more with `+`, the prefix on
+    format's fixed start, a literal joined to more with `+`, a C literal
+    the compiler joins to the next one (`"AGENTTMP_" #x`), the prefix on
     its own — and each one makes every name that starts with it. `files` is
-    how many Kotlin and Java files there were: none means no code to hold
-    anything against. `where` is the first place each of `exact` is written,
+    how many Kotlin, Java, C and C++ files there were: none means no code
+    to hold anything against. `where` is the first place each of `exact` is written,
     `path:line`, for a line that names a place to look (#500).
     """
 
@@ -2530,19 +2591,28 @@ class Named:
 def named(root: Path, prefix: str = DEFAULT_PREFIX) -> Named:
     """Every prefixed name in the code's string literals, in one walk.
 
-    The walk `remove` takes, over every Kotlin and Java file; a file without
-    the prefix in its bytes is not read further. `analyze` wants both halves
-    (#390, #393): the tagged names against what the traces lack, and all of
-    them against what the traces hold and the code no longer has.
+    The walk `remove` takes, over every Kotlin, Java, C and C++ file
+    (`marker_files`); a file without the prefix in its bytes is not read
+    further. `analyze` wants both halves (#390, #393): the tagged names
+    against what the traces lack, and all of them against what the traces
+    hold and the code no longer has. A marker in a `.cpp` file, behind a
+    JNI call, read as taken out of the code while the build that recorded
+    it was the current one (#1009).
     """
     root = root.resolve()
-    literal = re.compile('"(' + re.escape(prefix) + r'[^"\\]*)"(\s*(?:\+|\.plus\(|\.concat\())?')
+    name = '"(' + re.escape(prefix) + r'[^"\\]*)"'
+    joined = r'\s*(?:\+|\.plus\(|\.concat\()'
+    literal = re.compile(name + "(" + joined + ")?")
+    # C and C++ join more to a literal at compile time: the next literal, a
+    # macro's argument made a string (`"AGENTTMP_" #x`), a macro that expands
+    # to one. Only there: Kotlin's `"AGENTTMP_a" to 1` is a pair.
+    c_literal = re.compile(name + "(" + joined + r'|\s*(?=["#]|[A-Z_][A-Z0-9_]*\b))?')
     needle = prefix.encode()
     found: dict[str, list[str]] = {}
     exact: set[str] = set()
     heads: set[str] = set()
     where: dict[str, str] = {}
-    sources = domains_source_files(root)
+    sources = marker_files(root)
     for p in sources:
         try:
             data = p.read_bytes()
@@ -2551,9 +2621,10 @@ def named(root: Path, prefix: str = DEFAULT_PREFIX) -> Named:
         if needle not in data:
             continue
         rel = _rel(p, root)
+        rx = c_literal if p.name.endswith(NATIVE_EXT) else literal
         for number, line in enumerate(data.decode("utf-8", errors="replace").split("\n"), 1):
             tagged = TAG in line
-            for m in literal.finditer(line):
+            for m in rx.finditer(line):
                 text = m.group(1)
                 if tagged:
                     files = found.setdefault(text, [])
@@ -2562,7 +2633,7 @@ def named(root: Path, prefix: str = DEFAULT_PREFIX) -> Named:
                 fixed = head(text)
                 if fixed is not None:
                     heads.add(fixed)
-                elif m.group(2) or text == prefix:
+                elif m.group(2) is not None or text == prefix:
                     heads.add(text)
                 else:
                     exact.add(text)

@@ -296,9 +296,9 @@ def _anchor_candidates(tp, upid: int) -> None:
     folded: dict[str, dict] = {}
     for r in rows:
         # The numbers `family` folds, written as `*`: a `#` the name had of
-        # its own, as in `Choreographer#doFrame`, stays.
-        glob = names_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
-                                     str(r["name"]))
+        # its own, as in `Choreographer#doFrame`, stays. A name with a number
+        # is a GLOB, and a `[` of its own is escaped in it (#1012).
+        glob = names_mod.as_written(str(r["name"]))
         seen = folded.get(glob)
         if seen is None:
             folded[glob] = {"slice": glob, "thread": r["thread"], "n": r["n"], "dur": r["dur"] or 0}
@@ -312,6 +312,10 @@ def _anchor_candidates(tp, upid: int) -> None:
         print("\nA `*` stands for a number that differs in every recording: write the "
               "name as shown, a glob. One that matches a slice of every frame closes "
               "the window at the first such slice after it opens.")
+    if any(e in x["slice"] for x in top for e in ("[[]", "[*]", "[?]")):
+        print("\nIn such a glob a `[`, `*` or `?` of the name's own is written `[[]`, "
+              "`[*]`, `[?]`, so that it matches itself. A name without a `*` matches "
+              "as written, brackets and all.")
 
 
 # The sections Android writes itself, on the app's main thread, when a
@@ -1873,7 +1877,8 @@ def _name_coverage(tp, upid: int, masks):
     The distinction matters: a name dropped by `skip_glob` is a decision, not a
     miss. Lumping them together means calling people to fix what is not broken.
     SQLite evaluates the GLOB itself, so the answer is exact rather than
-    something that merely resembles GLOB.
+    something that merely resembles GLOB; and a mask written as a slice's
+    name matches that name, as the detectors read it (#1012).
     """
     positive: dict[str, set[str]] = defaultdict(set)
     negative: dict[str, set[str]] = defaultdict(set)
@@ -1884,7 +1889,7 @@ def _name_coverage(tp, upid: int, masks):
             FROM slice s
             JOIN thread_track tt ON s.track_id = tt.id
             JOIN thread t        ON tt.utid = t.utid
-            WHERE t.upid = {upid} AND {column} GLOB '{sql_value(glob)}'
+            WHERE t.upid = {upid} AND {names_mod.matches_sql(column, glob)}
         """)
         bucket = negative if kind == "skip" else positive
         bucket[det].update(r["name"] for r in rows)
@@ -2706,6 +2711,8 @@ def cmd_hunt(args) -> int:
             how = f'`echolot mark --remove` takes out {left["removable"]}'
             if by_hand:
                 how += f', the other {by_hand} were added by hand and go by hand'
+                if left.get("hand"):
+                    how += f': {verdict_mod.places(left["hand"])}'
             print(f'    {how}.', file=sys.stderr)
         elif left["lines"]:
             # Half a pair: its `beginSection` went by hand and took the
@@ -3217,7 +3224,8 @@ def cmd_mark(args) -> int:
 
     if args.remove:
         refused: list[str] = []
-        touched, kept = markers.remove(refused)
+        hand: list[tuple[str, int, str]] = []
+        touched, kept = markers.remove(refused, hand)
         for rel, n in touched:
             print(f"  - {rel}: {n} line(s)")
         for rel in refused:
@@ -3226,18 +3234,24 @@ def cmd_mark(args) -> int:
         # A tagged line in any other shape than --apply's is left where it
         # is, and named: it carries more than a marker, which deleting it
         # would take along, and "nothing found" over a tree that still has
-        # it reads as clean.
-        for rel, line, text in kept:
+        # it reads as clean. So is a marker added by hand without the tag —
+        # in Kotlin, Java, C or C++ — which went uncounted here and, in a
+        # `.cpp` file, unseen by every other check as well (#1009).
+        for rel, line, text in [*kept, *hand]:
             print(f"  ! {rel}:{line}: {text[:120]}")
         if touched:
             print(f"removed markers from {len(touched)} file(s)")
-        elif not kept:
-            print("no `echolot:mark` lines found under this root")
+        elif not kept and not hand:
+            print("no temporary markers and no `echolot:mark` lines found under this root")
         if kept:
             print(f"left {len(kept)} line(s) with `{mark_mod.TAG}` on them that are not "
                   f"in the shape --apply writes — each carries something besides the "
                   f"marker, so take the marker out by hand")
-        recorder.note(removed_files=len(touched), kept_tagged=len(kept))
+        if hand:
+            print(f"left {len(hand)} {markers.prefix} marker(s) added by hand — --remove "
+                  f"deletes only the lines --apply writes, so take each out by hand, with "
+                  f"what came with it: its end, the block opened for its scope, an include")
+        recorder.note(removed_files=len(touched), kept_tagged=len(kept), kept_hand=len(hand))
         return 0
 
     if getattr(args, "mapping", None) and not args.from_anr:
@@ -3694,7 +3708,26 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
     boot = _boot_said(window.get("boot_receivers"))
     if boot:
         notes.append(boot)
+    handed = _handover_said(window)
+    if handed:
+        notes.append(handed)
     return None, ("; ".join(notes) or None)
+
+
+def _handover_said(window: dict) -> str | None:
+    """What `collect` says when the first repeat's app handed its start over
+    after its first frame (#1008), or None: the window runs through it, and
+    a set that ends on the first screen in some repeats measures two starts.
+    """
+    h = window.get("handover")
+    if not h:
+        return None
+    first = f"`{h['from'].rsplit('.', 1)[-1]}`" if h.get("from") else "its first activity"
+    then = f"`{h['to'].rsplit('.', 1)[-1]}`" if h.get("to") else "another activity"
+    return (f"repeat 1 handed its start over: {first} drew the launch's first frame at "
+            f"{round(h['first_frame_ms']):,} ms, and {round(h['after_ms']):,} ms later the "
+            f"app went on by itself to {then}. `window: launch` runs through that launch, "
+            f"{round(window.get('duration_ms') or 0):,} ms in all, and analyze says so")
 
 
 def _boot_said(rows: list[dict] | None) -> str | None:

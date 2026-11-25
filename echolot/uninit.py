@@ -162,24 +162,21 @@ def _template() -> dict[str, Path]:
 def _markers(p: Plan, root: Path) -> None:
     """The lines `mark --apply` wrote into the sources, as `mark --remove` takes them.
 
-    Read here by the rule `mark.remove` applies, so the count is what it
-    will do; the removal itself is `mark.remove`, untouched.
+    Read here by the rule `mark.remove` applies, over the files it reads
+    (C and C++ among them, #1009), so the count is what it will do; the
+    removal itself is `mark.remove`, untouched.
     """
     from . import mark
-    from .domains import source_files
 
     files: list[tuple[str, int]] = []
     kept: list[str] = []
     try:
-        sources = source_files(root)
+        sources = mark.marker_files(root)
     except OSError:
         sources = []
     for path in sources:
-        try:
-            text = mark.read_source(path, strict=True)
-        except (OSError, UnicodeDecodeError):
-            continue
-        if mark.TAG not in text:
+        text = mark.text_with(path, (mark.TAG.encode(),))
+        if text is None:
             continue
         rows = text.split("\n")
         rest = [ln for ln in rows if not mark.is_applied_line(ln)]
