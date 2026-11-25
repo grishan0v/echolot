@@ -295,6 +295,155 @@ def _(report):
     assert not unknown, f"offered, and not among the platform's sections: {unknown}"
 
 
+# --- a name with brackets (#1012) ------------------------------------------------
+
+def _bracketed_config(end: str | None = None, domains: tuple[str, ...] = ()) -> dict:
+    """`fixture.bracketed`'s config: from `AppStart` to `end`, the render
+    thread's names in `domains`."""
+    scenario = {"name": "render", "start": {"name": "AppStart"}}
+    if end is not None:
+        scenario["end"] = {"name": end}
+    return {**FIXTURE_CONFIG, "scenario": scenario,
+            "domains": [{"slice": s, "module": "render"} for s in domains]}
+
+
+@check("an anchor and a `domains` entry written as a bracketed name match that name")
+def _(report):
+    """A renderer names its sections `[render] DrawFrame`, and `probe` said to
+    write a name as shown. Read as a GLOB alone, `[render]` was one letter:
+    the end anchor matched nothing and the window ran to the end of the trace,
+    and the `domains` entry was "never seen in this scenario" beside the
+    thousand times the trace held it (#1012)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bracketed.perfetto-trace"
+        path.write_bytes(fixture.bracketed())
+        got = _analyze(path, Config(_bracketed_config(fixture.BRACKET_END, (fixture.BRACKET_DRAW,))))
+    w = got["window"]
+    assert w["end_anchor"] == {"glob": fixture.BRACKET_END, "matches": 1}, w["end_anchor"]
+    assert w["duration_ms"] == fixture.BRACKET_END_MS, w
+    rows = {r["location"]: r["count"] for r in got["markers"]["rows"]}
+    assert rows == {fixture.BRACKET_DRAW: 3} and got["markers"]["absent"] == [], got["markers"]
+
+
+@check("over repeats a bracketed `domains` entry is absent only when no repeat held it")
+def _(report):
+    """`report --markers` folds the repeats' tables, and holds the names a
+    repeat said were absent against the names the others held. That was a
+    GLOB too, and a report whose every repeat had `[render] DrawFrame` said
+    it was never seen (#1012)."""
+    from .report import _merge_markers
+    name = fixture.BRACKET_DRAW
+    row = {"location": name, "count": 3, "self_ms": 1.0, "total_ms": 1.0, "max_ms": 1.0,
+           "detail": "RenderLoop"}
+    held = {"markers": {"prefix": "AGENTTMP_", "globs": ["AGENTTMP_*", name],
+                        "rows": [row], "absent": []}}
+    missed = {"markers": {"prefix": "AGENTTMP_", "globs": ["AGENTTMP_*", name],
+                          "rows": [], "absent": [name]}}
+    assert _merge_markers([missed, held], 2)["absent"] == [], "one repeat held it"
+    assert _merge_markers([missed, missed], 2)["absent"] == [name], "none did"
+
+
+@check("probe writes a bracketed name as the trace has it, a numbered one escaped, and each closes the window")
+def _(report):
+    """What `probe` prints is what to paste: a name with no number as it is,
+    since a name matches itself, and one with a number as a GLOB with its own
+    `[` escaped, `[[]render] Frame-*`. Each, pasted as the end anchor, closes
+    the window where that slice first ends (#1012)."""
+    import io
+    from .analyze import _resolve_process, _setup_context
+    from .main import _anchor_candidates
+    from .tp import TraceSession
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "bracketed.perfetto-trace"
+        trace.write_bytes(fixture.bracketed())
+        with TraceSession(trace, _binary) as tp:
+            upid = _resolve_process(tp, "com.example.app", str(trace))[0]["upid"]
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                _anchor_candidates(tp, upid)
+            shown = [line.split("|")[1].strip() for line in out.getvalue().splitlines()
+                     if line.startswith("| ") and "---" not in line][1:]
+            began = tp.query("SELECT start_ts FROM trace_bounds")[0]["start_ts"]
+            closed = {}
+            for name in shown:
+                bounds = _setup_context(tp, Config(_bracketed_config(name)), upid)
+                closed[name] = round((bounds["ts_end"] - began) / 1e6, 1)
+    assert {fixture.BRACKET_DRAW, "[[]render] Frame-*", fixture.BRACKET_END} <= set(shown), shown
+    assert "[`, `*` or `?` of the name's own is written `[[]`" in out.getvalue(), out.getvalue()
+    # Where the first of each ends: the window opens with `AppStart` at 0.
+    want = {fixture.BRACKET_DRAW: 80.0, "[[]render] Frame-*": 65.0,
+            fixture.BRACKET_END: float(fixture.BRACKET_END_MS)}
+    assert {n: closed[n] for n in want} == want, closed
+
+
+@check("an anchor that matched nothing is offered the trace's names in a form that matches")
+def _(report):
+    """The warning names what the trace holds that reads like the anchor, to
+    be pasted in its place; a name with a number and a bracket is offered
+    escaped, as `probe` would print it (#1012)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bracketed.perfetto-trace"
+        path.write_bytes(fixture.bracketed())
+        w = _analyze(path, Config(_bracketed_config("[render] Frame")))["window"]
+    assert w["end_anchor"]["matches"] == 0, w["end_anchor"]
+    assert w["end_anchor"].get("near", [])[:1] == ["[[]render] Frame-*"], w["end_anchor"]
+
+
+@check("a project's own bracketed name keeps its number, and a mask written as a name matches it")
+def _(report):
+    """Two more places held a written name against the trace's as a GLOB
+    alone (#1012). The fold that writes a pool's `worker-3` as `worker-#`
+    leaves the names `domains` lists as they are, and a bracketed one was
+    folded. And a detector's mask the config sets to a slice's name, which
+    `names` reads as the detectors do, matched nothing."""
+    from .analyze import _resolve_process, _setup_context
+    from .main import _name_coverage
+    from .tp import TraceSession
+    with tempfile.TemporaryDirectory() as tmp:
+        trace = Path(tmp) / "bracketed.perfetto-trace"
+        trace.write_bytes(fixture.bracketed())
+        with TraceSession(trace, _binary) as tp:
+            upid = _resolve_process(tp, "com.example.app", str(trace))[0]["upid"]
+            _setup_context(tp, Config(_bracketed_config(domains=("[render] Frame-10",))), upid)
+            folded = {r["name"]: r["family"] for r in tp.query("SELECT name, family FROM _name_family")}
+            covered, _ = _name_coverage(tp, upid, [("mask", "name", fixture.BRACKET_DRAW)])
+    assert "[render] Frame-10" not in folded, f"the config's own name, folded: {folded}"
+    assert folded.get("[render] Frame-11") == "[render] Frame-#", folded
+    assert covered.get(fixture.BRACKET_DRAW) == {"mask"}, dict(covered)
+
+
+@check("every mask a detector's query holds a name against matches that name as well as its GLOB")
+def _(report):
+    """The detectors' masks are the config's to change, and a mask set to a
+    slice's name, brackets and all, has to match it as the anchors do: a
+    `GLOB '{{param}}'` in a query goes with `= '{{param}}'` (#1012)."""
+    from .analyze import DETECTOR_DIR
+    alone = []
+    for path in sorted([*DETECTOR_DIR.glob("*.sql"), DETECTOR_DIR.parent / "context.sql"]):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        for m in re.finditer(r"([\w.]+) GLOB '\{\{(\w+)\}\}'", text):
+            col, param = m.groups()
+            if f"{col} = '{{{{{param}}}}}' OR {col} GLOB" not in text:
+                alone.append(f"{path.name}: {m.group(0)}")
+    assert not alone, f"held against a GLOB alone: {alone}"
+
+
+@check("a code string that is the anchor, brackets and all, is a name the code writes")
+def _(report):
+    """The check before recording holds an anchor against the strings of the
+    code. As a GLOB, `Feed[main] shown` was not the string `"Feed[main]
+    shown"`, and the anchor the code writes was said to be written nowhere,
+    with that very string offered in its place (#1012)."""
+    from . import anchors
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "app/src/main/java/Feed.kt"
+        src.parent.mkdir(parents=True)
+        src.write_text('object Feed { const val SHOWN = "Feed[main] shown" }\n', encoding="utf-8")
+        missing = anchors.unwritten(root, ["Feed[main] shown"], "AGENTTMP_")
+    assert missing == {}, missing
+
+
 @check("async sections stay out of every detector")
 def _(report):
     # They have no thread to be counted under. A detector that shows one has

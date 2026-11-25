@@ -128,8 +128,10 @@ says the build may not be minified at all, and then it needs no mapping.
 
 ### `scenario.start` / `scenario.end`
 
-A GLOB over the slice name. Start is the first occurrence. End is where the
-**first** anchor starting after that ends.
+The slice name as the trace has it, or a GLOB over it: an anchor matches the
+slice of its very name and the slices it matches as a GLOB, so a name with
+brackets, `[render] DrawFrame`, is written as `probe` shows it. Start is the
+first occurrence. End is where the **first** anchor starting after that ends.
 
 A thread's section or an async one — `Trace.beginAsyncSection`, which is what
 an app's own markers usually are, and what a macrobenchmark's end marker
@@ -396,7 +398,8 @@ under `detectors:` that is no detector stops `analyze` and `calibrate` with
 exit 2 before any trace is read. An entry with nothing under it, such as one
 `calibrate` printed with only comments, tunes nothing. Besides numbers they include
 name masks: a parameter with `name_glob` in its name masks the slice name
-(`name_glob_alt` too), one with `skip_glob` is an exclusion. They live in the
+(`name_glob_alt` too), one with `skip_glob` is an exclusion. A mask matches
+the slice of its very name too, as an anchor does. They live in the
 config because ART names things differently across Android versions, and
 adapting to a device must not require editing a query.
 
@@ -503,10 +506,10 @@ own wrapper (`AppTraces.start(LOAD)`), which is how most apps that
 name their markers write them. A hint ending in `via X` says the literal is
 not on that line: `X` is.
 
-`analyze` reads `domains[].slice`: every name listed there, taken as a GLOB,
-is measured in the Markers table of each report whatever the detectors say,
-and one the window never held is listed as absent. `module` and `hint` are
-for the reader alone.
+`analyze` reads `domains[].slice`: every name listed there — the slice of
+that very name, and the ones it matches as a GLOB — is measured in the
+Markers table of each report whatever the detectors say, and one the window
+never held is listed as absent. `module` and `hint` are for the reader alone.
 
 `loop.max_rounds` is the one number a human sets to bound a hunt. Stopping is
 not left to the agent's judgement: it has no goal of its own to economise.

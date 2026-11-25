@@ -873,6 +873,10 @@ writes a config.
   keeps `repeated_work` and `app_init` off what another detector speaks for —
   and `names` reads one with `skip_glob` as an exclusion. A mask named
   anything else still works in the query and is invisible to both.
+- **A mask matches its own name too.** A query holds a name against a mask
+  as `(s.name = '{{name_glob}}' OR s.name GLOB '{{name_glob}}')`, the way an
+  anchor is matched: a config that sets the mask to a slice's name, brackets
+  and all, gets that slice. doctor fails on a `GLOB '{{…}}'` alone.
 
 ## Robustness
 

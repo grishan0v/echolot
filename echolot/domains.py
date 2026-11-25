@@ -444,9 +444,6 @@ def scan(root: Path) -> tuple[list[Site], dict[str, ModuleStat]]:
     return sites, stats
 
 
-_GLOB_SPECIAL = re.compile(r"([\[*?])")
-
-
 def _quoted(value: str) -> str:
     """A double-quoted YAML scalar: JSON's escapes are YAML's."""
     return json.dumps(value, ensure_ascii=False)
@@ -455,6 +452,7 @@ def _quoted(value: str) -> str:
 def render(sites: list[Site], stats: dict[str, ModuleStat],
            root: Path, limit: int = 12) -> list[str]:
     """A ready-to-paste domains section plus a coverage report."""
+    from .names import escaped  # here: names imports tp, which a map of the code does not need
     out: list[str] = []
     total_lines = sum(s.lines for s in stats.values())
     total_sites = sum(s.sites for s in stats.values())
@@ -507,9 +505,10 @@ def render(sites: list[Site], stats: dict[str, ModuleStat],
             hint += f", via {first.via}"
         # Quoted by a writer that knows YAML: Kotlin's `\$` copied into a
         # double-quoted scalar broke the whole echolot.yml. And `analyze`
-        # reads the entry as a GLOB, so a `[`, `*` or `?` is escaped to match
-        # itself.
-        glob = _GLOB_SPECIAL.sub(r"[\1]", name)
+        # reads the entry as the name and as a GLOB, so a `[`, `*` or `?` is
+        # escaped: the name as written would match itself, and with the GLOB
+        # some other name as well (#1012).
+        glob = escaped(name)
         out.append(f"  - slice: {_quoted(glob)}")
         if glob != name:
             out.append("    # a GLOB: [, * and ? are escaped to match themselves")

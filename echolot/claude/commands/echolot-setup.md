@@ -11,7 +11,7 @@ nor in the trace. Of roughly 25 fields, four need a human decision.
 | section | what it decides |
 |---|---|
 | `project.process` | which process is measured; an app usually has several |
-| `scenario.start` / `end` | the window. Anchors are globs over slice names |
+| `scenario.start` / `end` | the window. An anchor is a slice name as `probe` prints it, or a glob over names |
 | `scenario.window` | `launch`, in place of the two anchors: how the app opens, and the trace says where it ends |
 | `runner` | who drives the scenario: `launch`, `command` or `gradle` |
 | `domains` | slice name → module and file, for turning a finding into a place |

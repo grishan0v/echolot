@@ -11,7 +11,6 @@ are merged in merge.py, and both formats are written in render.py.
 from __future__ import annotations
 
 import base64
-import fnmatch
 import gzip
 import hashlib
 import json
@@ -21,6 +20,7 @@ from typing import Any
 
 from . import files
 from . import launch as launch_mod
+from . import names as names_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
 from .merge import _FLOORED, _OVER, _merge_debuggable, merge_rows, short_runs
@@ -571,7 +571,7 @@ def _merge_markers(reports: list[dict[str, Any]], total: int) -> dict[str, Any]:
         "rows": rows,
         "absent": [g for g in head.get("globs") or []
                    if g in set(head.get("absent") or []) and not any(
-                       fnmatch.fnmatchcase(n, g) for n in seen)],
+                       names_mod.matches(n, g) for n in seen)],
     }
     # The prefixed names any repeat held, the window or not. Only when every
     # repeat says: one read back from before the key would count as holding

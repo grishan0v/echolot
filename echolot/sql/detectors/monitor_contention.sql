@@ -98,7 +98,7 @@ WITH waits AS (
         s.ts_win,
         s.dur_win,
         s.name,
-        s.name GLOB '{{name_glob_alt}}'   AS named,
+        (s.name = '{{name_glob_alt}}' OR s.name GLOB '{{name_glob_alt}}')   AS named,
         parent.name                       AS parent_name,
         -- The long shape past `monitor contention with owner `.
         SUBSTR(s.name, 31)                AS rest
@@ -108,9 +108,11 @@ WITH waits AS (
     -- A thread's name under the fold every detector groups by: a pool's
     -- workers are one row, and `threads` counts them all (#831, #845).
     LEFT JOIN _name_family f ON f.name = s.thread_name
-    WHERE (s.name GLOB '{{name_glob}}' OR s.name GLOB '{{name_glob_alt}}')
-      AND NOT (s.name GLOB '{{name_glob}}'
-               AND COALESCE(parent.name GLOB '{{name_glob_alt}}', 0))
+    WHERE ((s.name = '{{name_glob}}' OR s.name GLOB '{{name_glob}}')
+           OR (s.name = '{{name_glob_alt}}' OR s.name GLOB '{{name_glob_alt}}'))
+      AND NOT ((s.name = '{{name_glob}}' OR s.name GLOB '{{name_glob}}')
+               AND COALESCE((parent.name = '{{name_glob_alt}}'
+                             OR parent.name GLOB '{{name_glob_alt}}'), 0))
 ),
 -- The long shape up to the tid's closing parenthesis: `Thread-3 (4455`.
 owned AS (

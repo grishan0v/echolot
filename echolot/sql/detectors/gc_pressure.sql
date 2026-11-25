@@ -101,7 +101,7 @@ SELECT
     g.max_heap_mb,
     -- An allocation wait waits for the collection that was running when it
     -- began, or that began while it waited: the first one over it.
-    CASE WHEN s.name GLOB '{{name_glob_alt}}' THEN (
+    CASE WHEN (s.name = '{{name_glob_alt}}' OR s.name GLOB '{{name_glob_alt}}') THEN (
         SELECT COALESCE(fc.family, c.name)
         FROM android_garbage_collection_events e
         JOIN slice c ON c.id = e.gc_id
@@ -116,8 +116,8 @@ FROM _slice_win s
 LEFT JOIN android_garbage_collection_events g ON g.gc_id = s.slice_id
 LEFT JOIN _name_family fn ON fn.name = s.name
 LEFT JOIN _name_family ft ON ft.name = s.thread_name
-WHERE s.name GLOB '{{name_glob}}'
-   OR s.name GLOB '{{name_glob_alt}}';
+WHERE (s.name = '{{name_glob}}' OR s.name GLOB '{{name_glob}}')
+   OR (s.name = '{{name_glob_alt}}' OR s.name GLOB '{{name_glob_alt}}');
 
 WITH grouped AS (
     SELECT name,

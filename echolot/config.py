@@ -23,8 +23,9 @@ class ConfigError(Exception):
     pass
 
 
-# No anchor configured. The string is substituted into a GLOB and must not
-# match any real slice name; context.sql then collapses onto the whole trace.
+# No anchor configured. The string is substituted where an anchor is matched,
+# as a name and as a GLOB (#1012), and must match no real slice name either
+# way; context.sql then collapses onto the whole trace.
 NO_ANCHOR = "__echolot_no_anchor__"
 
 

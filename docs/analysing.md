@@ -37,6 +37,16 @@ macrobenchmark's end marker. An anchor may name one. A detector never sees
 one, and an agent reading the `slices` column alone would have reported an
 app with two dozen named markers as uninstrumented.
 
+An anchor candidate is written the way an anchor takes it, ready to paste.
+A name with a number that differs in every recording, a frame's vsync id or
+a tid, has `*` in its place, `Choreographer#doFrame *`, and is a GLOB. A name
+with no such number is written as the trace has it, and matches as written:
+every name echolot reads from the config — an anchor, a `domains` entry, a
+detector's mask — matches the slice of that very name, and the slices it
+matches as a GLOB besides. So a renderer's `[render] DrawFrame` is written as
+it is. Where a name is a GLOB, a `[`, `*` or `?` of its own is escaped, since
+in a GLOB `[render]` is one letter: `[[]render] Frame *`.
+
 **Start candidates** come after the longest slices: the sections Android writes
 itself when a journey begins, the ones a journey driven by a command starts
 with. A tap reaches the window as `deliverInputEvent`, an intent reaches a
@@ -142,7 +152,9 @@ detectors:
 The convention is in the parameter's name: one with `name_glob` in it masks
 the slice name (`name_glob_alt` is a second mask of the same kind), one with
 `skip_glob` is an exclusion. `names` also reads `thread_glob` as a mask over
-the thread name, although no shipped detector declares one. It takes them from
+the thread name, although no shipped detector declares one. A mask, as an
+anchor, matches the slice of its very name as well as what it matches as a
+GLOB: `name_glob: "[render] DrawFrame"` is that section, brackets and all. It takes them from
 the detector files and the config itself, so a new detector with masks
 appears in its output without any registration.
 
@@ -218,8 +230,10 @@ What reaches the map, then: a literal in `Trace.beginSection`,
 or `traceAsync("…", …)` under the import above, and a constant handed to a
 call whose name says `trace`. A literal is written as the string it holds:
 Kotlin's `"cost \$5"` is `cost $5` in the map. A name with `[`, `*` or `?`
-is written with each of them escaped, `cache[[]hit]`, since `analyze` reads
-every entry as a GLOB and the name must match itself.
+is written with each of them escaped, `cache[[]hit]`. `analyze` reads an
+entry as the name it is and as a GLOB, so `cache[hit]` as written matches
+that name too, and also `cacheh`, which the GLOB matches; escaped, it matches
+itself and nothing else.
 
 A name built at runtime cannot reach the map, and only some of those calls
 are counted: `Trace.beginSection(…)`, `Trace.beginAsyncSection(…)` and their
@@ -442,7 +456,8 @@ planted is one you want the number for whatever it cleared. So a report
 carries a **Markers** table above the detectors' sections whenever there is
 anything to put in it, and two things decide what that is:
 
-- every name `domains[].slice` lists, each read as a GLOB;
+- every name `domains[].slice` lists: the slice of that very name, and the
+  ones it matches as a GLOB;
 - every name that starts with `instrumentation.temp_prefix` — `AGENTTMP_`
   when the config sets none.
 

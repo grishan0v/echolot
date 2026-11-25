@@ -356,7 +356,8 @@ def _marker_globs(cfg: Config) -> tuple[str, list[str]]:
     fold touches them: see `names.runtime_name`.
     """
     prefix = cfg.temp_prefix
-    globs = [prefix + "*"]
+    # Escaped: a prefix is text, and a `[` in it is not a class (#1012).
+    globs = [names_mod.escaped(prefix) + "*"]
     for entry in cfg.get("domains") or []:
         name = entry.get("slice") if isinstance(entry, dict) else None
         if name and name not in globs:
@@ -387,7 +388,7 @@ def _markers_info(tp, cfg: Config) -> dict:
     fact.
     """
     prefix, globs = _marker_globs(cfg)
-    wanted = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
+    wanted = " OR ".join(names_mod.matches_sql("name", g) for g in globs)
     rows = tp.query(f"""
         WITH seen AS (
             SELECT s.slice_id, s.name, COALESCE(s.thread_name, 'tid ' || s.tid) AS thread,
@@ -442,7 +443,7 @@ def _markers_info(tp, cfg: Config) -> dict:
     # the map points at something this scenario does not run, or the name
     # changed under it.
     absent = [g for g in globs[1:]
-              if not any(fnmatch.fnmatchcase(r["location"], g) for r in out)]
+              if not any(names_mod.matches(r["location"], g) for r in out)]
     # The slice each temporary marker sits directly in, and how long it spent
     # there. A marker under a slice is its child, so that slice's self time
     # drops by the marker's time, and `compare` reads that drop as the slice
@@ -720,7 +721,7 @@ def _name_families(tp, cfg: Config) -> None:
     pairs = []
     for r in found:
         name = r["name"]
-        if any(fnmatch.fnmatchcase(name, g) for g in own):
+        if any(names_mod.matches(name, g) for g in own):
             continue
         family = names_mod.runtime_name(name, keep=prefix)
         if family != name:
@@ -800,7 +801,7 @@ def _claim_names(tp, overrides: dict) -> None:
     if not globs:
         tp.exec_script("CREATE TABLE _claimed_name (name TEXT);")
         return
-    where = " OR ".join(f"name GLOB '{sql_value(g)}'" for g in globs)
+    where = " OR ".join(names_mod.matches_sql("name", g) for g in globs)
     # Materialised, not a view: the consumer tests every slice name against
     # it, and a view would re-run the GLOBs each time.
     tp.exec_script(
@@ -813,13 +814,13 @@ def _near_anchor(tp, glob: str) -> list[str]:
     """The slices of the process an anchor that matched nothing may have meant.
 
     From the set an anchor is matched against, threads' and async sections
-    alike, with each number that differs between recordings written as `*`,
-    as `probe` shows a name to write as an anchor.
+    alike, each written the way `probe` shows a name to write as an anchor:
+    a number that differs between recordings as `*`, and then a `[` of the
+    name's own escaped, so that the name offered is one that matches (#1012).
     """
     from . import anchors
     rows = tp.query("SELECT DISTINCT name FROM _anchor WHERE name IS NOT NULL")
-    folded = {names_mod.NUMBER.sub(lambda m: "0x*" if m.group(0).startswith("0x") else "*",
-                                    str(r["name"])) for r in rows}
+    folded = {names_mod.as_written(str(r["name"])) for r in rows}
     return anchors.nearest(glob, folded)
 
 
@@ -878,7 +879,7 @@ def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None)
         # name exists, just not where it would end anything.
         hits = tp.query(
             f"SELECT COUNT(*) AS n, COALESCE(SUM(ts >= {window.get('ts_start') or 0}), 0) AS after "
-            f"FROM _anchor WHERE name GLOB '{sql_value(glob)}'"
+            f"FROM _anchor WHERE {names_mod.matches_sql('name', glob)}"
         )
         n, after = (hits[0]["n"], hits[0]["after"]) if hits else (0, 0)
         matches = after if key == "end" else n
@@ -898,7 +899,7 @@ def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None)
         if key == "end" and matches:
             first = tp.query(
                 f"SELECT a.dur < 0 AS open FROM _anchor a "
-                f"WHERE a.name GLOB '{sql_value(glob)}' "
+                f"WHERE {names_mod.matches_sql('a.name', glob)} "
                 f"AND a.ts >= (SELECT ts_start FROM _window) ORDER BY a.ts LIMIT 1")
             if first and first[0]["open"]:
                 window[f"{key}_anchor"]["unfinished"] = True
