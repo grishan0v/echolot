@@ -167,10 +167,13 @@ three ways:
   `window.frames.late` of `count` in `echolot report --window --json`, and
   `frame_jank`'s `Self Jank` rows with the worst overrun; `Buffer Stuffing` is
   latency, a frame behind the finger, not a stutter. "Late on 3% of frames"
-  is the answer's first line, before any place. A scenario within its budget,
-  or with no late frames, is that answer: the build as recorded is not slow
-  by its measure, and the complaint may be about a journey this scenario does
-  not record.
+  is the answer's first line, before any place. Those are the app's windows'
+  frames only: when `window.frames.unjudged` lists a surface (a map or a game
+  in a `SurfaceView`), its frames are in none of them, so say that, and judge
+  it by the intervals between its presents on that thread. A scenario within
+  its budget, or with no late frames, is that answer: the build as recorded
+  is not slow by its measure, and the complaint may be about a journey this
+  scenario does not record.
 - **No `compare` between rounds.** Nothing in the app changes between your
   rounds, so step 4 would measure only your own markers. Skip it. Each round
   answers instead "how much of the slow part does this candidate account

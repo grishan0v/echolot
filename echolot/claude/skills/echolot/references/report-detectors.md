@@ -220,7 +220,7 @@ settles it.
 **`frame_jank`** is the only detector that answers "which frames stuttered"
 rather than "where did the total go", and the only one that needs no
 instrumentation: SurfaceFlinger records every frame's deadline and what it
-actually took. Read it with three things in mind.
+actually took. Read it with these in mind.
 
 *Its numbers are overruns.* `total_ms` is the time past the deadline summed
 across those frames and `max_ms` is the worst single overrun — not durations,
@@ -253,6 +253,20 @@ trace at all — Android 11 and below, or a capture that did not ask for the
 `android.surfaceflinger.frametimeline` data source. Those look identical in the
 report. Before calling a scenario smooth, check that some other frame row
 exists or that the trace came from `echolot collect`.
+
+*It sees the app's windows and nothing else.* The timeline keeps the frames
+that carry a Choreographer vsync id, the ones the RenderThread draws for the
+app's windows. A map, a game or a video that a thread of the app draws into a
+`SurfaceView` with Vulkan or GL has none there, however many it presented.
+The report says so above the findings and under `--detector frame_jank`:
+`frame_jank judged the 321 frames the frame timeline holds of the app. The app
+also presented 1000 frames on SurfaceView[…]@0 with QueuePresentKHR on
+Thread-18, and the timeline holds none of those`, with the numbers in
+`window.frames.unjudged`. A silent `frame_jank` there says nothing of the map.
+To judge it, read the intervals between those presents on that thread in the
+trace, against the input that moved it: the app paces them itself and draws
+only while something moves, so a long gap may be a pause between two gestures
+rather than a late frame.
 
 ### `anr_risk`
 

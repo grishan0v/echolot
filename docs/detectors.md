@@ -184,6 +184,12 @@ SurfaceFlinger's own per-frame record, which has no context view because
 nothing else needs it. A detector reaching outside the views takes on two jobs
 the views were doing for it: joining `_proc` so it stays inside our process,
 and clipping to `_window` itself. Both are visible at the top of that file.
+What the timeline does not hold, `frame_jank` cannot see: the frames a thread
+of the app presents on a `SurfaceView` with Vulkan or GL carry no vsync id and
+never reach it. `analyze` counts those beside the detector, from the slice the
+BLAST queue leaves on the presenting thread for every buffer
+(`onFrameAvailable - <surface>#<id>(f:…,a:…)`), and the report says them
+(`window.frames.unjudged`, #1011).
 
 ### Two duration columns are not a duplicate
 

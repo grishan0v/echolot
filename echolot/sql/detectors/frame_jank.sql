@@ -50,6 +50,18 @@
 -- `echolot collect` asks for it. Older traces and Android 11 and below leave
 -- these tables empty, and an empty table is silence rather than an error.
 --
+-- The timeline keeps the frames that carry a Choreographer vsync id: the
+-- app's windows, drawn by its RenderThread. A map, a game or a video a
+-- thread of the app draws into a SurfaceView with Vulkan or GL carries none,
+-- and none of its frames is here. In a pan-and-zoom of a map, 1000 presents
+-- reached the screen that way beside the 321 frames this judged (#1011).
+-- Judging those from their presents was looked at and left: nothing in the
+-- trace gives them a deadline, and the app draws them only while something
+-- moves, so the gap between two is as often a pause between gestures (190 ms
+-- apart at rest, seconds between swipes) as a frame that came late. What
+-- this cannot see, `analyze` counts beside it (`window.frames.unjudged`) and
+-- the report says.
+--
 -- total_ms and max_ms do not mean what they mean elsewhere, as their
 -- `@column` lines say: the loss is the time past the deadline, and that is
 -- the actionable number. The frame's own duration is in `detail`, since a

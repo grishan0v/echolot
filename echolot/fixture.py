@@ -279,6 +279,51 @@ SF_FRAMES = [
     (900 + i, 250 + i * 40, 16, 70, FT.JANK_SF_CPU_DEADLINE_MISSED) for i in range(4)
 ]
 
+# --- a surface of the app's own (#1011) ------------------------------------
+# With `build(surface=…)`. A map, a game or a video drawn by Vulkan or GL into
+# a `SurfaceView`, from a thread of the app's own that no Choreographer vsync
+# id reaches: its frames go to SurfaceFlinger and never into the frame
+# timeline, which holds the 24 frames of the app's window above. Each present
+# is the slices a phone writes for one: the call, the two `queueBuffer`s of
+# the Surface and its BufferQueue, and the BLAST queue's `onFrameAvailable`
+# named after the surface. Thread `Thread-7`, as an app's native thread that
+# never named itself arrives.
+TID_RENDERER = 4216
+TID_RENDER = 4217
+SURFACE = "SurfaceView[com.example.app/com.example.app.MainActivity]@0"
+# What SurfaceFlinger calls the surface's layer, and the frame timeline its
+# frames, when it holds any: `TX - ` and this.
+SURFACE_LAYER = f"{SURFACE}(BLAST)#7"
+# 60 presents in the window [100, 1105], one each 16 ms from 110 ms, and 3
+# after it: the negative control, frames of the surface that are not the
+# window's.
+SURFACE_PRESENTS_MS = [110 + i * 16 for i in range(60)] + [1150, 1166, 1182]
+# The app's window's own queue, presented to by its RenderThread: the frames
+# the timeline is about, and a surface that is never listed.
+WINDOW_QUEUE = "VRI[MainActivity]@5c1f3e2#1"
+WINDOW_PRESENTS_MS = [200 + i * 50 for i in range(5)]
+# With `surface="judged"`: an app that hands its surface's frames a vsync id,
+# so the timeline holds 40 of the 60, on time.
+SURFACE_FRAMES = [(2000 + i, 110 + i * 16, 16, 12, FT.JANK_NONE) for i in range(40)]
+
+
+def _present(call: str, queue: str, at: float, children=()) -> tuple:
+    """One present, as the slices of a thread that made it."""
+    queued = (f"onFrameAvailable - {queue}(f:0,a:1)", at + 0.7, 0.5, [])
+    return (call, at, 2, [*children, ("queueBuffer", at + 0.5, 1.2,
+                                      [("queueBuffer", at + 0.6, 0.8, [queued])])])
+
+
+def _surface_slices() -> dict[int, list]:
+    """The renderer's presents and the RenderThread's, by thread."""
+    return {
+        TID_RENDERER: [_present("QueuePresentKHR", f"{SURFACE}#2", at)
+                       for at in SURFACE_PRESENTS_MS],
+        TID_RENDER: [(f"DrawFrames {i + 1}", at, 4,
+                      [_present("eglSwapBuffersWithDamageKHR", WINDOW_QUEUE, at + 1)])
+                     for i, at in enumerate(WINDOW_PRESENTS_MS)],
+    }
+
 # --- slices ----------------------------------------------------------------
 # Shape: (name, start_ms, dur_ms, [children])
 # The scenario window is set by the anchors AppStart (start) and
@@ -1102,11 +1147,13 @@ def _span(builder, cookies, kind, start_ms, dur_ms, **fields) -> None:
     _frame_timeline(packet).frame_end.cookie = cookie
 
 
-def _frames(builder, app_frames=APP_FRAMES) -> None:
-    """The frame timeline: expected and actual, for three processes."""
+def _frames(builder, app_frames=APP_FRAMES, surface_frames=()) -> None:
+    """The frame timeline: expected and actual, for three processes, and the
+    app's `SurfaceView` when it is given frames there (`SURFACE_FRAMES`)."""
     cookies = iter(range(10**5, 10**6))
 
     for frames, pid, layer in ((app_frames, APP_PID, LAYER),
+                               (surface_frames, APP_PID, f"TX - {SURFACE_LAYER}"),
                                (OTHER_FRAMES, OTHER_PID, OTHER_LAYER)):
         # An optional sixth field: how late the actual frame started after
         # the expected one.
@@ -1934,7 +1981,7 @@ def build(frames: bool = True, environment: bool = True,
           smooth: bool = False, answered: bool = True, heap: bool = True,
           activities: tuple[str, ...] = (), boot: bool = False,
           drawing: bool = False, realtime_ns: int | None = None,
-          unfinished: bool = False) -> bytes:
+          unfinished: bool = False, surface: str | None = None) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -2003,6 +2050,12 @@ def build(frames: bool = True, environment: bool = True,
     `unfinished=True` stops the recording before the launch's first frame:
     its `launchingActivity` section opens and never closes, as on a debug
     build whose cold start outlasted `runner.duration_ms` (#921).
+
+    `surface` gives the app a `SurfaceView` its own thread presents 60 frames
+    on in the window, by Vulkan, beside its RenderThread's frames of the
+    window (#1011): `"unjudged"` with none of them in the frame timeline, as
+    a map or a game has it, `"judged"` with 40 of them there. None by
+    default.
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -2017,6 +2070,8 @@ def build(frames: bool = True, environment: bool = True,
         snapshot = builder.add_packet().clock_snapshot
         snapshot.clocks.add(clock_id=6, timestamp=0)  # BOOTTIME, the trace's clock
         snapshot.clocks.add(clock_id=1, timestamp=realtime_ns)  # REALTIME
+    if surface:
+        threads = {**threads, TID_RENDERER: "Thread-7", TID_RENDER: "RenderThread"}
     process_tree(builder, [(APP_PID, APP_NAME, threads),
                            (OTHER_PID, OTHER_NAME, other_threads),
                            (SF_PID, SF_NAME, sf_threads),
@@ -2024,7 +2079,8 @@ def build(frames: bool = True, environment: bool = True,
                            (KS_PID, KS_NAME, KS_THREADS)])
 
     if frames:
-        _frames(builder, STUFFED_FRAMES if stuffed else SMOOTH_FRAMES if smooth else APP_FRAMES)
+        _frames(builder, STUFFED_FRAMES if stuffed else SMOOTH_FRAMES if smooth else APP_FRAMES,
+                SURFACE_FRAMES if surface == "judged" else ())
     if sampling:
         _samples(builder, arrived=sampling in ("arrived", "minified", "benchmark"),
                  minified=sampling in ("minified", "benchmark"),
@@ -2079,6 +2135,13 @@ def build(frames: bool = True, environment: bool = True,
             by_cpu.setdefault(cpu, []).append(
                 (ts, order, "print", tid, buf)
             )
+
+    # The presents of `surface`, on CPU 0: their threads have no time on a CPU
+    # of their own here, and a print needs a CPU to sit on.
+    for tid, tree_slices in (_surface_slices() if surface else {}).items():
+        for ts, order, kind, name in _flatten(tree_slices, [], seq):
+            buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+            by_cpu.setdefault(0, []).append((ts, order, "print", tid, buf))
 
     # atrace async sections: S and F carry the name and a cookie, and the
     # process rather than the thread. Emitted from the main thread's CPU
