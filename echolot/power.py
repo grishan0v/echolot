@@ -39,7 +39,6 @@ from .screen import Screen
 MIN_BATTERY = key("runner", "min_battery", NUMBER, 25,
                   "A phone not charging and under this percentage is not "
                   "recorded; 0 turns the check off. Belongs in local.yml.")
-FLOOR = MIN_BATTERY.default
 
 
 def floor(section: dict) -> int:

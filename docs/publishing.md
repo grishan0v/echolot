@@ -41,8 +41,8 @@ values:
 `.github/workflows/checks.yml` runs on every pull request into `main`, and on
 `main` after a merge: `pytest` with the coverage gate, on 3.10 and 3.14 for a
 pull request and on all five versions the classifiers claim for `main`,
-written out again by hand; `ruff check echolot tests action` beside pytest on
-3.14; and a `package` job that looks at the README three ways, builds the
+written out again by hand; `ruff check echolot tests action` and `vulture` beside
+pytest on 3.14; and a `package` job that looks at the README three ways, builds the
 artefacts and installs them. The `protect-main` ruleset requires two of those
 to pass before a merge: `checks`, which passes only when every Python version
 that ran passed, the linter with them, and `package`. A break that only 3.11,

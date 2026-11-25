@@ -172,13 +172,6 @@ class Header:
     columns: dict[str, str] = field(default_factory=dict)
 
 
-def parse_meta(text: str):
-    """The header's keys, parameters and calibrations: `parse_header`, less
-    the words."""
-    h = parse_header(text)
-    return h.meta, h.params, h.calibrations
-
-
 def _meaning(value: str) -> tuple[str, str]:
     """`value — meaning`, split at the dash: what is left of it, and the words
     after it, empty when it has none."""

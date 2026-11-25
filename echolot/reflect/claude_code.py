@@ -203,12 +203,6 @@ def _blocks(content: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _text_of(content: Any) -> str:
-    return "\n".join(
-        str(b.get("text", "")) for b in _blocks(content) if b.get("type") == "text"
-    )
-
-
 def _clip_input(inp: Any, limit: int = 1200) -> dict[str, Any]:
     if not isinstance(inp, dict):
         return {}

@@ -118,6 +118,17 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.python == '3.14' }}
         run: ruff check --output-format=github echolot tests action
 
+      # Code nothing calls (#995): ruff reads one file at a time, and a
+      # function whose last caller went away in another module passes it.
+      # vulture reads the whole package. What it reads, at what confidence,
+      # and what it is told to leave alone are in pyproject.toml
+      # ([tool.vulture], 80%) and vulture_whitelist.py, so a laptop running
+      # `vulture` gets the same answer. One leg and the same condition as
+      # ruff, for the same reasons.
+      - name: vulture
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.python == '3.14' }}
+        run: vulture
+
       # The summary and the XML are only worth producing once — the percentage
       # barely moves between supported Python versions, and a copy per leg
       # would be noise. 3.14, the leg every push runs.

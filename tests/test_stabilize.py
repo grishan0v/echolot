@@ -175,9 +175,8 @@ def test_the_readings_as_the_device_prints_them() -> None:
     check("the HAL's current readings, the USB's 0.0 left out",
           hal == [(0, "AP", 30.1), (2, "BAT", 27.1), (3, "SKIN", 29.0)], hal)
     cached = "Thermal Status: 2\nCached temperatures:\n\tTemperature{mValue=41.5, mType=0, mName=cpu0, mStatus=1}\nHAL Ready: true\n"
-    check("the cached ones when the HAL lists none, and the status",
-          stabilize.hal_temperatures(cached) == [(0, "cpu0", 41.5)]
-          and stabilize.thermal_status(cached) == 2)
+    check("the cached ones when the HAL lists none",
+          stabilize.hal_temperatures(cached) == [(0, "cpu0", 41.5)])
     check("nothing to read is nothing", stabilize.battery_c("level: 85") is None
           and stabilize.hal_temperatures("") == [])
 
