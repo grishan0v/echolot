@@ -25,7 +25,7 @@ from typing import Any
 
 from . import mark
 from .config import DEFAULT_PREFIX
-from .domains import SKIP_DIRS, constants, gradle_module, source_files
+from .domains import SKIP_DIRS, constants, gradle_module, source_files, submodules
 
 # --- reading a build script as text -------------------------------------------
 
@@ -180,7 +180,6 @@ _INCLUDE = re.compile(r"""\binclude\b\s*\(?\s*((?:["'][^"'$\n]+["']\s*,\s*)*["']
 _PROJECT_DIR = re.compile(
     r"""\bproject\s*\(\s*["'](:?[\w.:-]+)["']\s*\)\s*\.\s*projectDir\s*=\s*"""
     r"""(?:file\s*\(|(?:new\s+)?File\s*\(\s*\w+\s*,)\s*["']([^"'$]+)["']""")
-_GITMODULE_PATH = re.compile(r"^\s*path\s*=\s*(.+?)\s*$", re.MULTILINE)
 
 
 def settings_file(d: Path) -> Path | None:
@@ -222,28 +221,6 @@ def included(settings: Path) -> set[str] | None:
         return None
     moved = {":" + p.lstrip(":"): os.path.normpath(d).replace(os.sep, "/") for p, d in _PROJECT_DIR.findall(text)}
     return {moved.get(":" + n.lstrip(":"), n.strip(":").replace(":", "/")) for n in names}
-
-
-def submodules(root: Path) -> list[str]:
-    """The folders of git submodules under the root, from the root, as
-    `.gitmodules` lists them: the root's own, or that of the checkout the
-    root is a folder of."""
-    out: list[str] = []
-    top = root.resolve()
-    for d in (top, *top.parents):
-        listed = d / ".gitmodules"
-        if listed.is_file():
-            try:
-                text = listed.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                text = ""
-            for p in _GITMODULE_PATH.findall(text):
-                full = (d / p.strip().strip('"')).resolve()
-                if top in full.parents:
-                    out.append(full.relative_to(top).as_posix())
-        if (d / ".git").exists():
-            break
-    return out
 
 
 def _vendored(rel: str, subs: list[str]) -> str | None:
@@ -293,7 +270,9 @@ def app_module(root: Path, facts: Facts) -> dict[str, Any] | None:
     then the one named `app`. Its module path is its Gradle build's, and
     where that build is in a folder under the root, `gradle_root` says which
     (#1003)."""
-    subs = submodules(root)
+    # Another repository's, by `.gitmodules` (`domains.submodules`).
+    top = root.resolve()
+    subs = [p.relative_to(top).as_posix() for p in submodules(root)]
     found = []
     for mf in mark.manifests(root):
         text = mf.read_text(encoding="utf-8", errors="replace")
