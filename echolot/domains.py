@@ -92,8 +92,9 @@ def files_named(root: Path, name: str) -> list[Path]:
     return _walk(root, lambda n: n == name)
 
 
-def files_ending(root: Path, suffix: str) -> list[Path]:
-    """Every file whose name ends with this, from the same pruned walk."""
+def files_ending(root: Path, suffix: str | tuple[str, ...]) -> list[Path]:
+    """Every file whose name ends with this, or with any of these, from the
+    same pruned walk."""
     return _walk(root, lambda n: n.endswith(suffix))
 
 

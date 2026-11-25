@@ -294,10 +294,13 @@ three ways:
      the project hands it to the pool. `ours: cut` is a stack that ended in
      the framework: nobody is named, so treat the row as below, with what
      ran as the hint
-   a thread the JDK named — pool-N-thread-M, Thread-N → `echolot mark --pools`
+   an anonymous thread — pool-N-thread-M, Thread-N → `echolot mark --pools`
      FIRST. Name the pool, re-record, and the row stops being anonymous. Do
      not mark the work there: you do not know what it is yet, and that is the
-     complaint
+     complaint. A Thread-N whose slices are native (queueBuffer, Vulkan, a C++
+     library's sections) is a native thread attached by JNI with no name: its
+     row is a [jni] AttachCurrentThread line, not a Java pool; with no [jni]
+     line, a prebuilt library attaches it — say so, do not name Java pools
    no instrumentation at all → echolot mark, then echolot mark --apply
    app_init's (no section) → the app's own ContentProviders and
      Application.onCreate: AGENTTMP_ markers there; what stays unnamed is

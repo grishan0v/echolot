@@ -25,6 +25,9 @@ project: it binds to the platform's vocabulary and never to the project's.
                 ends up saying
                 `pool-7-thread-1`. A different question from the rest, and
                 the only one that starts from the report; see `plan_pools`.
+    jni         `--pools` as well: `AttachCurrentThread(&env, nullptr)` in C
+                or C++ — a native thread attached with no name, which ART
+                calls `Thread-N` just as the JDK would.
 
 Nothing here matches `*ViewModel`, `*Repository`, `*Screen` or any other
 convention. Every proposal carries its source, so a reader can see how firm
@@ -66,7 +69,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .config import DEFAULT_PREFIX, ConfigError
-from .domains import NATIVE_EXT, files_ending, files_named, gradle_module, in_test_set
+from .domains import (NATIVE_EXT, files_ending, files_named, gradle_module, in_test_set,
+                      submodules)
 from .domains import source_files as domains_source_files
 
 TAG = "// echolot:mark"
@@ -119,6 +123,14 @@ _ON_CREATE = re.compile(
     r"(?:(?:override|open|final|public|protected|private)[ \t]+)*"
     r"(?:fun|void)[ \t]+onCreate[ \t]*\(", re.M)
 _SET_CONTENT = re.compile(r"\bsetContent\s*(?:\([^)]*\)\s*)?\{")
+# What stands before a name on its own line when the line declares it rather
+# than calls it: Kotlin's `fun` (a receiver included, `fun ComposeView.`),
+# or Java's return type. `public void setContent(int a)` with its brace on the
+# next line read as `setContent(…) { … }`, a call with a trailing lambda, and
+# a Views-only app was told to add Compose's tracing library (#1005).
+_DECLARES = re.compile(
+    r"(?:\bfun[ \t]+(?:<[^>]*>[ \t]*)?(?:[\w.<>?]+\.)?"
+    r"|(?<![\w.])(?!(?:return|else|do|try|throw|in|is|as)\b)[A-Za-z_][\w.]*(?:<[^>]*>)?(?:\[\])*[ \t]+)$")
 _SET_CONTENT_VIEW = re.compile(r"\bsetContentView\s*\(")
 _COMPOSABLE = re.compile(r"@Composable\b")
 _ROOM_BUILDER = re.compile(r"\bRoom\s*\.\s*(?:databaseBuilder|inMemoryDatabaseBuilder)\s*\(")
@@ -147,6 +159,17 @@ _NAMED_ALREADY = re.compile(
     r"\bThreadFactoryBuilder\b|\bsetNameFormat\b|"
     r"\bThread\.currentThread\(\)\s*\.\s*name\s*=|"
     r"\bnewThread\s*\(")
+# A native thread attached to the VM with no name. ART gives it a Java peer
+# whose name it makes up — `Thread-12` — and writes that over whatever
+# `pthread_setname_np` set, so the renderer of a C++ core arrives in the
+# trace as `Thread-18` exactly like a bare `new Thread(r)` (#1010). The last
+# argument is the `JavaVMAttachArgs` with the name, in C (`(*vm)->
+# AttachCurrentThread(vm, &env, NULL)`) as in C++ (`vm->AttachCurrentThread(
+# &env, nullptr)`); a null there is the finding, and a variable is taken for
+# named, since what it holds is not on the line.
+_JNI_ATTACH = re.compile(r"\b(AttachCurrentThread(?:AsDaemon)?)\s*\(")
+_NO_ATTACH_ARGS = re.compile(r"(?:nullptr|NULL|0|\(\s*void\s*\*\s*\)\s*(?:0|NULL|nullptr))")
+_JVM_EXT = (".kt", ".java")
 # Linux truncates a thread's `comm` to 15 characters, and the trace carries
 # what is left: `pool-12-thread-` and `m.example.myapp`, the main thread of
 # `com.example.myapp`, are both cut. A name longer than this is a name you
@@ -185,7 +208,7 @@ class Proposal:
     line: int                 # 1-based
     what: str                 # for a human
     marker: str               # AGENTTMP_…
-    source: str               # manifest+lifecycle | api | call-from-setContent | anr | jdk
+    source: str               # manifest+lifecycle | api | call-from-setContent | anr | jdk | jni
     module: str
     applicable: bool          # --apply can do it mechanically
     reason: str = ""          # why not, or a caveat
@@ -725,19 +748,36 @@ def find_on_create(text: str, cls: str | None = None
     return (line_of(text, m.start()), j, k, has_return)
 
 
+def called(clean: str, rx: re.Pattern) -> re.Match | None:
+    """The first match of rx that calls its name, not one that declares it.
+
+    `rx` names a call with a trailing lambda, `setContent {`, and the same
+    characters open a method of that name: Java's `void setContent(int a)`
+    with the brace on the next line, Kotlin's `fun setContent(a: Int) {`.
+    What stands before the name on its own line tells them apart — see
+    `_DECLARES`.
+    """
+    for m in rx.finditer(clean):
+        line_start = clean.rfind("\n", 0, m.start()) + 1
+        if not _DECLARES.search(clean, line_start, m.start()):
+            return m
+    return None
+
+
 def find_lambda(text: str, rx: re.Pattern
                 ) -> tuple[int, int | None, int | None, bool] | None:
     """(line, open_at, close_at, has_return) of the first `name { … }` matched by rx.
 
     In the code, not in a comment about it: a KDoc that said "Compose starts
-    in setContent { } below" put the pair on the class body.
+    in setContent { } below" put the pair on the class body. And a call, not
+    a declaration of a method by that name (`called`).
 
     A lambda's end goes in bare (see `Proposal.composable`), so a
     `return@setContent` in it would skip the end and leave the section open:
     the plan refuses that block, and says why.
     """
     clean = strip_noise(text)
-    m = rx.search(clean)
+    m = called(clean, rx)
     if not m:
         return None
     j = clean.find("{", m.start())
@@ -955,11 +995,26 @@ def _uses_compose(sources: dict[Path, str], mdir: Path,
     for that one. Past it, any source under the app module that calls
     `setContent {` or declares a `@Composable`: a Compose screen behind a
     launcher written with Views, a `ComposeView` given its content.
+
+    Kotlin sources only, and their code only. The Compose compiler is a
+    Kotlin compiler plugin: a composable lambda cannot be written in Java,
+    so Compose's `setContent` is never called from there. A Java Views class
+    with a `setContent(…)` method of its own, its brace on the next line,
+    read as the call and told an app with no Compose in it that the Compose
+    tracing library was the first thing to add (#1005). A Kotlin method of
+    that name is a declaration, not a call (`called`).
     """
     if any(p.kind == "set_content" for p in proposals):
         return True
-    return any(mdir in p.parents and (_SET_CONTENT.search(t) or _COMPOSABLE.search(t))
-               for p, t in sources.items())
+    for p, t in sources.items():
+        if p.suffix != ".kt" or mdir not in p.parents:
+            continue
+        if "setContent" not in t and "@Composable" not in t:
+            continue
+        clean = strip_noise(t)
+        if called(clean, _SET_CONTENT) or _COMPOSABLE.search(clean):
+            return True
+    return False
 
 
 # --- the plan ------------------------------------------------------------------
@@ -1138,7 +1193,9 @@ class _Planner:
                               gradle_module(f, root),
                               applicable=not why, reason=why,
                               open_at=o, close_at=c))
-        sc = find_lambda(t, _SET_CONTENT)
+        # Compose's `setContent` takes a composable lambda, which only Kotlin
+        # can write: a Java launcher's `setContent(` is a method of its own.
+        sc = find_lambda(t, _SET_CONTENT) if f.suffix == ".kt" else None
         if sc:
             line, o, c, ret = sc
             why = _why_not(o, ret, one_line_body(t, o, c), c, t)
@@ -1822,21 +1879,24 @@ _FACTORY_AT = {"FixedThreadPool": 2, "ScheduledThreadPool": 2, "CachedThreadPool
                "SingleThreadExecutor": 1, "SingleThreadScheduledExecutor": 1}
 
 
-def _top_args(clean: str, open_paren: int, end: int) -> int:
-    """How many arguments a call's top level holds."""
-    depth, args, current = 0, 0, False
-    for c in clean[open_paren + 1:end - 1]:
+def _top_level(inside: str) -> list[str]:
+    """A call's arguments, split at the commas of its own level, stripped."""
+    out, depth, start = [], 0, 0
+    for i, c in enumerate(inside):
         if c in "([{":
             depth += 1
         elif c in ")]}":
             depth -= 1
         elif c == "," and depth == 0:
-            args += 1
-            current = False
-            continue
-        if not c.isspace():
-            current = True
-    return args + (1 if current else 0)
+            out.append(inside[start:i].strip())
+            start = i + 1
+    out.append(inside[start:].strip())
+    return [a for a in out if a]
+
+
+def _top_args(clean: str, open_paren: int, end: int) -> int:
+    """How many arguments a call's top level holds."""
+    return len(_top_level(clean[open_paren + 1:end - 1]))
 
 
 def _factory_given(clean: str, m: re.Match, end: int) -> bool:
@@ -1881,34 +1941,23 @@ def _names_its_thread(clean: str, quoted: str, open_paren: int, end: int) -> boo
     return args + (1 if current else 0) >= 2
 
 
-def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
-    """Where a thread or pool is created with the JDK's default naming.
-
-    Nothing here is applicable. The tool can find the site — `Executors.new*`
-    is an exact string like `Room.databaseBuilder` — and it cannot write the
-    name. A name derived from the surrounding code came out as
-    `provideproductr`, `onauthenticatio` and `capacity` on two real projects:
-    the enclosing symbol is a Dagger provider or a local variable, and what
-    the pool is *for* is in the call it is passed to. That is a sentence to
-    read, not a pattern to match.
-    """
-    root = root.resolve()
-    allowed = list(allowed or [])
-    out = Plan(root=str(root), module=None, package=None)
-
-    for path in source_files(root):
-        rel = _rel(path, root)
-        try:
-            text = read_source(path)
-        except OSError:
-            continue
-        clean = strip_noise(text)
-        quoted: str | None = None   # made the first time a `Thread(` needs it
-        for rx, name_of in ((_EXECUTORS, lambda m: f"Executors.new{m.group(1)}"),
-                            (_POOL_CTOR, lambda m: m.group(1)),
-                            (_BARE_THREAD, lambda m: "Thread"),
-                            (_THREAD_LAMBDA, lambda m: "Thread { }")):
-          for m in rx.finditer(clean):
+def _jdk_rows(root: Path, path: Path, text: str) -> list[Proposal]:
+    """The places in one Kotlin or Java file that leave a thread to the JDK's
+    default name."""
+    # Every pattern below holds one of these words, and most files hold
+    # none: blanking a file's comments and strings costs more than the
+    # rest of the reading together.
+    if "Thread" not in text and "Executors" not in text and "ForkJoinPool" not in text:
+        return []
+    rel = _rel(path, root)
+    clean = strip_noise(text)
+    quoted: str | None = None   # made the first time a `Thread(` needs it
+    rows: list[Proposal] = []
+    for rx, name_of in ((_EXECUTORS, lambda m: f"Executors.new{m.group(1)}"),
+                        (_POOL_CTOR, lambda m: m.group(1)),
+                        (_BARE_THREAD, lambda m: "Thread"),
+                        (_THREAD_LAMBDA, lambda m: "Thread { }")):
+        for m in rx.finditer(clean):
             if what_is_a_type(clean, m):
                 continue
             # The argument list, not the line. A naming factory is routinely
@@ -1941,33 +1990,125 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
                     continue
             if _NAMED_ALREADY.search(clean[m.start():end]):
                 continue
-            line_no = clean.count("\n", 0, m.start()) + 1
-            kind = "thread_name" if what.startswith("Thread") else "pool_name"
+            # A thread is `Thread` or `Thread { }`. `ThreadPoolExecutor` starts
+            # with the same six letters and is a pool: its threads come from
+            # the default factory as `pool-N-thread-M`, and calling them
+            # `Thread-N` sent a hunt to it from a row of native threads (#1010).
+            kind = "thread_name" if what in ("Thread", "Thread { }") else "pool_name"
             # ForkJoin's worker factory names its own: `ForkJoinPool-1-worker-1`.
             born = ("Thread-N" if kind == "thread_name"
                     else "ForkJoinPool-N-worker-M" if what in ("ForkJoinPool",
                                                                  "Executors.newWorkStealingPool")
                     else "pool-N-thread-M")
-            p = Proposal(
-                kind, rel, line_no,
+            rows.append(Proposal(
+                kind, rel, line_of(text, m.start()),
                 f"{what} — its threads reach the trace as `{born}`, and the "
                 f"report groups by that",
                 # There is no marker to write here, and guessing a name is
                 # what this refuses to do.
                 "(name it)", "jdk", gradle_module(path, root),
-                applicable=False, reason="")
-            # Naming is not a marker, so "the nearest allowed caller" is no
-            # advice here; that the place is outside is the whole reason.
-            _refuse_outside(p, allowed, "outside instrumentation.allowed")
-            out.proposals.append(p)
+                applicable=False, reason=""))
+    return rows
 
-    out.proposals.sort(key=lambda p: (p.file, p.line))
+
+def _jni_rows(root: Path, path: Path, text: str) -> list[Proposal]:
+    """The places in one C or C++ file that attach a native thread to the VM
+    with no name — see `_JNI_ATTACH`."""
+    clean = strip_noise(text)
+    rows: list[Proposal] = []
+    for m in _JNI_ATTACH.finditer(clean):
+        end = _call_end(clean, m.end() - 1)
+        args = _top_level(clean[m.end():end - 1])
+        if not args or not _NO_ATTACH_ARGS.fullmatch(args[-1]):
+            continue
+        rows.append(Proposal(
+            "thread_name", _rel(path, root), line_of(text, m.start()),
+            f"{m.group(1)}(…, {args[-1]}) — a native thread attached with no "
+            f"name reaches the trace as `Thread-N`, and the report groups by that",
+            "(name it)", "jni", gradle_module(path, root),
+            applicable=False, reason=""))
+    return rows
+
+
+def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
+    """Where a thread or pool is left to a name nobody chose.
+
+    Two places do that. The JDK's default factory, behind `Executors.new*`,
+    the pool constructors and a bare `Thread(`, names its threads
+    `pool-N-thread-M` and `Thread-N`. And ART names a native thread that C or
+    C++ attaches to the VM without `JavaVMAttachArgs` `Thread-N` as well:
+    on an app with a C++ core those were the hot `Thread-#` row, and the
+    list sent the hunt to two Java executors and a vendored library's perf
+    tests, none of which named one of them (#1010).
+
+    Nothing here is applicable. The tool can find the site — `Executors.new*`
+    is an exact string like `Room.databaseBuilder` — and it cannot write the
+    name. A name derived from the surrounding code came out as
+    `provideproductr`, `onauthenticatio` and `capacity` on two real projects:
+    the enclosing symbol is a Dagger provider or a local variable, and what
+    the pool is *for* is in the call it is passed to. That is a sentence to
+    read, not a pattern to match.
+
+    A place in a git submodule is counted and not listed: it is another
+    repository's code, and its perf tests came first in the list because the
+    folder it sat in sorted before the app's. A place outside
+    `instrumentation.allowed` is listed after the ones inside, where the
+    project can write the name. The JNI rows come first in each: there are
+    one or two of them, and each names every native thread that attaches
+    through it.
+    """
+    root = root.resolve()
+    allowed = list(allowed or [])
+    out = Plan(root=str(root), module=None, package=None)
+    vendored = submodules(root)
+    left_out: dict[str, int] = {}
+
+    def text_of(path: Path) -> str | None:
+        try:
+            return read_source(path)
+        except OSError:
+            return None
+
+    rows: list[tuple[Path, Proposal]] = []
+    # The JDK's patterns read Kotlin and Java alone, whatever else the walk
+    # comes to return: `Thread(` is a C++ class's constructor as often.
+    for path in source_files(root):
+        if path.suffix in _JVM_EXT and (text := text_of(path)) is not None:
+            rows += [(path, p) for p in _jdk_rows(root, path, text)]
+    # Native code lives wherever the build says — `src/main/cpp`, `jni/`, a
+    # core at the repository's root — so its walk is not held to `src/`. A
+    # C++ core is tens of thousands of files and hundreds of megabytes; the
+    # call is looked for in the bytes, and only a file that has it decoded.
+    for path in files_ending(root, NATIVE_EXT):
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        if b"AttachCurrentThread" in raw and not in_test_set(path, root):
+            text = raw.decode("utf-8", errors="replace")
+            rows += [(path, p) for p in _jni_rows(root, path, text)]
+
+    for path, p in rows:
+        sub = next((s for s in vendored if s in path.parents), None)
+        if sub is not None:
+            key = _rel(sub, root)
+            left_out[key] = left_out.get(key, 0) + 1
+            continue
+        # Naming is not a marker, so "the nearest allowed caller" is no
+        # advice here; that the place is outside is the whole reason.
+        _refuse_outside(p, allowed, "outside instrumentation.allowed")
+        out.proposals.append(p)
+
+    out.proposals.sort(key=lambda p: (not under_allowed(p.file, allowed),
+                                      p.source != "jni", p.file, p.line))
+    jni = any(p.source == "jni" for p in out.proposals)
     if not out.proposals:
         out.notes.append(
-            "no thread or pool is created with the JDK's default naming under "
-            "this root — every thread in the trace already carries a name "
-            "somebody chose, so a nameless one comes from a library or from "
-            "the platform")
+            "no thread or pool is created with the JDK's default naming, and no "
+            "native thread is attached to the VM without a name, under this "
+            "root" + (" outside its git submodules" if left_out else "")
+            + " — every thread in the trace already carries a name somebody "
+            "chose, so a nameless one comes from a library or from the platform")
     else:
         out.notes.append(
             f"give each one a name of at most {COMM_MAX} characters — Linux "
@@ -1976,6 +2117,31 @@ def plan_pools(root: Path, allowed: list[str] | None = None) -> Plan:
             "naming a pool is not instrumentation and leaves no `AGENTTMP_` "
             "behind: it changes what the existing report calls a row. Mark the "
             "work inside only after the rows have names")
+    if jni:
+        out.notes.append(
+            "[jni]: ART names a native thread attached with no name `Thread-N`, "
+            "over the one `pthread_setname_np` gave it — pass a name in "
+            "`JavaVMAttachArgs` (`JavaVMAttachArgs args{JNI_VERSION_1_6, name, "
+            "nullptr}; vm->AttachCurrentThread(&env, &args)`). Where one function "
+            "attaches every native thread, the name can be the thread's own, from "
+            "`pthread_getname_np`, once the code that starts it sets one. A "
+            "`Thread-N` row whose slices are native — `queueBuffer`, "
+            "`QueuePresentKHR`, a C++ library's own sections — is one of these, "
+            "not a thread of the JDK's")
+    elif any(p.kind == "thread_name" for p in out.proposals):
+        out.notes.append(
+            "`Thread-N` is also what ART calls a native thread attached to the VM "
+            "with no name. A `Thread-N` row whose slices are native — "
+            "`queueBuffer`, `QueuePresentKHR`, a C++ library's own sections — is "
+            "one of those, and no `Thread(` above names it: nothing in the C or "
+            "C++ under this root attaches a thread without a name, so a prebuilt "
+            "library does, or code above this root")
+    if left_out:
+        out.notes.append(
+            f"{sum(left_out.values())} more in git submodules, not listed: "
+            + ", ".join(f"{k} ({n})" for k, n in sorted(left_out.items()))
+            + " — another repository's code; when one of the report's threads is "
+              "born there, its name goes in that repository")
     if len(out.proposals) > CAP:
         out.hidden = len(out.proposals) - CAP
         out.proposals = out.proposals[:CAP]
