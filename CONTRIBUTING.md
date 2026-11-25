@@ -24,10 +24,17 @@ pytest                       # every check, including the ones doctor runs
 pytest -n auto               # the same on every core, the way CI runs it
 pytest -k uninstrumented     # one detector's claims, by name
 ruff check echolot tests action   # the linter, which CI runs beside pytest
+vulture                      # code nothing calls; CI runs it too
 ```
 
 `doctor` stays dependency-free: it walks the same list itself, because it runs
 on a user's laptop where pytest is not installed.
+
+`vulture` reads its settings from `[tool.vulture]` in `pyproject.toml`. When
+it reports a name that is used where it cannot see, such as a field set on a
+protobuf message or a method the standard library calls by name, add the name
+to `vulture_whitelist.py` with the reason. `vulture --min-confidence 60` also
+lists the functions nothing names, which need checking by hand.
 
 A new detector takes more than a new `.sql` file; the checklist is in
 [docs/detectors.md](docs/detectors.md#adding-a-detector). The README's

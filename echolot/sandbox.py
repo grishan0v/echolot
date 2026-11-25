@@ -247,16 +247,6 @@ def home_rule(env: Mapping[str, str] | None = None) -> Path | None:
     return _first_rule(codex_home(os.environ if env is None else env))
 
 
-def codex_rule(start: Path | None = None,
-               env: Mapping[str, str] | None = None) -> Path | None:
-    """The rules file that lets echolot out of Codex's sandbox, when one exists.
-
-    Where Codex looks: `.codex/rules/` in the project, which may sit above the
-    directory the command ran in, and the user's own under CODEX_HOME.
-    """
-    return project_rule(start) or home_rule(env)
-
-
 def _through_python_m() -> bool:
     """Whether this process is `python -m echolot` rather than `echolot`."""
     spec = getattr(sys.modules.get("__main__"), "__spec__", None)

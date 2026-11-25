@@ -89,7 +89,8 @@ dependencies = [
 # pytest-xdist spreads the suite over the cores when asked to: CI runs
 # `pytest -n auto`, and a plain `pytest` runs in one process as before.
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=7", "pytest-xdist>=3", "ruff>=0.14", "hypothesis>=6.100"]
+dev = ["pytest>=8", "pytest-cov>=7", "pytest-xdist>=3", "ruff>=0.14", "hypothesis>=6.100",
+       "vulture>=2.14"]
 # The documentation site (.github/workflows/docs.yml): the generator and the
 # extension that renders GitHub's callouts, pinned, since zensical is at 0.0.x
 # and moves between releases. Nothing here reaches `pip install echolot`.
@@ -112,6 +113,23 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "W", "B"]
+
+# Code nothing calls (#995). ruff sees a name unused inside one file; vulture
+# looks across the package, so a function the last caller of which went away
+# in another module shows up too.
+#
+# 80% is what CI runs at, and reaches only what cannot be in use: an
+# argument nobody reads, an import, code after a `return`. A function, a
+# class or an attribute nothing names is 60%, since Python can still reach it
+# by name: worth a look by hand now and then, with
+# `vulture --min-confidence 60`, and too noisy to fail a build on.
+# vulture_whitelist.py holds what is used where vulture cannot see it, at
+# either level, each with the reason.
+[tool.vulture]
+paths = ["echolot", "vulture_whitelist.py"]
+min_confidence = 80
+# selftest.py's checks are all named `_`, and this decorator registers them.
+ignore_decorators = ["@check"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

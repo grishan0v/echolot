@@ -2188,7 +2188,7 @@ def _(report):
     from .render import COLUMNS
     for d in load_detectors(DETECTOR_DIR):
         for c in d.calibrations:
-            # parse_meta already validates the param; here it is the column —
+            # parse_header already validates the param; here it is the column —
             # a typo there would silently yield an empty sample and a "kept the
             # default".
             assert c.column in COLUMNS, (
