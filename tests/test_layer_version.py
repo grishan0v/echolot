@@ -129,7 +129,7 @@ def handed(monkeypatch) -> list:
     # The full `doctor` resolves the pinned binary itself, to print its path,
     # before the self-check: stubbed too, or an empty cache downloads it and
     # an offline one ends the run before the layer section (#277).
-    monkeypatch.setattr("echolot.main.resolve_binary_path",
+    monkeypatch.setattr("echolot.tp.resolve_binary_path",
                         lambda tp_binary=None: tp_binary or "trace_processor_shell")
     return seen
 

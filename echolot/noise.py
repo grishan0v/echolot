@@ -54,17 +54,9 @@ from . import compare as compare_mod
 from . import report as report_mod
 from . import table
 from .words import figure as _n
-
-# How many random splits, and the seed they are drawn from. Two hundred put
-# the share of splits with a row that holds in steps of half a percent and
-# its 95th percentile on ten splits, and take about half a minute for fifteen
-# runs of three hundred rows; the seed is the issue's number and nothing else.
-SPLITS = 200
-SEED = 569
-
-# The fewest runs a set needs: four a side, the fewest at which `stats.shift`
-# judges a row at all whichever way the runs fall.
-MIN_RUNS = 8
+# How many random splits, the seed they are drawn from, and the fewest runs a
+# set needs: in flags.py, which `analyze --help` reads them from.
+from .flags import MIN_RUNS, SEED, SPLITS
 
 # The percentile beside the median: a split as bad as one in twenty.
 PERCENTILE = 95

@@ -269,18 +269,34 @@ def strip_noise(text: str, strings: bool = True) -> str:
     `strings=False` blanks the comments and leaves the strings: `--pools`
     has to see a string where the code has one — `Thread(r, "io")` is a
     thread with a name — and still not take a quote inside a comment for one.
+
+    The scan goes from one place a comment or string can start to the next
+    (`_NOISE_START`), and the text between is copied whole. It used to ask
+    `_noise_at` at every character and blank one character at a time: 10
+    million calls for `mark` on an app of 1,300 Kotlin and Java files, half
+    of what `mark` spent (#559). `_noise_at` still decides, at each of those
+    places, what starts there and where it ends.
     """
-    out = list(text)
-    i = 0
-    while i < len(text):
-        end, is_string = _noise_at(text, i)
-        if end is None:
-            i += 1
-            continue
-        if strings or not is_string:
-            _blank(out, i, end)
-        i = end
+    out: list[str] = []
+    done = 0
+    while (start := _NOISE_START.search(text, done)) is not None:
+        at = start.start()
+        end, is_string = _noise_at(text, at)
+        out.append(text[done:at])
+        noise = text[at:end]
+        out.append(noise if is_string and not strings else _blanked(noise))
+        done = end
+    out.append(text[done:])
     return "".join(out)
+
+
+# Where `_noise_at` can find something: a comment's `//` or `/*`, a quote.
+_NOISE_START = re.compile(r"""//|/\*|["']""")
+
+
+def _blanked(noise: str) -> str:
+    """Spaces in place of every character but a newline."""
+    return "\n".join(" " * len(line) for line in noise.split("\n"))
 
 
 def _noise_at(text: str, i: int) -> tuple[int | None, bool]:

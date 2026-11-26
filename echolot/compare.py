@@ -63,12 +63,9 @@ from .names import across_builds
 from .merge import metric_of, short_runs
 from .report import identity_of
 from .files import runs as _runs
-
-# What counts as movement worth a row. Absolute floor first, so a 4 ms wobble
-# on a 6 ms slice is not "×1.7 slower"; relative floor second, so a 40 ms move
-# on a 900 ms slice is not a finding either.
-FLOOR_MS = 5.0
-FLOOR_RATIO = 0.10
+# What counts as movement worth a row, and how many one-sided names a side
+# prints: in flags.py, which the parser reads them from without importing this.
+from .flags import FLOOR_MS, FLOOR_RATIO, NAMES_SHOWN
 
 APPEARED, VANISHED, GREW, SHRANK, STEADY = (
     "appeared", "vanished", "grew", "shrank", "steady")
@@ -277,8 +274,6 @@ NAMES_LEAST_RUNS = 3
 # From this many runs, a name may be missing from one of them: the same
 # halves gave no more names when one run in five was let off.
 NAMES_ALL_BUT_ONE = 5
-# How many names of each side the comparison prints; `--names` prints all.
-NAMES_SHOWN = 10
 
 
 def _one_sided(before: dict, after: dict, listed: list[dict],

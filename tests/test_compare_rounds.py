@@ -66,7 +66,7 @@ def project(tmp_path: Path, monkeypatch, marker_report) -> Path:
         rep = copy.deepcopy(marker_report)
         rep["trace"] = str(trace)
         return rep
-    monkeypatch.setattr(main_mod, "analyze_trace", analyzed)
+    monkeypatch.setattr("echolot.analyze.analyze_trace", analyzed)
     (tmp_path / LOOSE).mkdir(parents=True)
     return tmp_path
 

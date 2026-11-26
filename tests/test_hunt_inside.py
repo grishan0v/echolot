@@ -53,7 +53,7 @@ def project(tmp_path: Path, monkeypatch, marker_report) -> Path:
     h = hunt_mod.load(tmp_path)
     h["touched_at"] = TWO_MONTHS
     hunt_mod.save(tmp_path, h)
-    monkeypatch.setattr(main_mod, "analyze_trace",
+    monkeypatch.setattr("echolot.analyze.analyze_trace",
                         lambda *a, **kw: copy.deepcopy(marker_report))
     (tmp_path / ".echolot/traces").mkdir(parents=True)
     (tmp_path / TRACE).write_bytes(b"a trace")

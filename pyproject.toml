@@ -64,12 +64,11 @@ dependencies = [
     # Worth saying out loud what one line here installs: rich-argparse pulls in
     # rich, and rich pulls in pygments, markdown-it-py and mdurl. Four
     # distributions for help text, against the two this package had, all four
-    # MIT or BSD-2. What they cost at run time is not nothing: `import
-    # echolot.main` imports no rich yet, but every command builds the parser
-    # before it runs, and building it formats the usage through rich-argparse.
-    # After `echolot status`, 43 `rich.*` modules are loaded — some 30 ms of
-    # the first parse on a laptop. pygments and markdown-it are not imported,
-    # by `status` or by `--help`.
+    # MIT or BSD-2. What they cost at run time is paid only when something is
+    # printed: the parser is built with argparse's own formatter and handed
+    # Rich's at the end (#561), so `echolot status` loads no `rich.*` module,
+    # and `--help`, a usage line or an argparse error loads 45 — some 14 ms on
+    # a laptop. pygments and markdown-it are not imported, by `--help` either.
     #
     # The cap is on the major version, not the minor: the formatter class names
     # and `group_name_formatter` are the API this uses, and 1.x keeps them.
