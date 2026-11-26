@@ -34,6 +34,7 @@ docs/languages.yml on every pull request that touches it.
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 import re
 import shutil
@@ -186,6 +187,35 @@ def prepare_language(lang: str, out: Path) -> int:
     return pages
 
 
+class _ConfigLoader(yaml.SafeLoader):
+    """mkdocs.yml names a Python callable for the slugs; nothing read here needs it."""
+
+
+_ConfigLoader.add_multi_constructor("tag:yaml.org,2002:python/", lambda *_: None)
+
+
+def translated_theme(lang: str, cfg_path: Path) -> dict:
+    """mkdocs.yml's theme, for a translation whose config is written at `cfg_path`.
+
+    The theme is the same in every language: the features, the logo, the
+    favicon and the template that adds the tags for shared links. What
+    changes is the language, the words on the light and dark switch, and
+    the template folder, which is named relative to the config file.
+    """
+    info = load_languages()[1][lang]
+    base = yaml.load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"), Loader=_ConfigLoader)
+    theme = copy.deepcopy(base["theme"])
+    theme["language"] = lang
+    toggle = {"default": info["toggle_dark"], "slate": info["toggle_light"]}
+    for entry in theme.get("palette", []):
+        entry["toggle"]["name"] = toggle[entry["scheme"]]
+    if theme.get("custom_dir"):
+        theme["custom_dir"] = Path(
+            os.path.relpath(ROOT / theme["custom_dir"], cfg_path.parent)
+        ).as_posix()
+    return theme
+
+
 def write_lang_config(lang: str, cfg_path: Path, docs_dir: Path, site_dir: Path) -> None:
     """Write a Zensical-compatible mkdocs config for a non-default language."""
     _, langs = load_languages()
@@ -226,36 +256,7 @@ def write_lang_config(lang: str, cfg_path: Path, docs_dir: Path, site_dir: Path)
         "repo_name": "grishan0v/echolot",
         "docs_dir": Path(os.path.relpath(docs_dir, cfg_path.parent)).as_posix(),
         "site_dir": Path(os.path.relpath(site_dir, cfg_path.parent)).as_posix(),
-        "theme": {
-            "name": "material",
-            "language": lang,
-            "features": [
-                "content.code.copy",
-                "navigation.sections",
-                "navigation.footer",
-                "navigation.top",
-                "search.highlight",
-                "toc.follow",
-            ],
-            "palette": [
-                {
-                    "media": "(prefers-color-scheme: light)",
-                    "scheme": "default",
-                    "toggle": {
-                        "icon": "material/brightness-7",
-                        "name": info["toggle_dark"],
-                    },
-                },
-                {
-                    "media": "(prefers-color-scheme: dark)",
-                    "scheme": "slate",
-                    "toggle": {
-                        "icon": "material/brightness-4",
-                        "name": info["toggle_light"],
-                    },
-                },
-            ],
-        },
+        "theme": translated_theme(lang, cfg_path),
     }
     footer_cfg = {
         "nav": nav,

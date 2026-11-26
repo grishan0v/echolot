@@ -6,6 +6,8 @@ A trace answers "where did the time go". An ANR is a different question: the
 app stopped answering, the system gave up waiting, and the report arrived from
 a phone you do not have. echolot reads that report, points its frames at files
 in your checkout, and — when you can record the freeze — measures it.
+What the reader was built on, and why its rules are what they are, is in
+[ANR field notes](anr-notes.md).
 
 ## The report, and where it comes from
 

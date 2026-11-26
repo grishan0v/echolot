@@ -59,7 +59,7 @@ not in one sweep over the tree.
 
 ## The documentation site
 
-`docs/` is also published as a site, with search and a sidebar, to GitHub
+`docs/` is also published as a site, with search, a tab for each group and a sidebar, to GitHub
 Pages from `main`: <https://grishan0v.github.io/echolot/>. The pages stay Markdown written for GitHub and read the
 same there. On the way to the site, [docs/site.py](docs/site.py) rewrites the
 three things in them that are GitHub's: the navigation line under a title,
@@ -67,7 +67,13 @@ links that leave `docs/`, and `README.md` as a folder's first page.
 [mkdocs.yml](mkdocs.yml) holds the default site's configuration and its nav;
 [docs/languages.yml](docs/languages.yml) registers all available translations
 (`docs/<lang>/` and `README.<lang>.md`), for which `docs/site.py` generates
-`build/site-docs-<lang>/` and `build/mkdocs-<lang>.yml`.
+`build/site-docs-<lang>/` and `build/mkdocs-<lang>.yml`. Every language gets
+the theme from `mkdocs.yml`; only the language and the words on the
+light/dark switch change. The logo and the favicon are
+`docs/assets/site-icon.png`, drawn by [docs/assets/icon.py](docs/assets/icon.py),
+and [docs/overrides/main.html](docs/overrides/main.html) adds the Open Graph
+and Twitter tags a shared link unfurls from, with the repository's card,
+`docs/assets/social-preview.png`.
 
 ```bash
 pip install -e '.[docs]'

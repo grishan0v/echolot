@@ -1,0 +1,41 @@
+{#-
+  What a page says about itself where a link to it is shared: Open Graph for
+  chat apps and most sites, Twitter's card for X. The theme writes neither.
+  mkdocs.yml names this folder as theme.custom_dir; docs/site.py gives the
+  translations the same. The picture is the repository's own card for links,
+  docs/assets/social-preview.png, which every language's site carries under
+  assets/, and a link needs it by its full address.
+-#}
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {% if page.meta and page.meta.title %}
+    {% set share_title = page.meta.title ~ " - " ~ config.site_name %}
+  {% elif page.title and page.url %}
+    {% set share_title = (page.title | striptags) ~ " - " ~ config.site_name %}
+  {% else %}
+    {% set share_title = config.site_name %}
+  {% endif %}
+  {% if page.meta and page.meta.description %}
+    {% set share_description = page.meta.description %}
+  {% else %}
+    {% set share_description = config.site_description %}
+  {% endif %}
+  {% set share_image = config.site_url ~ "assets/social-preview.png" %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ share_title }}">
+  <meta property="og:description" content="{{ share_description }}">
+  {% if page.canonical_url %}
+    <meta property="og:url" content="{{ page.canonical_url }}">
+  {% endif %}
+  <meta property="og:image" content="{{ share_image }}">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta property="og:image:alt" content="echolot cli, an Android profiling tool">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ share_title }}">
+  <meta name="twitter:description" content="{{ share_description }}">
+  <meta name="twitter:image" content="{{ share_image }}">
+{% endblock %}

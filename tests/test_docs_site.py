@@ -109,6 +109,18 @@ def test_translations_prepare_and_generate_site_configs(tmp_path: Path) -> None:
         check(f"{code}: nav matches translated index", groups == want_groups, (groups, want_groups))
         on_site = {page for _, pages_list in groups for _, page in pages_list}
         check(f"{code}: every page in nav", on_site == expected_pages, on_site ^ expected_pages)
+        base = yaml.load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"), Loader=_Loader)["theme"]
+        theme = cfg["theme"]
+        same = {k: v for k, v in theme.items() if k not in ("language", "palette", "custom_dir")}
+        check(f"{code}: the theme is mkdocs.yml's: features, logo, favicon",
+              same == {k: v for k, v in base.items()
+                       if k not in ("language", "palette", "custom_dir")}, (same, base))
+        check(f"{code}: the switch says its words in the language",
+              [e["toggle"]["name"] for e in theme["palette"]]
+              == [info["toggle_dark"], info["toggle_light"]], theme["palette"])
+        check(f"{code}: and the template folder is the same one, named from the config file",
+              (cfg_path.parent / theme["custom_dir"]).resolve() == (ROOT / base["custom_dir"]).resolve(),
+              theme["custom_dir"])
 
 
 def test_a_page_reaches_the_site_without_what_belongs_to_github() -> None:
@@ -164,3 +176,37 @@ def test_the_pages_use_nothing_only_the_site_renders() -> None:
              for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
              if re.match(r"(!!!|\?\?\?\+?|===) ", line)]
     check("no `!!! note`, `??? note` or `=== \"tab\"` in docs/", found == [], found)
+
+
+def _png_size(path: Path) -> tuple[int, int]:
+    head = path.read_bytes()[:24]
+    check(f"{path.name} is a PNG", head[:8] == b"\x89PNG\r\n\x1a\n", head[:8])
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+
+def test_the_site_shows_the_logo_and_tells_a_shared_link_what_it_is() -> None:
+    """The header's logo and the tab's favicon are the plugin's sphere of dots
+    (#407), and a link to any page unfurls with the repository's card: the
+    template in docs/overrides adds Open Graph and Twitter's tags, which the
+    theme does not write."""
+    theme = yaml.load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"), Loader=_Loader)["theme"]
+    for key in ("logo", "favicon"):
+        picture = DOCS / theme[key]
+        check(f"theme.{key} names a picture under docs/, which reaches the site",
+              picture.is_file() and picture.suffix in site.STATIC, theme[key])
+        width, height = _png_size(picture)
+        check(f"theme.{key} is square", width == height, (width, height))
+    check("the groups are tabs", "navigation.tabs" in theme["features"], theme["features"])
+    template = (ROOT / theme["custom_dir"] / "main.html").read_text(encoding="utf-8")
+    for tag in ("og:title", "og:description", "og:image", "og:url",
+                "twitter:card", "twitter:title", "twitter:description", "twitter:image"):
+        check(f"the template writes {tag}", f'"{tag}"' in template, tag)
+    image = re.search(r'config\.site_url ~ "([^"]+)"', template)
+    check("the picture is named by the site's full address", image is not None, template)
+    card = DOCS / image.group(1)
+    check("and it is a picture under docs/", card.is_file(), image.group(1))
+    width, height = _png_size(card)
+    declared = tuple(int(re.search(rf'"og:image:{side}" content="(\d+)"', template).group(1))
+                     for side in ("width", "height"))
+    check("the size the template declares is the picture's", declared == (width, height),
+          (declared, (width, height)))

@@ -2,7 +2,7 @@
 
 [← back to the README](../README.md) · **English** · [Русский](ru/README.md)
 
-Fifteen documents. If you are here for the first time, read them in the order of
+Sixteen documents. If you are here for the first time, read them in the order of
 the workflow: **collect → mark → analyse → compare → calibrate**. The rest
 explains why the tool is built the way it is.
 
@@ -29,6 +29,7 @@ Why the answers can be trusted, and what the tool refuses to do.
 | document | about |
 |---|---|
 | 🔒 **[Determinism](determinism.md)** | the pinned `trace_processor`, the synthetic fixture, what `doctor` actually checks, and where determinism ends |
+| 📓 **[ANR field notes](anr-notes.md)** | what ten real ANR reports and one ANR made on purpose showed, the bugs only a real ANR found, and which rule of the reader came from where |
 | 🤖 **[The agent layer](agent-layer.md)** | what `echolot init` installs, a private install git does not see, and `echolot uninit`, which takes it out; the plugin for Claude Code and Codex, why a CLI rather than an MCP server, why the loop lives in a subagent |
 | 🛡️ **[Privacy](privacy.md)** | what echolot reads and writes on the machine and the phone, the two downloads and how each is checked, and that nothing is sent anywhere |
 | 📜 **[Terms of use](terms.md)** | the licence that is the whole of the terms, no warranty, and what stays yours: the project, the phone, the traces and the agent's own traffic |

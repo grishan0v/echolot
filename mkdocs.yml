@@ -18,8 +18,16 @@ site_dir: build/site
 theme:
   name: material
   language: en
+  # The template that adds what a page says where a link to it is shared:
+  # Open Graph and Twitter's card, with docs/assets/social-preview.png.
+  custom_dir: docs/overrides
+  # The logo's sphere of dots, which docs/assets/icon.py draws for the plugin
+  # and, smaller, for here: in the header and on the browser's tab.
+  logo: assets/site-icon.png
+  favicon: assets/site-icon.png
   features:
     - content.code.copy
+    - navigation.tabs
     - navigation.sections
     - navigation.footer
     - navigation.top
@@ -67,6 +75,7 @@ nav:
       - Calibrating: calibrate.md
   - Understanding it:
       - Determinism: determinism.md
+      - ANR field notes: anr-notes.md
       - The agent layer: agent-layer.md
       - Privacy: privacy.md
       - Terms of use: terms.md
