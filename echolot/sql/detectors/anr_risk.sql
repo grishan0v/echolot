@@ -208,3 +208,19 @@ ORDER BY total_ms DESC;
 SELECT ts_from AS ts, ts_to - ts_from AS dur
 FROM _det_anr_risk
 WHERE what IN (SELECT location FROM _rows);
+
+-- @longest
+--
+-- The longest stretch the main thread went without a breath, of each row:
+-- `max_ms` is the longest of them.
+
+SELECT location, ts, dur, (SELECT pid FROM _proc) AS tid
+FROM (
+    SELECT r.location, a.ts_from AS ts, a.ts_to - a.ts_from AS dur,
+           ROW_NUMBER() OVER (PARTITION BY r.location
+                              ORDER BY a.ts_to - a.ts_from DESC, a.ts_from) AS k
+    FROM _det_anr_risk a
+    JOIN _rows r ON r.location = a.what
+    WHERE a.ts_to > a.ts_from
+)
+WHERE k = 1;

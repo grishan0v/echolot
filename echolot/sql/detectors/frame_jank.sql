@@ -184,3 +184,36 @@ ORDER BY queued, total_ms DESC;
 -- enough to be rows.
 
 SELECT NULL AS ts, NULL AS dur LIMIT 0;
+
+-- @longest
+--
+-- The frame of each row that overran its deadline the most, the one `max_ms`
+-- is: its actual slice on the frame timeline. A row of frames that only
+-- queued, with nothing past a deadline, has the frame that waited longest.
+-- No thread: a frame is the process's, on its own track.
+
+WITH frames AS (
+    SELECT a.jank_type, a.jank_tag, a.ts, a.dur,
+           (a.ts + a.dur) - (e.ts + e.dur) AS over_ns
+    FROM actual_frame_timeline_slice a
+    JOIN _proc p ON p.upid = a.upid
+    LEFT JOIN expected_frame_timeline_slice e
+           ON e.surface_frame_token = a.surface_frame_token
+          AND e.upid = a.upid
+    CROSS JOIN _window w
+    WHERE a.surface_frame_token IS NOT NULL
+      AND a.dur > 0
+      AND a.ts < w.ts_end
+      AND a.ts + a.dur > w.ts_start
+      AND a.jank_tag != 'No Jank'
+      AND (a.ts + a.dur) - (e.ts + e.dur) >= {{min_overrun_ms}} * 1000000
+)
+SELECT location, ts, dur, NULL AS tid
+FROM (
+    SELECT r.location, f.ts, f.dur,
+           ROW_NUMBER() OVER (PARTITION BY r.location
+                              ORDER BY f.over_ns DESC, f.ts) AS k
+    FROM frames f
+    JOIN _rows r ON r.location = f.jank_type
+)
+WHERE k = 1;

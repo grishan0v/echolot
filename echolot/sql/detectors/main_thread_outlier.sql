@@ -150,3 +150,16 @@ ORDER BY max_ms DESC;
 SELECT ts, dur
 FROM _det_main_thread_outlier
 WHERE name IN (SELECT location FROM _rows);
+
+-- @longest
+--
+-- The worst occurrence of each row's name, the one `max_ms` is.
+
+SELECT location, ts, dur, (SELECT pid FROM _proc) AS tid
+FROM (
+    SELECT r.location, o.ts, o.dur,
+           ROW_NUMBER() OVER (PARTITION BY r.location ORDER BY o.dur DESC, o.ts) AS k
+    FROM _det_main_thread_outlier o
+    JOIN _rows r ON r.location = o.name
+)
+WHERE k = 1;

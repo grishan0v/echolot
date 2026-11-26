@@ -85,7 +85,7 @@ _LIMIT_TAIL = re.compile(r"\bLIMIT\s+\d+\s*;?\s*$", re.IGNORECASE)
 # Where a detector's second and third queries begin: a line of its own each,
 # the first of them straight after the first query, so that the first still
 # ends in its LIMIT.
-_SECTION = re.compile(r"^--\s*@(intervals|samples)\s*$", re.MULTILINE)
+_SECTION = re.compile(r"^--\s*@(intervals|samples|longest)\s*$", re.MULTILINE)
 # Where the words begin in `@param` and `@column`: a dash with space before
 # it, and space or the end of the line after it, the words then going on
 # below. A GLOB has no use for an em dash, and a hyphen it may well hold.
@@ -296,6 +296,9 @@ class Detector:
     intervals_sql: str = ""
     # The query after `-- @samples`, the same.
     samples_sql: str = ""
+    # The query after `-- @longest`, the same: where each row's longest
+    # occurrence is on the timeline, for a link that opens it (#132).
+    longest_sql: str = ""
     # The tables its first query writes for the queries after it,
     # `_det_<id>…`, in the order it writes them; see _own_tables.
     tables: tuple[str, ...] = ()
@@ -343,6 +346,12 @@ class Detector:
         detector has the same `sha` read the trace the same way; `compare`
         gives no verdict on the rows of one whose `sha` differs, since a move
         there may be the tool's.
+
+        `@longest` does not count either. It says where on the timeline a
+        row's longest occurrence is, for the link that opens it there
+        (`timeline.py`), and decides nothing about the rows or their numbers:
+        written into a detector, it would have cost every report before it
+        its verdicts in `compare` for a link.
         """
         import hashlib
 
@@ -387,6 +396,7 @@ class Detector:
             path=path,
             intervals_sql=sections.get("intervals", ""),
             samples_sql=sections.get("samples", ""),
+            longest_sql=sections.get("longest", ""),
             tables=tables,
             needs=needs,
             fires=meta.get("fires", ""),
@@ -534,6 +544,24 @@ class Detector:
         detector has no third query.
         """
         return self._render_section(self.samples_sql, "@samples", resolved)
+
+    def render_longest(self, resolved: dict[str, Any]) -> str | None:
+        """The fourth query, with the values the first one ran with (#132).
+
+        It says where each row's longest occurrence is, so that a report can
+        open the trace on it: one line per row of `_rows`, the columns that
+        name the row (`location`, and each other of `@identity`), and `ts`
+        and `dur` of the occurrence, in nanoseconds, the slice or the thread
+        state as the trace has it. `tid` too, of the thread it happened on,
+        where there is one: its track is the one shown first. Longest is by
+        what the row's `max_ms` is the longest of, so that the place opened
+        is the number the row prints.
+
+        `analyze` runs it for the rows shown, after the others. None when the
+        detector has no fourth query: its rows then carry no place, and the
+        report no link for them.
+        """
+        return self._render_section(self.longest_sql, "@longest", resolved)
 
     def _render_section(self, sql: str, name: str,
                         resolved: dict[str, Any]) -> str | None:

@@ -17,6 +17,7 @@ from . import launch as launch_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
 from . import table
+from . import timeline as timeline_mod
 from . import when as when_mod
 from .merge import THREADS, _FLOORED, _merge_debuggable, metric_of, short_runs
 
@@ -32,7 +33,7 @@ COLUMNS = ["location", "threads", "runs", "count", "self_ms", "total_ms", "max_m
 # business and no finding (`GATES`, #832).
 GATES = {"verdict_frames", "stretch_ms"}
 HIDDEN = {"spread", "places", "stacks", "unfinished", "parents", "variants", "fired",
-          "floors", "unfinished_runs", "open_ms", *GATES}
+          "floors", "unfinished_runs", "open_ms", "at", *GATES}
 HEADERS = {
     "location": "Where",
     "threads": "Threads",
@@ -1071,6 +1072,8 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(line)
         out.extend(_diverged_lines(w))
     out.extend(launch_mod.lines(w))
+    moments = timeline_mod.moments(report)
+    out.extend(_timeline_window_lines(moments))
 
     out.extend(_budget_lines(w.get("main_thread")))
     out.extend(_crowding_lines(w.get("crowding")))
@@ -1157,6 +1160,10 @@ def to_markdown(report: dict[str, Any]) -> str:
         if pooled:
             out.append(pooled)
             out.append("")
+        placed = timeline_lines(moments, d["id"], told=bool(timeline_mod.window_of(moments)))
+        if placed:
+            out.extend(placed)
+            out.append("")
         # Failed in some repeats and ran in the rest: the rows are from the
         # rest, and `runs` counts those.
         part = short_runs(d.get("failed_runs"))
@@ -1188,6 +1195,32 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append("")
         out.append(f"<sub>{note}</sub>")
     return "\n".join(out)
+
+
+def _link(m: "timeline_mod.Moment") -> str:
+    words = timeline_mod.label(m).replace("[", "\\[").replace("]", "\\]")
+    return f"[{words}]({timeline_mod.url(m)})"
+
+
+def _timeline_window_lines(moments: list["timeline_mod.Moment"]) -> list[str]:
+    """The scenario window as a link to Perfetto UI, and once how such a
+    link is used (#132). Nothing when the report has no window to open."""
+    found = timeline_mod.window_of(moments)
+    if found is None:
+        return []
+    return [f"Timeline: {_link(found[1])}. {timeline_mod.HOW}"]
+
+
+def timeline_lines(moments: list["timeline_mod.Moment"], det_id: str,
+                   told: bool = True) -> list[str]:
+    """A detector's first rows as links to their longest occurrence in
+    Perfetto UI (#132), under its table. `told` is whether the report already
+    said how a link is used; it is said here otherwise."""
+    mine = timeline_mod.of_detector(moments, det_id)
+    if not mine:
+        return []
+    line = "On the timeline: " + " · ".join(_link(m) for _, m in mine)
+    return [line if told else f"{line}. {timeline_mod.HOW}"]
 
 
 def _diverged_lines(w: dict[str, Any]) -> list[str]:

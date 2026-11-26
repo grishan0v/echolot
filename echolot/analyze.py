@@ -173,6 +173,9 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         bounds = _setup_context(tp, cfg, procs[0]["upid"],
                                 {d.id: ov for d, ov, _ in plan if ov}, trace=str(trace))
         window = _window_info(tp, cfg, procs, bounds if "defined_by" in bounds else None)
+        main_name = _main_thread_name(tp, window.get("pid"))
+        if main_name:
+            window["main_thread_name"] = main_name
         environment = _environment_info(
             tp, package or str(procs[0].get("name") or "").split(":")[0],
             mapped=extra is not None)
@@ -254,6 +257,16 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                         _stacks_behind(tp, d, params, rows, package, root)
                     except Exception as e:  # the rows stand without it
                         print(f"[!] {d.id} @samples: {e}", file=sys.stderr)
+            # Where each row's longest occurrence is, for the link that opens
+            # the trace on it (#132): every row measured, under the bar too,
+            # since the merge takes the place from the repeat whose longest
+            # it is, shown there or not. Last: it reads `_rows` as the rows
+            # now are, and a failure leaves them as they were.
+            if d.longest_sql and (rows or under):
+                try:
+                    _longest_behind(tp, d, params, rows + (under or []))
+                except Exception as e:  # the rows stand without it
+                    print(f"[!] {d.id} @longest: {e}", file=sys.stderr)
             entry = {
                 "id": d.id,
                 "title": d.title,
@@ -1956,6 +1969,57 @@ def _stacks_behind(tp, d, params: dict, rows: list[dict], package: str,
         row["stacks"] = block
         if "detail" not in d.identity:
             row["detail"] = f"{row['detail']} · {words}" if row.get("detail") else words
+
+
+def _longest_behind(tp, d, params: dict, rows: list[dict]) -> None:
+    """Where each row's longest occurrence is, from its `@longest` (#132).
+
+    Every row the query names gets `at`: `ts` and `dur` of the occurrence,
+    in the trace's own nanoseconds, and `tid` and `thread` of the thread it
+    happened on where it has one, `thread` as the trace names it, which is
+    how Perfetto UI titles its track. `timeline.py` builds the link from
+    them; the merge of repeats adds which repeat it is (`run`). A row the
+    query does not name, or names with no time, carries none.
+
+    Nothing is written until every row has been read, so a failure leaves the
+    rows as they were.
+    """
+    sql = d.render_longest(params)
+    if sql is None:
+        return
+    _rows_table(tp, rows, d.identity)
+    found: dict[tuple, dict[str, Any]] = {}
+    for r in tp.query(sql):
+        ts, dur = r.get("ts"), r.get("dur")
+        if not isinstance(ts, int) or not isinstance(dur, int) or dur <= 0:
+            continue
+        at: dict[str, Any] = {"ts": ts, "dur": dur}
+        if isinstance(r.get("tid"), int):
+            at["tid"] = r["tid"]
+        found.setdefault(tuple(r.get(c) for c in d.identity), at)
+    tids = sorted({at["tid"] for at in found.values() if "tid" in at})
+    if tids:
+        names = {t["tid"]: t["name"] for t in tp.query(
+            "SELECT t.tid, MIN(t.name) AS name FROM thread t JOIN _proc p ON t.upid = p.upid "
+            f"WHERE t.tid IN ({', '.join(str(t) for t in tids)}) GROUP BY t.tid")
+            if t.get("name")}
+        for at in found.values():
+            if at.get("tid") in names:
+                at["thread"] = names[at["tid"]]
+    for row in rows:
+        at = found.get(tuple(row.get(c) for c in d.identity))
+        if at is not None:
+            row["at"] = dict(at)
+
+
+def _main_thread_name(tp, pid: Any) -> str | None:
+    """The main thread's name as the trace has it, which is how Perfetto UI
+    titles its track: the link to the window shows that track first (#132)."""
+    if not isinstance(pid, int):
+        return None
+    found = tp.query("SELECT MIN(t.name) AS name FROM thread t JOIN _proc p ON t.upid = p.upid "
+                     f"WHERE t.tid = {pid}")
+    return (found[0].get("name") or None) if found else None
 
 
 def _rows_table(tp, rows: list[dict], identity: tuple[str, ...] = ()) -> None:

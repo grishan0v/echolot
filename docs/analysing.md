@@ -1042,6 +1042,42 @@ An investigation has a page of its own, with the agent's answer in the same
 shape: `echolot hunt --show --html`, described under
 [The answer as a page](agent-layer.md#the-answer-as-a-page).
 
+## On the timeline
+
+A row says how long and how often; to see it, open the trace where it
+happened. `report.md` says where: the window, and under each detector's table
+the longest occurrence of its first three rows, each a link to
+[Perfetto UI](https://ui.perfetto.dev):
+
+```markdown
+Timeline: [the scenario window, 1084.2 ms, in `coldStart_iter000`](https://ui.perfetto.dev/#!/?visStart=10100000000&visEnd=11184250000&startupCommands=…)
+On the timeline: [the longest of `inflate`, 86.2 ms, in `coldStart_iter001`](https://ui.perfetto.dev/#!/?visStart=10329310000&visEnd=10415510000&startupCommands=…)
+```
+
+The link opens the UI zoomed to the occurrence, with the thread it happened
+on pinned to the top. The trace is not in the link: Perfetto UI can fetch a
+trace only from a public HTTPS address, and a recording on your machine has
+none. So open the trace the link names there (**Open trace file**, or drop
+it on the page): the UI applies the link to the first trace it loads. In a
+set the link names the repeat whose longest occurrence it is, which is where
+`max_ms` comes from.
+
+[`echolot ui`](ui.md#the-other-pages) does it in one click: on its report
+page the same moments are links to a page of its own that opens Perfetto UI
+with the trace already in it. A `report.html` written to disk names no
+address outside itself, so there the moments are words.
+
+The numbers are in `report.json`: `at` on a row (`ts` and `dur` in the
+trace's nanoseconds, `tid` and `thread`, and `run`, the repeat's place in
+`traces`) and `window.main_thread_name`. A detector says where with a query
+of its own, [`-- @longest`](detectors.md#where-to-look-on-the-timeline).
+The links depend on nothing but the report, so a set gives the same
+`report.md` every time.
+
+The UI could also select the slice, by its `ts` and `dur`; the link does not
+ask for it, because in Perfetto UI v59 the selection moves the view after the
+zoom has started and the zoom is lost.
+
 ## Where a cold start went
 
 The header's budget says where the window went by thread state. When the
