@@ -116,7 +116,15 @@ on another activity than most of the set (`am start -W`'s `Activity:`, or the
 trace's last `performCreate:`): another journey, such as an app opening the
 page read last by itself; each has its `repeat`, its `activity` and the
 `others`' one. `window.activities` counts them instead when as many ended on
-each and none could be left out. `window.activity` is where a launch window's
+each and none could be left out. `unfinished` lists the launches left out
+because the recording stopped before their first frame, and `no_window` the
+traces left out because the window could not be taken from them at all: no
+process `project.process` matches, or no launch of it under `window: launch`.
+Each has its `trace` and `said`, the sentence `analyze` would have stopped on
+alone; for a trace where the mask took another process, it names that process
+and says the app's own is not in the trace under its name. A set is read
+without them only while the traces with a window are more than half of it, and
+`runs` counts those. `window.activity` is where a launch window's
 launches ended, `window.alias` the activity a launcher alias stands for,
 `window.handover` the splash's hand-over the window ran on through (`from`,
 `to`, `first_frame_ms`, `after_ms`, `launches`, `runs`; see `echolot guide

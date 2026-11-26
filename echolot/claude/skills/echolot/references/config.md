@@ -216,8 +216,15 @@ The trace has to hold the launch, which it does when the app is started
 inside the recording: `launch` mode does that, and so does a startup
 macrobenchmark. `analyze` refuses a trace with no launch of the process, and
 names it; when a permission dialog took the launch, it says so and names the
-`pm grant` command. When the process was brought to the front more than once in one
-trace, the window is its first launch.
+`pm grant` command. In a set it leaves such a trace out instead, and one with
+no process the mask matches under any window, while the traces with a window
+are more than half of the set: `Left out: …` under the report's Traces line,
+`no_window` in `report.json`. When the mask took another process in the app's
+place, the benchmark's own, the sentence names it and says the app's process
+is not in the trace under its name: a name cut to its last fifteen characters,
+which `project.process = '*<last fifteen>'` also matches. When the process was
+brought to the front more than once in one trace, the window is its first
+launch.
 
 Two launch windows that closed differently are two measurements, and so are a
 launch window and an anchored one, though the scenario's name is the same.

@@ -321,13 +321,15 @@ def _verdict(report: dict[str, Any], ctx: Any) -> str:
 
 def window_notes(report: dict[str, Any]) -> list[str]:
     """What the CLI says of the window beside its length, in its own words:
-    repeats that diverged several-fold, and a scenario with no start or end
-    anchor, whose window runs to the edge of what the process did. The
-    lines `report.md` writes, from the functions that write them; the page
-    had neither (#927)."""
+    the recordings the set left out, repeats that diverged several-fold, and
+    a scenario with no start or end anchor, whose window runs to the edge of
+    what the process did. The lines `report.md` writes, from the functions
+    that write them; the page had none of them (#927), and said "measured on
+    14 recordings" of a set of fifteen with one left out (#466)."""
     w = report.get("window") or {}
     try:
-        lines = render_mod._diverged_lines(w) + render_mod._window_warning_lines(w)
+        lines = (render_mod.left_out_lines(report) + render_mod._diverged_lines(w)
+                 + render_mod._window_warning_lines(w))
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return []
     return [re.sub(r"^>\s*(?:⚠️\s*)?", "", line).replace("**", "") for line in lines]

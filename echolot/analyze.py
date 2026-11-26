@@ -32,7 +32,7 @@ from . import names as names_mod
 from . import report as report_mod
 from . import merge as merge_mod
 from . import stacks as stacks_mod
-from .config import LAUNCH, NO_ANCHOR, PACKAGE, WHOLE, Config, ConfigError
+from .config import LAUNCH, NO_ANCHOR, PACKAGE, WHOLE, Config, ConfigError, NoWindow
 from .tp import TraceSession, load_detectors, render_sql, sql_value, toolchain_info
 
 
@@ -529,9 +529,11 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
 
     `trace` is named in the failure because a run is usually a set. A
     macrobenchmark round of fifteen where one trace carries a truncated
-    process name fails on that one and stops everything, and "no process
-    matches" without a filename sends the reader to check a config that is
-    right about fourteen of them.
+    process name fails on that one, and "no process matches" without a
+    filename sent the reader to check a config that is right about fourteen
+    of them. It is a `NoWindow`: `analyze` leaves that trace out of the set
+    and names it, rather than stop the other fourteen (#466). A file that is
+    no trace data at all is still refused (`_require_named_processes`).
 
     `source` is what gave the mask — `project.process`, `--process`, or
     `default` for `names`' own `*` — and every sentence names that one.
@@ -578,7 +580,7 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
                         f"the trace has it from comm rather than from the "
                         f"process list, and the head is what was cut — try "
                         f"{again}.")
-        raise ConfigError(message)
+        raise NoWindow(message)
     if len(rows) > 1:
         # A `*` on a real device matches six hundred processes; naming them
         # all is a fifteen-kilobyte line into the agent's window. The next
@@ -634,8 +636,10 @@ def _setup_context(tp, cfg: Config, upid: int,
     A scenario with `window: launch` has no anchors to read the two numbers
     from: they come from the launch the platform records (launch.py), with
     what closed the window beside them. `trace` names the file when that
-    launch is not there. One with `window: whole`, and any under
-    `--whole-trace`, takes the trace's own first and last moments (#519).
+    launch is not there, and the config's package what the process should
+    have been when it is not the app's (#466). One with `window: whole`, and
+    any under `--whole-trace`, takes the trace's own first and last moments
+    (#519).
     """
     tp.exec_script(render_sql(
         (SQL_DIR / "context.sql").read_text(encoding="utf-8"),
@@ -646,12 +650,12 @@ def _setup_context(tp, cfg: Config, upid: int,
         # Rendered as `None` into the SQL below, this came out of
         # trace_processor as a schema error and out of the command as a
         # traceback.
-        raise ConfigError(
+        raise NoWindow(
             "the process has no thread slices, so there is nothing to build a "
             "window from. Check project.process and that the app's atrace was "
             "recorded: echolot probe <trace>")
     if cfg.scenario_window == LAUNCH:
-        bounds = launch_mod.find(tp, upid, trace)
+        bounds = launch_mod.find(tp, upid, trace, app=str(cfg.value(PACKAGE) or "") or None)
     elif cfg.scenario_window == WHOLE:
         bounds = launch_mod.whole(tp)
     for phase in ("window.sql", "environment.sql"):
