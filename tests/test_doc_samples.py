@@ -24,6 +24,7 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -83,6 +84,7 @@ def _cut(text: str) -> dict:
     }
 
 
+@pytest.mark.pinned_output
 def test_the_readme_sample_is_what_analyze_prints_for_the_demo(demo_report):
     rendered = report_mod.to_markdown(demo_report).rstrip("\n")
     langs = yaml.safe_load(

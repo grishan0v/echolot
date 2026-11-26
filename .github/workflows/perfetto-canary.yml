@@ -46,10 +46,19 @@ name: perfetto-canary
 # one its manifest names. #1035 is what it finds: on the build of main of
 # 2026-11-26 every check passed, and the demo's startup breakdown moved.
 #
-# That leg is notice and never alarm: it does not turn the run red. Main
-# keeps moving, so it differs from the pin for good, and a red run every
-# Tuesday would hide the one that matters, the PyPI leg's. Its summary is on
-# the run's page for whoever is about to raise the pin.
+# That leg asks them in two kinds. Main differs from the pin for good, so
+# whatever is held to the pin's own output moves there and stays moved until
+# the pin does: the README's sample is the demo's report, byte for byte,
+# and v60's startup breakdown gives 19 ms of it to another reason. Those
+# tests carry `@pytest.mark.pinned_output` (pyproject.toml), and in this leg
+# they run in a step of their own whose failures are listed, with their
+# diffs, under "what the next release changes"; the fixture's report, value
+# by value, is listed there too. Neither turns the leg red. What does is a
+# breakage: doctor failing, a report that cannot be built, and any test
+# without the marker — a traceback, an SQL error, a claim that no longer
+# holds. A red main leg is a release on its way that breaks echolot, and
+# worth the mail. Were every difference red, the leg would be red every
+# Tuesday for a known reason, and nobody reads that one.
 
 on:
   schedule:
@@ -91,8 +100,6 @@ jobs:
         # manifest names. `main`: the pin's package, and trace_processor as
         # Perfetto's main builds it today.
         tried: [pypi, main]
-    # See the top of the file: main differs from the pin for good.
-    continue-on-error: ${{ matrix.tried == 'main' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -240,10 +247,15 @@ jobs:
       # `generated_at`. Two builds of the same version agree on everything
       # else. Detectors are matched by id, so one more or one fewer moves no
       # other detector's rows.
+      #
+      # In the main leg a value that moved is notice, and the step passes
+      # (`moved` says so to the summary); a report that cannot be built
+      # fails it in both legs.
       - name: The fixture's report, pinned against tried
         id: report
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
+          TRIED: ${{ matrix.tried }}
           TP_BINARY: ${{ steps.install.outputs.tp_binary }}
         run: |
           set -euo pipefail
@@ -314,9 +326,15 @@ jobs:
               print(f"- {k}: {pinned[k]!r}")
           for k in new:
               print(f"+ {k}: {tried[k]!r}")
-          sys.exit(1)
+          # Not 1, which is also what an exception exits with.
+          sys.exit(3)
           PY
           cat "$RUNNER_TEMP/report.txt"
+          if [ "$status" = 3 ]; then
+            echo "moved=yes" >> "$GITHUB_OUTPUT"
+            [ "$TRIED" = main ] && exit 0
+            exit 1
+          fi
           exit "$status"
 
       # As `checks` runs it, less the coverage gate, which measures the tests
@@ -325,9 +343,10 @@ jobs:
       # its own at the end, and the summary below takes those lines.
       #
       # The main leg runs it in the home where the main build sits at the
-      # pin's path, less one test: it hands the file at that path to a fake
-      # curl and expects the pin's SHA-256 of what arrives, which a build of
-      # main never has.
+      # pin's path, less the tests held to the pin's output (the next step
+      # has them) and less one test more: it hands the file at the pin's
+      # path to a fake curl and expects the pin's SHA-256 of what arrives,
+      # which a build of main never has.
       - name: pytest
         id: pytest
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -335,12 +354,34 @@ jobs:
           TRIED_HOME: ${{ steps.install.outputs.tried_home }}
         run: |
           set -o pipefail
-          deselect=()
+          only=()
           if [ -n "$TRIED_HOME" ]; then
             export HOME="$TRIED_HOME"
-            deselect=(--deselect "tests/test_first_run.py::test_a_first_names_json_is_json_and_the_notice_is_on_stderr")
+            only=(-m "not pinned_output"
+                  --deselect "tests/test_first_run.py::test_a_first_names_json_is_json_and_the_notice_is_on_stderr")
           fi
-          pytest -q -n auto -rfE "${deselect[@]}" | tee "$RUNNER_TEMP/pytest.txt"
+          pytest -q -n auto -rfE "${only[@]}" | tee "$RUNNER_TEMP/pytest.txt"
+
+      # The main leg only: the tests held to the pin's own output, which a
+      # build of main moves by design (see the top of the file). They fail
+      # nothing here; what they say goes into the summary as what the next
+      # release changes, the diff each test prints included. A test with no
+      # marker that reads the same thing — the demo's report — is in the step
+      # above, so a demo that no longer builds is a breakage there.
+      - name: What the next release changes in the pin's output
+        id: pinned
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.tried == 'main' }}
+        continue-on-error: true
+        env:
+          TRIED_HOME: ${{ steps.install.outputs.tried_home }}
+        run: |
+          export HOME="$TRIED_HOME"
+          status=0
+          pytest -q -rfE -m pinned_output > "$RUNNER_TEMP/pinned.txt" || status=$?
+          cat "$RUNNER_TEMP/pinned.txt"
+          # 5 is pytest's "no tests collected": nothing marked, nothing moved.
+          [ "$status" = 5 ] && status=0
+          exit "$status"
 
       # One page for the run, whichever steps failed. The job is already red
       # if any did: this only says why, without opening three logs.
@@ -358,7 +399,9 @@ jobs:
           INSTALL: ${{ steps.install.outcome }}
           DOCTOR: ${{ steps.doctor.outcome }}
           REPORT: ${{ steps.report.outcome }}
+          REPORT_MOVED: ${{ steps.report.outputs.moved }}
           PYTEST: ${{ steps.pytest.outcome }}
+          PINNED_TESTS: ${{ steps.pinned.outcome }}
         run: |
           verdict() {
             case "$1" in
@@ -400,7 +443,7 @@ jobs:
             echo "The newest trace_processor perfetto has released: $RELEASED."
             echo
             if [ "$LEG" = main ]; then
-              echo "> Built by Perfetto's CI from main at [\`${COMMIT:0:9}\`](https://github.com/google/perfetto/commit/$COMMIT), committed $COMMITTED: what the next release carries so far. Only trace_processor is tried; the Python package is the pin's. This leg never turns the run red — main differs from the pin for good — so what failed below is notice for whoever raises the pin next."
+              echo "> Built by Perfetto's CI from main at [\`${COMMIT:0:9}\`](https://github.com/google/perfetto/commit/$COMMIT), committed $COMMITTED: what the next release carries so far. Only trace_processor is tried; the Python package is the pin's. This leg is red for a breakage only; what main moves in the pin's own output is listed at the end and fails nothing."
               echo
             elif [ "$PINNED" = "$TRIED" ]; then
               echo "> The pin is the version tried: nothing new to learn about perfetto, and the run shows the canary itself still works."
@@ -410,16 +453,50 @@ jobs:
             echo
             [ -s "$RUNNER_TEMP/doctor.txt" ] && block "$RUNNER_TEMP/doctor.txt" 40
             echo
-            echo "**The fixture's report, against the pin's** — $(verdict "$REPORT")"
+            if [ "$LEG" = main ] && [ "$REPORT_MOVED" = yes ]; then
+              echo "**The fixture's report, against the pin's** — built on both; what moved is at the end"
+            else
+              echo "**The fixture's report, against the pin's** — $(verdict "$REPORT")"
+              echo
+              [ -s "$RUNNER_TEMP/report.txt" ] && block "$RUNNER_TEMP/report.txt" 60
+            fi
             echo
-            [ -s "$RUNNER_TEMP/report.txt" ] && block "$RUNNER_TEMP/report.txt" 60
-            echo
-            echo "**pytest** — $(verdict "$PYTEST")"
+            if [ "$LEG" = main ]; then
+              echo "**pytest, less the tests held to the pin's output** — $(verdict "$PYTEST")"
+            else
+              echo "**pytest** — $(verdict "$PYTEST")"
+            fi
             echo
             if [ -s "$RUNNER_TEMP/pytest.txt" ]; then
               grep -E '^(FAILED|ERROR) ' "$RUNNER_TEMP/pytest.txt" > "$RUNNER_TEMP/pytest-failed.txt" || true
               tail -n 1 "$RUNNER_TEMP/pytest.txt" > "$RUNNER_TEMP/pytest-tally.txt"
               cat "$RUNNER_TEMP/pytest-tally.txt" "$RUNNER_TEMP/pytest-failed.txt" > "$RUNNER_TEMP/pytest-summary.txt"
               block "$RUNNER_TEMP/pytest-summary.txt" 60
+            fi
+            if [ "$LEG" = main ]; then
+              echo
+              echo "#### What the next release changes"
+              echo
+              echo "Not failures: the pin's own output, as main moves it. At the bump, \`python docs/assets/render.py\` or an edit of the page puts each right."
+              echo
+              if [ "$REPORT_MOVED" = yes ]; then
+                echo "The fixture's report, against the pin's:"
+                echo
+                block "$RUNNER_TEMP/report.txt" 60
+              else
+                echo "The fixture's report: no value moved."
+              fi
+              echo
+              case "$PINNED_TESTS" in
+                success)
+                  echo "The tests held to the pin's output (\`pinned_output\`): all pass, nothing moved." ;;
+                failure)
+                  echo "The tests held to the pin's output (\`pinned_output\`) that differ, with what each says:"
+                  echo
+                  grep -E '^(FAILED|ERROR) |^E ' "$RUNNER_TEMP/pinned.txt" > "$RUNNER_TEMP/pinned-summary.txt" || true
+                  block "$RUNNER_TEMP/pinned-summary.txt" 100 ;;
+                *)
+                  echo "The tests held to the pin's output did not run ($PINNED_TESTS)." ;;
+              esac
             fi
           } >> "$GITHUB_STEP_SUMMARY"

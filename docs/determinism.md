@@ -340,9 +340,14 @@ leg learns nothing. A second leg asks the same three questions of Perfetto's
 `main`: the pinned package with the `trace_processor` Perfetto's CI built from
 the newest commit it built for Linux, fetched from Perfetto's artifact storage
 (`perfetto-luci-artifacts/<commit>/linux-amd64/`). Its summary names the
-commit. That leg never turns the run red: `main` differs from the pin for
-good, and a red run every week would hide the PyPI leg's. Read it before
-raising the pin.
+commit. `main` differs from the pin for good, so that leg splits what it
+finds in two. Text held byte for byte to what the pin prints — the README's
+sample, the pages of docs that quote the tool; the tests that hold it are
+marked `pinned_output` — and the fixture's report, value by value, are
+listed under "What the next release changes" and fail nothing: at the bump,
+`python docs/assets/render.py` or an edit of the page puts them right. A
+breakage turns the leg red: `doctor` failing, a report that cannot be
+built, any other test failing. Read the summary before raising the pin.
 
 ### Your own binary
 
