@@ -335,6 +335,15 @@ nothing. Started by hand (Actions → perfetto-canary → Run workflow), it take
 a version to try instead of the newest — a version known to differ is how to
 see that it still names what fails.
 
+Until a release reaches PyPI, the newest package there is the pin, and that
+leg learns nothing. A second leg asks the same three questions of Perfetto's
+`main`: the pinned package with the `trace_processor` Perfetto's CI built from
+the newest commit it built for Linux, fetched from Perfetto's artifact storage
+(`perfetto-luci-artifacts/<commit>/linux-amd64/`). Its summary names the
+commit. That leg never turns the run red: `main` differs from the pin for
+good, and a red run every week would hide the PyPI leg's. Read it before
+raising the pin.
+
 ### Your own binary
 
 A trace_processor of your own goes in one of two ways:
