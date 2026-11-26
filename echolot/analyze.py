@@ -32,7 +32,7 @@ from . import names as names_mod
 from . import report as report_mod
 from . import merge as merge_mod
 from . import stacks as stacks_mod
-from .config import LAUNCH, NO_ANCHOR, PACKAGE, WHOLE, Config, ConfigError
+from .config import LAUNCH, NO_ANCHOR, PACKAGE, WHOLE, Config, ConfigError, NoWindow
 from .tp import TraceSession, load_detectors, render_sql, sql_value, toolchain_info
 
 
@@ -173,6 +173,9 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
         bounds = _setup_context(tp, cfg, procs[0]["upid"],
                                 {d.id: ov for d, ov, _ in plan if ov}, trace=str(trace))
         window = _window_info(tp, cfg, procs, bounds if "defined_by" in bounds else None)
+        main_name = _main_thread_name(tp, window.get("pid"))
+        if main_name:
+            window["main_thread_name"] = main_name
         environment = _environment_info(
             tp, package or str(procs[0].get("name") or "").split(":")[0],
             mapped=extra is not None)
@@ -254,6 +257,16 @@ def analyze_trace(trace, cfg: Config, tp_binary: str | None = None, *,
                         _stacks_behind(tp, d, params, rows, package, root)
                     except Exception as e:  # the rows stand without it
                         print(f"[!] {d.id} @samples: {e}", file=sys.stderr)
+            # Where each row's longest occurrence is, for the link that opens
+            # the trace on it (#132): every row measured, under the bar too,
+            # since the merge takes the place from the repeat whose longest
+            # it is, shown there or not. Last: it reads `_rows` as the rows
+            # now are, and a failure leaves them as they were.
+            if d.longest_sql and (rows or under):
+                try:
+                    _longest_behind(tp, d, params, rows + (under or []))
+                except Exception as e:  # the rows stand without it
+                    print(f"[!] {d.id} @longest: {e}", file=sys.stderr)
             entry = {
                 "id": d.id,
                 "title": d.title,
@@ -529,9 +542,11 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
 
     `trace` is named in the failure because a run is usually a set. A
     macrobenchmark round of fifteen where one trace carries a truncated
-    process name fails on that one and stops everything, and "no process
-    matches" without a filename sends the reader to check a config that is
-    right about fourteen of them.
+    process name fails on that one, and "no process matches" without a
+    filename sent the reader to check a config that is right about fourteen
+    of them. It is a `NoWindow`: `analyze` leaves that trace out of the set
+    and names it, rather than stop the other fourteen (#466). A file that is
+    no trace data at all is still refused (`_require_named_processes`).
 
     `source` is what gave the mask — `project.process`, `--process`, or
     `default` for `names`' own `*` — and every sentence names that one.
@@ -578,7 +593,7 @@ def _resolve_process(tp, glob: str, trace: str | None = None, *,
                         f"the trace has it from comm rather than from the "
                         f"process list, and the head is what was cut — try "
                         f"{again}.")
-        raise ConfigError(message)
+        raise NoWindow(message)
     if len(rows) > 1:
         # A `*` on a real device matches six hundred processes; naming them
         # all is a fifteen-kilobyte line into the agent's window. The next
@@ -634,8 +649,10 @@ def _setup_context(tp, cfg: Config, upid: int,
     A scenario with `window: launch` has no anchors to read the two numbers
     from: they come from the launch the platform records (launch.py), with
     what closed the window beside them. `trace` names the file when that
-    launch is not there. One with `window: whole`, and any under
-    `--whole-trace`, takes the trace's own first and last moments (#519).
+    launch is not there, and the config's package what the process should
+    have been when it is not the app's (#466). One with `window: whole`, and
+    any under `--whole-trace`, takes the trace's own first and last moments
+    (#519).
     """
     tp.exec_script(render_sql(
         (SQL_DIR / "context.sql").read_text(encoding="utf-8"),
@@ -646,12 +663,12 @@ def _setup_context(tp, cfg: Config, upid: int,
         # Rendered as `None` into the SQL below, this came out of
         # trace_processor as a schema error and out of the command as a
         # traceback.
-        raise ConfigError(
+        raise NoWindow(
             "the process has no thread slices, so there is nothing to build a "
             "window from. Check project.process and that the app's atrace was "
             "recorded: echolot probe <trace>")
     if cfg.scenario_window == LAUNCH:
-        bounds = launch_mod.find(tp, upid, trace)
+        bounds = launch_mod.find(tp, upid, trace, app=str(cfg.value(PACKAGE) or "") or None)
     elif cfg.scenario_window == WHOLE:
         bounds = launch_mod.whole(tp)
     for phase in ("window.sql", "environment.sql"):
@@ -1952,6 +1969,57 @@ def _stacks_behind(tp, d, params: dict, rows: list[dict], package: str,
         row["stacks"] = block
         if "detail" not in d.identity:
             row["detail"] = f"{row['detail']} · {words}" if row.get("detail") else words
+
+
+def _longest_behind(tp, d, params: dict, rows: list[dict]) -> None:
+    """Where each row's longest occurrence is, from its `@longest` (#132).
+
+    Every row the query names gets `at`: `ts` and `dur` of the occurrence,
+    in the trace's own nanoseconds, and `tid` and `thread` of the thread it
+    happened on where it has one, `thread` as the trace names it, which is
+    how Perfetto UI titles its track. `timeline.py` builds the link from
+    them; the merge of repeats adds which repeat it is (`run`). A row the
+    query does not name, or names with no time, carries none.
+
+    Nothing is written until every row has been read, so a failure leaves the
+    rows as they were.
+    """
+    sql = d.render_longest(params)
+    if sql is None:
+        return
+    _rows_table(tp, rows, d.identity)
+    found: dict[tuple, dict[str, Any]] = {}
+    for r in tp.query(sql):
+        ts, dur = r.get("ts"), r.get("dur")
+        if not isinstance(ts, int) or not isinstance(dur, int) or dur <= 0:
+            continue
+        at: dict[str, Any] = {"ts": ts, "dur": dur}
+        if isinstance(r.get("tid"), int):
+            at["tid"] = r["tid"]
+        found.setdefault(tuple(r.get(c) for c in d.identity), at)
+    tids = sorted({at["tid"] for at in found.values() if "tid" in at})
+    if tids:
+        names = {t["tid"]: t["name"] for t in tp.query(
+            "SELECT t.tid, MIN(t.name) AS name FROM thread t JOIN _proc p ON t.upid = p.upid "
+            f"WHERE t.tid IN ({', '.join(str(t) for t in tids)}) GROUP BY t.tid")
+            if t.get("name")}
+        for at in found.values():
+            if at.get("tid") in names:
+                at["thread"] = names[at["tid"]]
+    for row in rows:
+        at = found.get(tuple(row.get(c) for c in d.identity))
+        if at is not None:
+            row["at"] = dict(at)
+
+
+def _main_thread_name(tp, pid: Any) -> str | None:
+    """The main thread's name as the trace has it, which is how Perfetto UI
+    titles its track: the link to the window shows that track first (#132)."""
+    if not isinstance(pid, int):
+        return None
+    found = tp.query("SELECT MIN(t.name) AS name FROM thread t JOIN _proc p ON t.upid = p.upid "
+                     f"WHERE t.tid = {pid}")
+    return (found[0].get("name") or None) if found else None
 
 
 def _rows_table(tp, rows: list[dict], identity: tuple[str, ...] = ()) -> None:

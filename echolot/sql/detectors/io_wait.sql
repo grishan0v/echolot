@@ -106,3 +106,22 @@ WHERE t.tid = p.pid
   AND EXISTS (SELECT 1 FROM _rows r
               WHERE r.location = COALESCE(f.family, t.thread_name)
                 AND r.detail LIKE 'main%');
+
+-- @longest
+--
+-- The longest wait for the disk of each row's threads, main or not as the
+-- row says: `max_ms` is the longest of them, within the window.
+
+SELECT location, thread, ts, dur, tid
+FROM (
+    SELECT r.location, r.thread, t.ts, t.dur, t.tid,
+           ROW_NUMBER() OVER (PARTITION BY r.location, r.thread
+                              ORDER BY t.dur DESC, t.ts) AS k
+    FROM _tstate_win t
+    CROSS JOIN _proc p
+    LEFT JOIN _name_family f ON f.name = t.thread_name
+    JOIN _rows r ON r.location = COALESCE(f.family, t.thread_name)
+                AND r.thread = CASE WHEN t.tid = p.pid THEN 'main' ELSE 'background' END
+    WHERE t.state IN ('D', 'DK') AND t.io_wait = 1 AND t.dur > 0
+)
+WHERE k = 1;

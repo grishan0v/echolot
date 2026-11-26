@@ -90,6 +90,10 @@ THREADS = {
 
 OTHER_PID = 5000
 OTHER_NAME = "com.other.app"
+# What `build(cut=True)` names the two (#466): the app's process cut from the
+# front, and a benchmark's own process, which the app's package begins.
+CUT_NAME = "ample.app"
+BENCHMARK_PROCESS = "com.example.app.benchmark"
 OTHER_THREADS = {OTHER_PID: "m.other.app"}
 
 # --- surfaceflinger: the owner of display frames ---------------------------
@@ -2058,7 +2062,8 @@ def build(frames: bool = True, environment: bool = True,
           smooth: bool = False, answered: bool = True, heap: bool = True,
           activities: tuple[str, ...] = (), boot: bool = False,
           drawing: bool = False, realtime_ns: int | None = None,
-          unfinished: bool = False, surface: str | None = None) -> bytes:
+          unfinished: bool = False, surface: str | None = None,
+          cut: bool = False) -> bytes:
     """The fixture trace. `frames=False` leaves out the frame timeline.
 
     Android 11 and below, and any trace recorded without the
@@ -2133,6 +2138,13 @@ def build(frames: bool = True, environment: bool = True,
     window (#1011): `"unjudged"` with none of them in the frame timeline, as
     a map or a game has it, `"judged"` with 40 of them there. None by
     default.
+
+    `cut=True` writes the app's process into the process list under a name
+    cut from the front, `CUT_NAME`, and names the other app's process
+    `BENCHMARK_PROCESS`, as one trace in fifteen of a startup
+    macrobenchmark's round carried them (#466): the platform's launch is
+    still the app's, by its package, and `com.example.app*` matches the
+    benchmark's process alone.
     """
     sched, threads, other_threads = list(SCHED), dict(THREADS), dict(OTHER_THREADS)
     if crowded:
@@ -2149,8 +2161,8 @@ def build(frames: bool = True, environment: bool = True,
         snapshot.clocks.add(clock_id=1, timestamp=realtime_ns)  # REALTIME
     if surface:
         threads = {**threads, TID_RENDERER: "Thread-7", TID_RENDER: "RenderThread"}
-    process_tree(builder, [(APP_PID, APP_NAME, threads),
-                           (OTHER_PID, OTHER_NAME, other_threads),
+    process_tree(builder, [(APP_PID, CUT_NAME if cut else APP_NAME, threads),
+                           (OTHER_PID, BENCHMARK_PROCESS if cut else OTHER_NAME, other_threads),
                            (SF_PID, SF_NAME, sf_threads),
                            (SS_PID, SS_NAME, ss_threads),
                            (KS_PID, KS_NAME, KS_THREADS)])

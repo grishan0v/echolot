@@ -1,0 +1,10 @@
+/* echolot ui's timeline page: a line that says what is opened and how far
+   it got, and Perfetto UI under it, filling the window. */
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; }
+.tl-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  padding: 6px var(--gutter-r) 6px var(--gutter-l); border-bottom: 1px solid var(--line);
+  font-size: var(--t-sm); }
+.tl-bar b { font-weight: 600; }
+.tl-said { color: var(--ink-2); }
+.tl-frame { flex: 1 1 auto; width: 100%; min-height: 0; border: 0; display: block; }

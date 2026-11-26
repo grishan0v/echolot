@@ -394,6 +394,15 @@ The top bar is a path through them: **Start**, **Report**, **Agent's answer**,
 **After the fix**. A step is there once it has something to show.
 
 - **Report** is the last report of the scenario the start page is about.
+  Under its verdict, and in each check's details, a moment of the report
+  opens in Perfetto UI: the scenario's window, and the longest occurrence of
+  a check's first rows ([On the timeline](analysing.md#on-the-timeline)).
+  The link leads to a page of the server's that holds Perfetto UI in a frame,
+  zoomed to the moment with its thread pinned, and hands it the recording:
+  one click instead of finding the file, the process, the thread and the
+  moment. A moment whose recording is not on disk any more has no link. An
+  investigation's reports and the report of recordings from elsewhere have
+  the same links.
 - **Agent's answer** is the newest investigation as
   [a page](agent-layer.md#the-answer-as-a-page), the one
   `echolot hunt --show --html` writes, drawn at that moment from the
@@ -731,8 +740,12 @@ the page it opened and by nothing else:
   opened. A client named in an address is one the page starts, Claude Code
   or Codex. An agent's command line is built from the config and the report
   alone.
-- It serves the pages it draws and no file. No address is turned into a path
-  on disk.
+- It serves the pages it draws and one kind of file: a recording a report
+  of the project names, to the page that opens a moment of that report in
+  Perfetto UI. The address names the report and the moment's place among the
+  report's, and no file: no address is turned into a path on disk. The path
+  is the report's, taken from the project's folder, and a file that does not
+  begin the way a Perfetto trace begins is not sent.
 - The folder **Analyse trace files** names is the one path a request carries,
   and what it can give a page is no file. The server lists that folder one
   level deep and takes in only the names, sizes and times of files whose
@@ -754,6 +767,11 @@ the page it opened and by nothing else:
   The browser is told to hold it to that. A page the server serves may do two
   things a report written to disk may not: send a form to the server it came
   from, and ask it how far a run is. A page on disk keeps the strict policy.
+  The page that opens a moment may do one thing more: hold Perfetto UI
+  (`ui.perfetto.dev`) in a frame, and only that. It reads the recording from
+  this server and posts it into the frame, in the browser; Perfetto UI reads
+  a trace handed to it that way in the page and sends it nowhere. The frame
+  learns the server's origin and nothing of its addresses, so not the token.
 
 Two at once are fine: each has its own port and its own token.
 

@@ -44,6 +44,11 @@ arranged from the same pieces:
                     the screen before it starts, the agent on its
                     investigation's page, which one runs on the start page
 
+    timeline.css/.js what is the timeline's alone: the line over Perfetto UI,
+                    the frame, and the script that hands it the trace
+    timeline_page.py a moment of a report in Perfetto UI, with its trace:
+                    `echolot ui` alone, which has the recording to hand over
+
 A new page takes the `.css` and `.js` it needs by name in `kit.document`,
 adds a stylesheet for its own columns, and builds its body from `kit`.
 """

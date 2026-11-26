@@ -634,6 +634,41 @@ of them that one, every repeat is, `window.activities` counts them, and the
 report says the medians mix two journeys. See
 [A launch that ended elsewhere](collecting.md#a-launch-that-ended-elsewhere).
 
+### A trace that gives no window
+
+A trace the window cannot be taken from at all is left out of the set too:
+one with no process `project.process` matches, under any window, and one with
+no launch of that process under `window: launch`. One trace in fifteen of a
+startup macrobenchmark's round has carried the app's process under its last
+fifteen characters, as the kernel names a thread; the mask then matched no
+process, or only the benchmark's own, and the whole set stopped on that trace
+with exit 2 and no report (#466). `analyze` names such a trace on stderr and
+under the Traces line, `Left out: … It gives no window to read: …`, with the
+sentence it would have stopped on: for a trace where the mask took another
+process, the process it took, and that the app's own is not in the trace under
+its name. `report.json` lists it under `no_window` with that sentence, `runs`
+counts the traces the medians are over, and `compare` and the report's page
+say the set is smaller than what was recorded. A launch the recording stopped
+in the middle of is left out the same way, under `unfinished` (see
+[A window that is the launch](#a-window-that-is-the-launch)).
+
+It holds while the traces with a window are more than half of the set. One
+recording that went wrong is an accident of that recording. Most of a set
+going wrong is a cause the recordings share, a mask, a scenario that starts
+nothing, a recording too short for the build, and a report over the few that
+went through would speak for the set from its odd ones: the launches that
+ended inside a short recording are its fastest. So one trace of two, or half
+of any set, is refused, and so is a set where no trace gives a window, with
+the first trace's own sentence, the one it gets alone. A set in which every
+trace gives a window makes the report it always made.
+
+An anchored window whose anchor did not occur in one trace is not left out.
+That trace has the process, and a window cut from the process's first or last
+slice: the report says in how many repeats the anchor missed (`missed`) and
+that their rows are in the medians, and `compare` names them. Whether the
+scenario reached its end is the scenario's to explain, k repeats of n, where a
+trace with no process or no launch has nothing of the app to read.
+
 ### Runs that drift from the first to the last
 
 A set's medians are one state of the device measured again and again — when
@@ -1007,6 +1042,42 @@ An investigation has a page of its own, with the agent's answer in the same
 shape: `echolot hunt --show --html`, described under
 [The answer as a page](agent-layer.md#the-answer-as-a-page).
 
+## On the timeline
+
+A row says how long and how often; to see it, open the trace where it
+happened. `report.md` says where: the window, and under each detector's table
+the longest occurrence of its first three rows, each a link to
+[Perfetto UI](https://ui.perfetto.dev):
+
+```markdown
+Timeline: [the scenario window, 1084.2 ms, in `coldStart_iter000`](https://ui.perfetto.dev/#!/?visStart=10100000000&visEnd=11184250000&startupCommands=…)
+On the timeline: [the longest of `inflate`, 86.2 ms, in `coldStart_iter001`](https://ui.perfetto.dev/#!/?visStart=10329310000&visEnd=10415510000&startupCommands=…)
+```
+
+The link opens the UI zoomed to the occurrence, with the thread it happened
+on pinned to the top. The trace is not in the link: Perfetto UI can fetch a
+trace only from a public HTTPS address, and a recording on your machine has
+none. So open the trace the link names there (**Open trace file**, or drop
+it on the page): the UI applies the link to the first trace it loads. In a
+set the link names the repeat whose longest occurrence it is, which is where
+`max_ms` comes from.
+
+[`echolot ui`](ui.md#the-other-pages) does it in one click: on its report
+page the same moments are links to a page of its own that opens Perfetto UI
+with the trace already in it. A `report.html` written to disk names no
+address outside itself, so there the moments are words.
+
+The numbers are in `report.json`: `at` on a row (`ts` and `dur` in the
+trace's nanoseconds, `tid` and `thread`, and `run`, the repeat's place in
+`traces`) and `window.main_thread_name`. A detector says where with a query
+of its own, [`-- @longest`](detectors.md#where-to-look-on-the-timeline).
+The links depend on nothing but the report, so a set gives the same
+`report.md` every time.
+
+The UI could also select the slice, by its `ts` and `dur`; the link does not
+ask for it, because in Perfetto UI v59 the selection moves the view after the
+zoom has started and the zoom is lost.
+
 ## Where a cold start went
 
 The header's budget says where the window went by thread state. When the
@@ -1149,8 +1220,11 @@ two lower under the other for the same milliseconds.
 
 `analyze` refuses a trace that holds no launch of the process: the app has to
 be started inside the recording, as `launch` mode and a startup
-macrobenchmark do. A trace `collect` recorded in `launch` mode is not sent to
-that mode again: when the trace's launch is the permission controller's, the
+macrobenchmark do. In a set, it leaves such a trace out and names it, while
+the traces with a launch are more than half of the set (see
+[A trace that gives no window](#a-trace-that-gives-no-window)). A trace
+`collect` recorded in `launch` mode is not sent to that mode again: when the
+trace's launch is the permission controller's, the
 refusal says a permission dialog took it and names the command that grants
 the permission (see
 [A permission dialog over the launch](collecting.md#a-permission-dialog-over-the-launch)),
@@ -1163,7 +1237,8 @@ cold-starts in about 11 s, recorded with the default `runner.duration_ms` of
 12,000, used to read as holding no launch, and one such repeat failed the whole
 set (#921). `analyze` says the launch had not ended, with where it began in the
 recording and how long the recording was, leaves that repeat out of the set and
-names it in the header, and refuses only a set none of whose launches ended.
+names it in the header, and refuses a set whose launches that ended are not
+more than half of it (see [A trace that gives no window](#a-trace-that-gives-no-window)).
 `collect` says it under the repeat when `am start -W` took longer than the
 recording had left after the intent. Raise `runner.duration_ms` for such an
 app. The detectors read this window as they read any other.

@@ -648,6 +648,108 @@ def _(report):
         b["in_rows_ms"] / b["window_ms"] * 100, 1), b
 
 
+# Detectors whose `max_ms` is the length of the longest occurrence their
+# `@longest` names, so that the place a link opens is the number the row
+# prints (#132). `frame_jank`'s is the frame that overran its deadline the
+# most, and its `max_ms` the overrun; `anr_risk` holds no stall here.
+_LONGEST_IS_MAX = ("binder_txn", "gc_pressure", "io_wait", "main_thread_block",
+                   "main_thread_outlier", "monitor_contention", "runnable_starvation")
+
+
+@check("timeline: every row of a detector with `@longest` says where its longest occurrence is")
+def _(report):
+    # The place a report's link opens (#132): `at`, in the trace's own
+    # nanoseconds, inside the trace, and as long as the row's `max_ms` says
+    # its longest is. A query that stopped finding its way back from a row to
+    # its occurrence leaves the row with no link, and is a failure here.
+    from .analyze import DETECTOR_DIR
+    from .tp import load_detectors
+    placed = {d.id for d in load_detectors(DETECTOR_DIR) if d.longest_sql}
+    assert set(_LONGEST_IS_MAX) | {"frame_jank", "anr_risk"} <= placed, sorted(placed)
+    w = report["window"]
+    seen = set()
+    for det in report["detectors"]:
+        if det["id"] not in placed:
+            assert all("at" not in r for r in det["rows"]), det["id"]
+            continue
+        for row in det["rows"]:
+            at = row.get("at")
+            assert isinstance(at, dict), (det["id"], row.get("location"), "has no place")
+            assert isinstance(at["ts"], int) and isinstance(at["dur"], int) and at["dur"] > 0, at
+            assert at["ts"] < w["ts_end"] and at["ts"] + at["dur"] > w["ts_start"], (det["id"], at, w)
+            if det["id"] in _LONGEST_IS_MAX:
+                assert abs(at["dur"] / 1e6 - row["max_ms"]) <= 0.01, (det["id"], row["location"], at, row["max_ms"])
+            if "tid" in at:
+                assert at.get("thread"), (det["id"], at)
+            seen.add(det["id"])
+    assert set(_LONGEST_IS_MAX) | {"frame_jank"} <= seen, sorted(seen)
+    # The main thread of the window, whose track its link shows first.
+    assert w.get("main_thread_name") == fixture.THREADS[fixture.TID_MAIN], w.get("main_thread_name")
+
+
+@check("timeline: `@longest` decides no row, and is no part of what `compare` holds a detector to")
+def _(report):
+    # Its rows and numbers are the first query's: written into a detector,
+    # the fourth query leaves its `sha` as it was, so a report from before it
+    # keeps its verdicts in `compare` (#507, #132).
+    from dataclasses import replace
+    from .analyze import DETECTOR_DIR
+    from .tp import load_detectors
+    for d in load_detectors(DETECTOR_DIR):
+        if d.longest_sql:
+            assert replace(d, longest_sql="").sha == d.sha, d.id
+
+
+@check("timeline: a set opens each row on the repeat whose longest occurrence it is, and the row under the bar nowhere")
+def _(report):
+    # Three repeats of the fixture, the second's longest binder transaction
+    # made the longest of the three: the merged row's `max_ms` is that
+    # repeat's, and so is its place, with the repeat's index in `traces`.
+    import copy
+    from . import report as report_mod
+    runs = [copy.deepcopy(report) for _ in range(3)]
+    for i, run in enumerate(runs):
+        run["trace"] = f"run{i}.perfetto-trace"
+        det = next(d for d in run["detectors"] if d["id"] == "binder_txn")
+        det["rows"][0]["max_ms"] += 10.0 if i == 1 else 0.0
+        det["rows"][0]["at"]["ts"] += i
+    merged = report_mod.aggregate(runs)
+    row = next(d for d in merged["detectors"] if d["id"] == "binder_txn")["rows"][0]
+    original = next(d for d in report["detectors"] if d["id"] == "binder_txn")["rows"][0]
+    assert row["at"]["run"] == 1 and row["at"]["ts"] == original["at"]["ts"] + 1, row["at"]
+    assert merged["traces"][row["at"]["run"]] == "run1.perfetto-trace", merged["traces"]
+    # The repeats handed to the merge are not written into.
+    assert all("run" not in r.get("at", {}) for run in runs for d in run["detectors"] for r in d["rows"])
+    for det in merged["detectors"]:
+        assert all("at" not in r for r in (det.get("below") or {}).get("rows") or []), det["id"]
+
+
+@check("timeline: report.md links the window and each row to Perfetto UI, the same text for the same set")
+def _(report):
+    # The trace has no address a browser can fetch, so the link opens the UI
+    # on the moment and the trace is opened there; the UI zooms to `visStart`
+    # and `visEnd` and pins the thread. Nothing in it is of this machine or
+    # this run (#132).
+    import copy
+    from urllib.parse import unquote
+    from . import render, timeline
+    text = render.to_markdown(copy.deepcopy(report))
+    assert text == render.to_markdown(copy.deepcopy(report))
+    w = report["window"]
+    window = f"{timeline.UI}/#!/?visStart={w['ts_start']}&visEnd={w['ts_end']}&startupCommands="
+    assert window in text, text[:600]
+    pin = f'"^{fixture.THREADS[fixture.TID_MAIN].replace(".", chr(92) + ".")} {fixture.TID_MAIN}$"'
+    assert pin.replace(chr(92), chr(92) * 2) in unquote(text), "the main thread is pinned by its track's title"
+    assert timeline.HOW in text
+    found = timeline.moments(report)
+    for det in report["detectors"]:
+        mine = timeline.of_detector(found, det["id"])
+        assert len(mine) == min(timeline.PER_DETECTOR, sum(1 for r in det["rows"] if "at" in r)), det["id"]
+        for _, m in mine:
+            assert f"({timeline.url(m)})" in text, (det["id"], m)
+    assert "127.0.0.1" not in text and "localhost" not in text
+
+
 @check("a detector's own tables are named after it, written over each run, "
        "and read by none other")
 def _(report):
@@ -4690,6 +4792,200 @@ def _(report):
     # One definition on both sides is compared as ever.
     for same in (plain, drawn, report):
         assert compared(same, same) == (True, []), compared(same, same)
+
+
+# --- a set with a trace that gives no window (#466) ------------------------------
+#
+# One trace of a macrobenchmark's fifteen carried the app's process under a
+# name cut to fifteen characters, and the whole set ended in exit 2 with no
+# report. Such a trace is left out of the set and named, while the traces
+# with a window are more than half of it.
+
+class _Owned(_Startups):
+    """`_Startups`, for a trace that holds the app's own process as well."""
+
+    def query(self, sql: str) -> list[dict]:
+        if "FROM process WHERE" in sql:
+            return [{"name": "com.example.app"}]
+        return super().query(sql)
+
+
+@check("launch window: a trace where the mask took another process than the app's says "
+       "so, and names the one it took")
+def _(report):
+    """`com.example.app*` matched only `com.example.app.benchmark` in a trace
+    whose app process was named by its last fifteen characters, and the
+    sentence was `no launch of com.example.app.benchmark`: the wrong process,
+    with advice about how to start it (#466). It names the app now, the
+    process it took instead, and that the app's is not there by its name."""
+    from . import launch as launch_mod
+    app = "com.example.app"
+    theirs = {"startup_id": 1, "ts": 100, "ts_end": 900, "own": 0, "package": app}
+
+    def said(tp, app: str | None = app) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = Path(tmp) / "startup_iter008.perfetto-trace"
+            try:
+                launch_mod.find(tp, 1, str(trace), app=app)
+            except launch_mod.NoLaunch as e:
+                return str(e)
+        raise AssertionError("a trace with no launch of its process has no window")
+
+    bench = "com.example.app.benchmark"
+    got = said(_Startups(bench, [theirs]))
+    assert got.startswith(
+        "no launch of com.example.app in trace startup_iter008.perfetto-trace: "
+        "`project.process` took com.example.app.benchmark in it, which is not the app's "
+        "own process, and com.example.app's process is not in this trace under its name. "
+        "The platform recorded com.example.app's launch, so the app was started"), got
+    assert "`project.process = '*com.example.app'`" in got, got
+    # No launch of the app either: nothing is said of a cut name.
+    got = said(_Startups(bench, []))
+    assert "not in this trace under its name" in got and "platform recorded" not in got \
+        and "`echolot probe`" in got, got
+    # The app's process is there, and the mask took the other one.
+    got = said(_Owned(bench, [theirs]))
+    assert got.endswith("the app's, com.example.app, is in the trace too. Narrow "
+                        "`project.process` to `com.example.app`."), got
+    # The app's own process, one of its own, or a config with no package: as before.
+    for process, package in ((app, app), (f"{app}:push", app), (bench, None)):
+        got = said(_Startups(process, []), package)
+        assert got.startswith(f"no launch of {process} in trace "), got
+
+
+class _NoProcess:
+    """What `_resolve_process` asks of a trace with named processes, none of
+    them the mask's (`named=True`), or with no named process at all."""
+
+    def __init__(self, named: bool):
+        self.named = named
+
+    def query(self, sql: str) -> list[dict]:
+        return [{"n": 3 if self.named else 0}] if "COUNT(*)" in sql else []
+
+
+@check("a trace with no process the mask matches gives no window, whatever the window; "
+       "a file with no process at all is no trace")
+def _(report):
+    """Every window is read from the process: with none, there is no window,
+    anchored or not, and `analyze` leaves the trace out of a set as it does
+    one with no launch (#466). A file that is no trace data at all is a
+    mistake in what was given, and is still refused (#567)."""
+    from .analyze import _resolve_process
+    from .config import NoWindow
+    try:
+        _resolve_process(_NoProcess(named=True), "com.example.app", "a.perfetto-trace")
+    except NoWindow as e:
+        assert "no process in trace a.perfetto-trace matches" in str(e), e
+    else:
+        raise AssertionError("no process matched, and no NoWindow")
+    try:
+        _resolve_process(_NoProcess(named=False), "com.example.app", "report.json")
+    except NoWindow as e:
+        raise AssertionError(f"a file that is no trace was left out as a trace: {e}") from e
+    except ConfigError as e:
+        assert "holds no process with a name" in str(e), e
+
+
+@check("analyze leaves out of a set the trace that gives no window, names it, and reads "
+       "the rest as it reads them alone; too few left is refused")
+def _(report):
+    """One trace of fifteen with no launch of the app stopped the whole set
+    with exit 2 and no report (#466). It is left out, on stderr and in the
+    report: `runs` the traces read, `no_window` the ones left out with what
+    was said of each, a line under the header. The rest are the report they
+    make alone, to the byte, but for that line and key. With the traces that
+    give a window half the set or fewer, or none of them, the set is refused:
+    by the first one's own sentence when none does.
+
+    `analyze_trace` hands back this check's own report, so no trace is read.
+    """
+    import copy
+    import json
+
+    from . import analyze as analyze_mod
+    from . import compare as cmp_mod
+    from . import report as report_mod
+    from .config import NoWindow
+    from .pages import report_page
+
+    def read(trace, *a, **kw):
+        if "cut" in Path(trace).name:
+            raise NoWindow(f"no process in trace {Path(trace).name} matches "
+                           f"project.process = 'com.example.app'.")
+        return {**copy.deepcopy(report), "trace": str(trace)}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp).resolve()
+        config = project / "echolot.yml"
+        config.write_text("project:\n  process: com.example.app\nscenario:\n  name: startup\n",
+                          encoding="utf-8")
+        traces = {}
+        for name in ("startup_iter000", "startup_iter001", "startup_iter002-cut",
+                     "startup_iter003-cut"):
+            traces[name] = project / f"{name}.perfetto-trace"
+            traces[name].write_bytes(name.encode())
+
+        def run(*names: str) -> tuple[int, str, dict | None, str]:
+            out = project / "out" / "-".join(n[-3:] for n in names)
+            code, said = _quietly(["analyze", *(str(traces[n]) for n in names),
+                                   "-c", str(config), "-o", str(out)])
+            if code:
+                return code, said, None, ""
+            rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
+            rep.pop("generated_at", None)
+            return code, said, rep, (out / "report.md").read_text(encoding="utf-8")
+
+        # Patched where it lives: `analyze` imports it from there when it runs.
+        real, here = analyze_mod.analyze_trace, Path.cwd()
+        analyze_mod.analyze_trace = read
+        try:
+            os.chdir(project)
+            code, said, rep, md = run("startup_iter000", "startup_iter001", "startup_iter002-cut")
+            _, _, alone, alone_md = run("startup_iter000", "startup_iter001")
+            two, said_two, _, _ = run("startup_iter000", "startup_iter002-cut")
+            none, said_none, _, _ = run("startup_iter002-cut", "startup_iter003-cut")
+            _, said_one, _, _ = run("startup_iter002-cut")
+        finally:
+            os.chdir(here)
+            analyze_mod.analyze_trace = real
+
+    assert code == 0, said[-600:]
+    left = rep.get("no_window") or []
+    assert rep["runs"] == 2 and [Path(e["trace"]).name for e in left] \
+        == ["startup_iter002-cut.perfetto-trace"] and "matches project.process" in left[0]["said"], rep
+    line = ("> ⚠️ Left out: `startup_iter002-cut.perfetto-trace`. It gives no window to read: "
+            "no process matches project.process = 'com.example.app'. The numbers are over the "
+            "other 2.")
+    assert f"[!] {line[5:]}" in said, said[-600:]
+    head = md.split("\n## ", 1)[0]
+    assert line in head.splitlines(), head
+    # The rest, as they read alone: the same report, but for what says one was left out.
+    assert {k: v for k, v in rep.items() if k != "no_window"} == alone, \
+        sorted(k for k in rep if rep.get(k) != alone.get(k))
+    assert md.replace(f"{line}\n", "") == alone_md, md[:900]
+    assert "no_window" not in alone and "Left out" not in alone_md, alone_md[:900]
+    # The page says it beside the window's length, and `compare` beside the comparison.
+    notes = report_page.window_notes(rep)
+    assert any(n.startswith("Left out: `startup_iter002-cut.perfetto-trace`") for n in notes), notes
+    assert not any("Left out" in n for n in report_page.window_notes(alone)), alone
+    warnings = {w["id"]: w["text"] for w in cmp_mod.build(
+        alone, rep, before_path="b.json", after_path="a.json")["warnings"]}
+    assert warnings.get("left-out-after") == (
+        "The after report's medians are over 2 of the 3 recordings it was given. It left "
+        "out `startup_iter002-cut.perfetto-trace`, no window to read, and that one is in "
+        "neither its rows nor this comparison."), warnings
+    assert "left-out-before" not in warnings, warnings
+    assert report_mod.to_markdown(rep).split("\n## ", 1)[0] == head
+    # One of two is not a set.
+    assert two == 2 and "error: 1 of the 2 traces gives no window to read, and the one that " \
+        "does is not more than half of the set" in said_two \
+        and "The first: no process in trace startup_iter002-cut.perfetto-trace" in said_two, said_two
+    # None of them: the first one's sentence, as when it is given alone.
+    assert none == 2 and said_none.strip().endswith(
+        "error: no process in trace startup_iter002-cut.perfetto-trace matches "
+        "project.process = 'com.example.app'."), said_none[-400:]
+    assert said_one.strip().endswith(said_none.strip().splitlines()[-1]), said_one[-400:]
 
 
 # --- the whole trace (#519) ------------------------------------------------

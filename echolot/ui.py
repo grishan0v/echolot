@@ -59,11 +59,23 @@ What it will and will not answer:
   check is one the report on disk has, a client named in an address is one
   the page starts; an agent's command line is built from the config and the
   report alone.
-- It serves the pages it draws and nothing else. There is one table of
-  routes, no route reads a file by a path taken from the address, and no page
-  fetches anything from elsewhere: a served page may send a form to this
-  server and ask it how far a run is (`kit.SERVED`), and the server sends
-  that policy as a header too. A page written to disk keeps the strict one.
+- It serves the pages it draws and nothing else, but for one kind of file:
+  a recording a report of the project names, for the page that opens a
+  moment of that report in Perfetto UI (#132). It is asked for by the
+  report and the moment's place among the report's, never by a path, and a
+  file that does not begin as a Perfetto trace begins is not sent. There is
+  one table of routes, no route reads a file by a path taken from the
+  address, and no page fetches anything from elsewhere: a served page may
+  send a form to this server and ask it how far a run is (`kit.SERVED`),
+  and the server sends that policy as a header too. A page written to disk
+  keeps the strict one.
+- The page that opens a moment holds Perfetto UI (ui.perfetto.dev) in a
+  frame, and its policy lets it frame that and nothing else
+  (`timeline_page.POLICY`). The trace's bytes go from this server to that
+  page, and from it into the frame, in the browser: Perfetto UI reads a
+  trace handed to it so in the page, and sends it nowhere. The frame is
+  told nothing of this server's addresses: an origin is all a message
+  carries, and the token is in the path.
 - An address a form is sent to is no page. Read, by a reload of what a press
   drew or from the history, it starts nothing and sends the browser to the
   page that press is made on: the report for Dig deeper, the investigation's
@@ -77,6 +89,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import socketserver
 import subprocess
 import sys
@@ -89,6 +102,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import parse_qs, quote, unquote
 
 from . import check, elsewhere, job, ready, recorder, state
+from . import timeline as timeline_mod
 from . import project_setup
 from . import time_limit
 from . import hunt as hunt_mod
@@ -101,6 +115,7 @@ from .pages import limit_page
 from . import dig
 from .pages import dig_page
 from .pages import elsewhere_page
+from .pages import timeline_page
 
 HOST = "127.0.0.1"
 READS = ("GET", "HEAD")
@@ -219,6 +234,8 @@ class Page:
     html: str
     status: int = 200
     location: str | None = None     # where the browser is sent instead, after a form
+    policy: str | None = None       # a content policy other than `kit.SERVED`, sent as the header
+    file: Path | None = None        # a recording sent as it is, in place of a page (#132)
 
 
 # ---------------------------------------------------------------------------
@@ -295,8 +312,11 @@ def _report(visit: Visit, params: dict[str, str]) -> Page:
     # read with the limit the config had then.
     limit = limit_page.beside(time_limit.view(visit.site.project, visit.site.config, st, report=data, scenario=name),
                               visit.site.url)
+    timeline = (_timeline_href(visit, data, Path(rep["path"]), "timeline-of", scenario=name) if name is not None
+                else _timeline_href(visit, data, Path(rep["path"]), "timeline"))
     return Page(report_page.render(data, where=where, last=True, steps=visit.steps("report" if mine else None),
-                                   policy=kit.SERVED, limit=limit, dig=_dig_parts(visit, data, params)))
+                                   policy=kit.SERVED, limit=limit, dig=_dig_parts(visit, data, params),
+                                   timeline=timeline))
 
 
 def _hunt_report(visit: Visit, params: dict[str, str]) -> Page:
@@ -308,7 +328,8 @@ def _hunt_report(visit: Visit, params: dict[str, str]) -> Page:
     data, path = found
     return Page(report_page.render(data, where=cli._shown_path(path, visit.site.project), last=False,
                                    steps=visit.steps(None), crumb=f"investigation {n}, report {k}",
-                                   policy=kit.SERVED))
+                                   policy=kit.SERVED,
+                                   timeline=_timeline_href(visit, data, path, "hunt-timeline", n=n, k=k)))
 
 
 def _has_hunt(visit: Visit) -> bool:
@@ -528,7 +549,124 @@ def _far_report(visit: Visit, params: dict[str, str]) -> Page:
     except ConfigError as e:
         return _nothing(visit, "The report does not read", f"{e}. Read the folder again to write it anew.")
     return Page(report_page.render(data, where=cli._shown_path(path, visit.site.project), last=False,
-                                   steps=visit.steps(None), crumb="recordings from elsewhere", policy=kit.SERVED))
+                                   steps=visit.steps(None), crumb="recordings from elsewhere", policy=kit.SERVED,
+                                   timeline=_timeline_href(visit, data, path, "far-timeline")))
+
+
+# What a Perfetto trace begins with: a packet of the trace (field 1, bytes),
+# or gzip's magic for one compressed. A file that begins otherwise is no
+# recording, and is not sent whatever a report says.
+_TRACE_HEADS = (b"\x0a", b"\x1f\x8b")
+
+
+def _report_at(visit: Visit, params: dict[str, str], far: bool = False) -> tuple[dict[str, Any], Path] | None:
+    """The report a timeline's address is about, and its file: an
+    investigation's, the one of recordings from elsewhere, a scenario's
+    named, or the last one. None when there is no such report to read."""
+    site, st = visit.site, visit.st
+    if far:
+        path = elsewhere.report_path(site.project)
+        if not path.is_file():
+            return None
+    elif "n" in params:
+        return ready.archived(site.project, int(params["n"]), int(params["k"]))
+    else:
+        rep = st.get("report")
+        if "scenario" in params:
+            name = unquote(params["scenario"])
+            found = next((sc for sc in st.get("scenarios") or [] if sc["name"] == name), None)
+            rep = found["report"] if found else None
+        if not rep or rep.get("error"):
+            return None
+        path = Path(rep["path"])
+    try:
+        return cli._load_report(path), path
+    except ConfigError:
+        return None
+
+
+def _trace_file(visit: Visit, report: dict[str, Any], path: Path, run: int) -> Path | None:
+    """The recording a report names for one repeat, where it is on disk: as
+    named when that is a whole path; else from the project's root, where
+    `analyze` is run, or else beside the report. None when it is not there,
+    or is no Perfetto trace."""
+    traces = timeline_mod.traces_of(report)
+    if not 0 <= run < len(traces):
+        return None
+    named = Path(traces[run])
+    for where in ([named] if named.is_absolute() else [visit.site.project / named, path.parent / named]):
+        try:
+            if where.is_file():
+                with where.open("rb") as f:
+                    if f.read(2).startswith(_TRACE_HEADS):
+                        return where
+        except OSError:
+            continue
+    return None
+
+
+def _timeline_href(visit: Visit, report: dict[str, Any], path: Path, route: str,
+                   **names: Any) -> Callable[[int], str | None]:
+    """The address of the timeline page of each moment of a report, for its
+    page's links, or None for a moment whose recording is not on disk: its
+    link then opens Perfetto UI on the moment alone."""
+    found = timeline_mod.moments(report)
+
+    def href(i: int) -> str | None:
+        if not 0 <= i < len(found) or _trace_file(visit, report, path, found[i].run) is None:
+            return None
+        return visit.site.url(route, m=i, **names)
+    return href
+
+
+def _moment(visit: Visit, params: dict[str, str], far: bool) -> tuple["timeline_mod.Moment", Path] | Page:
+    """The moment an address names and its recording, or the page that says
+    there is none."""
+    found = _report_at(visit, params, far)
+    if found is None:
+        return _nothing(visit, "No such report", "There is no report at this address that reads.")
+    report, path = found
+    moments = timeline_mod.moments(report)
+    i = int(params["m"])
+    if i >= len(moments):
+        return _nothing(visit, "No such moment", "This report has no such place on the timeline.")
+    trace = _trace_file(visit, report, path, moments[i].run)
+    if trace is None:
+        return _nothing(visit, "The recording is not here",
+                        f"The report names `{moments[i].trace}`, and no Perfetto trace is there. "
+                        "report.md's link opens Perfetto UI on the same moment, for the trace opened by hand.")
+    return moments[i], trace
+
+
+def _timeline(visit: Visit, params: dict[str, str], far: bool = False) -> Page:
+    """A moment of a report in Perfetto UI, with its trace (`timeline_page`)."""
+    found = _moment(visit, params, far)
+    if isinstance(found, Page):
+        return found
+    m, _ = found
+    route = ("far-timeline-trace" if far else "hunt-timeline-trace" if "n" in params
+             else "timeline-of-trace" if "scenario" in params else "timeline-trace")
+    names = {k: v for k, v in params.items() if k != "scenario"}
+    if "scenario" in params:
+        names["scenario"] = unquote(params["scenario"])
+    trace_href = visit.site.url(route, **names) or ""
+    return Page(timeline_page.render(m, trace_href), policy=timeline_page.POLICY)
+
+
+def _timeline_trace(visit: Visit, params: dict[str, str], far: bool = False) -> Page:
+    """The recording of a moment, as it is on disk, for the timeline page."""
+    found = _moment(visit, params, far)
+    if isinstance(found, Page):
+        return found
+    return Page("", file=found[1])
+
+
+def _far_timeline(visit: Visit, params: dict[str, str]) -> Page:
+    return _timeline(visit, params, far=True)
+
+
+def _far_timeline_trace(visit: Visit, params: dict[str, str]) -> Page:
+    return _timeline_trace(visit, params, far=True)
 
 
 def _set_limit(visit: Visit, params: dict[str, str]) -> Page:
@@ -813,6 +951,17 @@ ROUTES: list[Route] = [
     Route("look", "elsewhere/look", _look, method="POST"),
     Route("far", "elsewhere/read", _read_far, method="POST"),
     Route("elsewhere-report", "elsewhere", _far_report),
+    # A moment of a report in Perfetto UI, and its recording for that page
+    # (#132): of the last report, a scenario's, an investigation's, the
+    # recordings' from elsewhere.
+    Route("timeline", "timeline/{m}", _timeline),
+    Route("timeline-trace", "timeline/{m}/trace", _timeline_trace),
+    Route("timeline-of", "timeline/{scenario}/{m}", _timeline),
+    Route("timeline-of-trace", "timeline/{scenario}/{m}/trace", _timeline_trace),
+    Route("hunt-timeline", "hunt/{n}/report/{k}/timeline/{m}", _timeline),
+    Route("hunt-timeline-trace", "hunt/{n}/report/{k}/timeline/{m}/trace", _timeline_trace),
+    Route("far-timeline", "elsewhere/timeline/{m}", _far_timeline),
+    Route("far-timeline-trace", "elsewhere/timeline/{m}/trace", _far_timeline_trace),
     Route("dig-ask", "dig/ask", _dig_ask, method="POST", home=_dig_from),
     Route("dig-ask-of", "dig/ask/{scenario}", _dig_ask, method="POST", home=_dig_from),
     Route("dig", "dig/start", _dig_start, method="POST", home=_dig_from),
@@ -830,7 +979,7 @@ ROUTES: list[Route] = [
 # A part of an address that names something. Numbers are digits; a name is
 # anything but a slash, and is only ever compared with the names the project
 # has: nothing is opened by it.
-_PART = {"n": "[0-9]{1,9}", "k": "[0-9]{1,9}"}
+_PART = {"n": "[0-9]{1,9}", "k": "[0-9]{1,9}", "m": "[0-9]{1,4}"}
 
 
 def _pattern(path: str) -> re.Pattern[str]:
@@ -872,7 +1021,8 @@ class Reply:
     status: int
     body: str
     kind: str = "text/html; charset=utf-8"
-    headers: tuple[tuple[str, str], ...] = ()
+    headers: tuple[tuple[str, str], ...] = ()   # beside `HEADERS`, or in place of one of the same name
+    file: Path | None = None                     # sent as it is, in place of `body` (#132)
 
 
 def _refused(why: str) -> Reply:
@@ -954,6 +1104,10 @@ def answer(site: Site, method: str, target: str, headers: Mapping[str, str], bod
         return Reply(500, html)
     if page.location:
         return Reply(page.status, "", "text/plain; charset=utf-8", (("Location", page.location),))
+    if page.file is not None:
+        return Reply(page.status, "", "application/octet-stream", file=page.file)
+    if page.policy:
+        return Reply(page.status, page.html, headers=(("Content-Security-Policy", page.policy + "; frame-ancestors 'none'"),))
     return Reply(page.status, page.html)
 
 
@@ -992,14 +1146,32 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle(self, method: str) -> None:
         reply = answer(self.server.site, method, self.path, self.headers, self._body(method))  # type: ignore[attr-defined]
         body = reply.body.encode("utf-8")
-        self.send_response(reply.status)
-        self.send_header("Content-Type", reply.kind)
-        self.send_header("Content-Length", str(len(body)))
-        for name, value in (*HEADERS, *reply.headers):
-            self.send_header(name, value)
-        self.end_headers()
-        if method != "HEAD":
-            self.wfile.write(body)
+        source = None
+        if reply.file is not None:
+            # A recording, read as it is sent: it can be a hundred megabytes.
+            try:
+                source = reply.file.open("rb")
+            except OSError:
+                reply = Reply(404, "echolot ui: the recording could not be read.\n", "text/plain; charset=utf-8")
+                body = reply.body.encode("utf-8")
+        try:
+            size = os.fstat(source.fileno()).st_size if source else len(body)
+            self.send_response(reply.status)
+            self.send_header("Content-Type", reply.kind)
+            self.send_header("Content-Length", str(size))
+            own = {name.lower() for name, _ in reply.headers}
+            for name, value in (*(h for h in HEADERS if h[0].lower() not in own), *reply.headers):
+                self.send_header(name, value)
+            self.end_headers()
+            if method == "HEAD":
+                return
+            if source:
+                shutil.copyfileobj(source, self.wfile, 1 << 20)
+            else:
+                self.wfile.write(body)
+        finally:
+            if source:
+                source.close()
 
     def do_GET(self) -> None:
         self._handle("GET")

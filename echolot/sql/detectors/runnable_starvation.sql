@@ -129,3 +129,23 @@ CROSS JOIN _proc p
 JOIN _rows r ON r.location = 'main' AND r.state = t.state
 WHERE t.tid = p.pid
   AND t.state IN ('R', 'R+');
+
+-- @longest
+--
+-- The longest wait for a CPU of each row's threads in its state: `max_ms` is
+-- the longest of them, within the window.
+
+SELECT location, state, ts, dur, tid
+FROM (
+    SELECT r.location, r.state, t.ts, t.dur, t.tid,
+           ROW_NUMBER() OVER (PARTITION BY r.location, r.state
+                              ORDER BY t.dur DESC, t.ts) AS k
+    FROM _tstate_win t
+    CROSS JOIN _proc p
+    LEFT JOIN _name_family f ON f.name = t.thread_name
+    JOIN _rows r ON r.state = t.state
+                AND r.location = CASE WHEN t.tid = p.pid THEN 'main'
+                                      ELSE COALESCE(f.family, t.thread_name) END
+    WHERE t.state IN ('R', 'R+') AND t.dur > 0
+)
+WHERE k = 1;

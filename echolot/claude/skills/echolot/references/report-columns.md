@@ -17,6 +17,7 @@ The contract is shared, but not every detector fills every column.
 | `places` | the json behind `code`: every symbol the row names, with `file`, `line` and `role`, and `retraced` on one the build's mapping named back |
 | `stacks` | the json behind what `detail` says the samples named: `samples`, `with_stack`, and the ten largest of `leaf` and `ours`, each `frame` with its `samples` and `pct` |
 | `spread` | the per-run values behind the medians, for three columns — see below |
+| `at` | where the longest occurrence is on the timeline: `ts` and `dur` in the trace's own nanoseconds, `tid` and `thread` where it ran on one, and `run`, the repeat's index in `traces` — see below |
 
 **The rows come ranked, and in one order everywhere.** One trace orders them
 by `self_ms`, or `total_ms` where there is no self time. A merged report ranks
@@ -107,3 +108,14 @@ and the report says it under the table. Eight workers' 3.8 s of waiting in a
 5.7 s cold start is their time together, not time of the start: there
 contention was 2% of the start, which `--window` says. Read a row with
 `threads` above one as the pool's, never as the window's.
+
+**`at` is where to look, not a number to read.** A detector with a
+`-- @longest` query names, for each row, the occurrence its `max_ms` is the
+longest of (`frame_jank`: the frame that overran its deadline the most, `dur`
+its own length), and a set takes it from the repeat where that is. It
+decides nothing and is not compared. `report.md` turns it into a link that
+opens Perfetto UI zoomed to the occurrence with its thread pinned, for a
+person who then opens the trace there; `echolot ui` opens it with the trace.
+To point someone at a moment, name the trace (`traces[run]`) and the
+occurrence; there is nothing in it to measure from. A row of a detector
+without `@longest`, or of a report written before it, has none.

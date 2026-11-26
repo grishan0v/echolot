@@ -307,6 +307,54 @@ it is known. A section of the app's around everything, an `AppStart` from
 the first line of `Application.onCreate` to the first frame, is looked
 through. A background row leaves the column empty.
 
+On the synthetic fixture every module of the pinned trace_processor
+includes, so the fixture cannot say which ones a real recording fills. The
+ones weighed against real recordings and left out are written down here, so
+that nobody weighs them again on the fixture. The spike (#599) read 47
+recordings `collect` made on one phone (Android 15, eight cores in three
+clusters): 26 cold starts of two apps, 6 map pans, 5 list scrolls, 5 tab
+switches and 5 article opens.
+
+| module | on those recordings | so |
+|---|---|---|
+| `android.startup.startups`, `dur_without_trampoline` | equal to `dur` for all 62 launches it listed | not read |
+| `android.monitor_contention` | the main thread's waits as `monitor_contention` counts them on 15 rows of 17, one wait fewer on the other two; `lock_name` empty for all 3981 waits | `monitor_contention` keeps its own query |
+| `android.lock_held` | no `*_lock_held` slice in 47 of 47 | not read |
+| `android.process_state` | empty in 47 of 47 | not read |
+| `android.cpu.cluster_utilization` | every core `unknown` in 47 of 47 | waits for a source the recording lacks (#1022) |
+| `android.binder_breakdown` | system_server asleep on its own lock for 15–65% of the main thread's binder time on list scrolls; 0.9–1.7 s per trace | waits for #1023 |
+
+`dur_without_trampoline` trims an activity that started the next one before
+its first frame, which the platform folds into one launch. A person waited
+through it, and the window keeps it. A splash that draws a frame and then
+hands over is not a trampoline to the module: on 15 cold starts of an app
+with one, its launch ended on the splash, 165–203 ms with the trim or
+without, while the window, run on through the hand-over (#1008), was
+667–719 ms.
+
+`android.monitor_contention` leaves out a wait nested a level deeper than
+`Lock contention` under `monitor contention`, and one written in the short
+shape alone: over the 47 recordings it counted 3981 waits where the
+detector's rule counts 3991. Its `lock_name` comes from `*_lock_acquire` and
+`*_lock_held` slices around the wait, and `android.lock_held` reads the same
+slices. The platform writes them for system_server's own locks, `ams` and
+`wms` among them, and nothing on these recordings did. `android.process_state`
+reads process-state events system_server writes as Perfetto track events,
+and `collect` records no source that carries them. What it would add to a
+launch, the delays before the process started and before `bindApplication`,
+the startup breakdown already says as `launch_delay` and `bind_application`.
+
+`android.cpu.cluster_utilization` sums the right time — its total equalled
+the non-idle `sched` time to the nanosecond in 47 of 47 — but puts every core
+in one `unknown` cluster. The mapping comes from the `linux.system_info` data
+source, which Macrobenchmark records and `collect` does not (#1022). The two
+modules already read held on the same recordings: the main thread's
+`binder_txn` row equalled `android_binder_txns` in count and time in 41 of
+41, `gc_pressure`'s rows equalled `android_garbage_collection_events` in 21
+of 21, and no cold start had a collection inside its window. `aidl_name` was
+empty for all 8362 synchronous calls: it needs the `aidl` atrace category,
+which `collect` does not record (#1024).
+
 ### Sums and single occurrences are different detectors
 
 Most of the shipped ones gate on an accumulated sum for a name: how much time
@@ -616,6 +664,50 @@ What decides the query:
   gives a merged row its `detail` and `stacks`, unless its sampler lost the
   process while another repeat's did not; then the worst of those with
   stacks does.
+
+## Where to look on the timeline
+
+A line reading `-- @longest` starts a fourth query, which says where each
+row's longest occurrence is, so that the report can open the trace on it in
+Perfetto UI ([On the timeline](analysing.md#on-the-timeline)).
+`monitor_contention` has one:
+
+```sql
+-- @longest
+SELECT location, ts, dur, tid
+FROM (
+    SELECT r.location, c.ts, c.dur, c.tid,
+           ROW_NUMBER() OVER (PARTITION BY r.location ORDER BY c.dur DESC, c.ts) AS k
+    FROM _det_monitor_contention c
+    JOIN _rows r ON r.location = c.thread_name
+    WHERE c.dur > 0
+)
+WHERE k = 1;
+```
+
+It sees the same `_rows` as the other two and returns one line per row: the
+columns that name the row, `ts` and `dur` of the occurrence as the trace has
+them, in nanoseconds, and `tid`, the thread it happened on, where it has one.
+The row gets `at` in the json: those numbers, the thread's name, and in a set
+the repeat it is in.
+
+What decides the query:
+
+- **Longest by what `max_ms` is the longest of**, so the place opened is the
+  number the row prints. For `frame_jank` that is the frame that overran its
+  deadline the most, and `dur` is that frame's own length.
+- **The occurrence as the trace has it**, not clipped to the window where a
+  slice runs past it: the link zooms to the slice the UI shows.
+- **It decides nothing.** Rows and numbers are the first query's, so
+  `@longest` is no part of the detector's `sha`, and a report from before
+  it keeps its verdicts in `compare`.
+- **Every row it measured**, under the bar too: a set takes a row's place
+  from the repeat whose longest it is, shown there or not.
+
+Nine shipped detectors have one: `anr_risk`, `binder_txn`, `frame_jank`,
+`gc_pressure`, `io_wait`, `main_thread_block`, `main_thread_outlier`,
+`monitor_contention` and `runnable_starvation`. A detector without it has no
+link under its rows.
 
 ## What trips people up
 

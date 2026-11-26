@@ -29,6 +29,7 @@ from .. import plain
 from .. import report as report_mod
 from .. import merge as merge_mod
 from .. import render as render_mod
+from .. import timeline as timeline_mod
 from ..tp import load_detectors
 from . import kit, md
 from .kit import e
@@ -280,9 +281,25 @@ def _row(c: dict[str, Any]) -> str:
             f'<div class="c-go" role="cell">{kit.details_btn(c["key"], c["title"])}</div></div>')
 
 
-def _panel(c: dict[str, Any], ctx: Any, several: bool) -> str:
+def _timeline_html(found: list[tuple[int, "timeline_mod.Moment"]], href: Any) -> str:
+    """Links that open moments of the report in Perfetto UI with their trace
+    (#132), on `echolot ui`'s timeline page: `href` gives its address for a
+    moment, by the moment's index among the report's, or None for one whose
+    recording is not on disk. Nothing on a page written to disk, which names
+    no address outside itself: report.md has the links to Perfetto UI."""
+    links = []
+    for i, m in found:
+        served = href(i) if href else None
+        if served:
+            links.append(f'<a href="{e(served)}" target="_blank" rel="noopener">'
+                         f'{md.inline(timeline_mod.label(m))}</a>')
+    return f'<p class="small">Open in Perfetto UI: {" · ".join(links)}</p>' if links else ""
+
+
+def _panel(c: dict[str, Any], ctx: Any, several: bool, placed: str = "") -> str:
     """What the panel shows for a check: the row's own sentences again, the
-    same tick, and under a hairline its measurements."""
+    same tick, and under a hairline its measurements. `placed` is the links
+    to its rows' longest occurrences on the timeline, already drawn."""
     tick = ""
     if c["hot"]:
         tick = (f'<div class="tickrow">{kit.tick_box(c["key"], c["kind"], c["title"], _request_lines(c), twin=True, weight=_weight(c))}'
@@ -291,7 +308,7 @@ def _panel(c: dict[str, Any], ctx: Any, several: bool) -> str:
     said = f'<p{quiet}>{kit.prose(c["said"])}</p>' if c["said"] else ""
     why = f'<p class="small sub">{e(c["why"])}</p>' if c["why"] else ""
     return kit.template(c["key"], f'<div>{kit.pill(c["level"])}</div><h2 class="h2" id="peek-title">{e(c["title"])}</h2>'
-                                  f'{said}{why}{tick}{kit.deep(_measurements(c, ctx, several))}')
+                                  f'{said}{why}{tick}{kit.deep(placed + _measurements(c, ctx, several))}')
 
 
 # ---------------------------------------------------------------------------
@@ -321,13 +338,15 @@ def _verdict(report: dict[str, Any], ctx: Any) -> str:
 
 def window_notes(report: dict[str, Any]) -> list[str]:
     """What the CLI says of the window beside its length, in its own words:
-    repeats that diverged several-fold, and a scenario with no start or end
-    anchor, whose window runs to the edge of what the process did. The
-    lines `report.md` writes, from the functions that write them; the page
-    had neither (#927)."""
+    the recordings the set left out, repeats that diverged several-fold, and
+    a scenario with no start or end anchor, whose window runs to the edge of
+    what the process did. The lines `report.md` writes, from the functions
+    that write them; the page had none of them (#927), and said "measured on
+    14 recordings" of a set of fifteen with one left out (#466)."""
     w = report.get("window") or {}
     try:
-        lines = render_mod._diverged_lines(w) + render_mod._window_warning_lines(w)
+        lines = (render_mod.left_out_lines(report) + render_mod._diverged_lines(w)
+                 + render_mod._window_warning_lines(w))
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         return []
     return [re.sub(r"^>\s*(?:⚠️\s*)?", "", line).replace("**", "") for line in lines]
@@ -590,9 +609,11 @@ def checks(report: dict[str, Any]) -> list[dict[str, Any]]:
 _BEFORE_PROCESS = "before the process started"
 
 
-def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
+def _technical(report: dict[str, Any], ctx: Any, several: bool,
+               links: dict[str, str] | None = None) -> str:
     """The fold at the end: where the main thread was, every row of every
-    detector on one axis, and report.md as it is written."""
+    detector on one axis, and report.md as it is written. `links` sends its
+    links to Perfetto UI to a served page's timeline instead (`md.inline`)."""
     parts = []
     unit = "ms, median" if several else "ms"
     budget = (report.get("window") or {}).get("main_thread") or {}
@@ -634,7 +655,7 @@ def _technical(report: dict[str, Any], ctx: Any, several: bool) -> str:
                      + kit.chart_key("median" if several else f"this {ctx.noun}",
                                      f"each {ctx.noun}" if several else None) + "</div>")
     try:
-        written = md.to_html(report_mod.to_markdown(report))
+        written = md.to_html(report_mod.to_markdown(report), links)
     except (KeyError, TypeError, AttributeError) as err:
         # A file that is a report by its `detectors` and holds little else.
         written = (f'<p class="sub">The technical report cannot be written out: this report.json lacks '
@@ -653,7 +674,7 @@ _NO_SCRIPT_SERVED = ("<noscript><div class=\"callout fig\"><p><b>Script is switc
 def render(report: dict[str, Any], where: str | None = None, last: bool = True, *,
            steps: Sequence[tuple[str, str, bool]] = (), crumb: str | None = None,
            policy: str | None = None, limit: dict[str, Any] | None = None,
-           dig: dict[str, Any] | None = None) -> str:
+           dig: dict[str, Any] | None = None, timeline: Any = None) -> str:
     """The page for a report, as one self-contained HTML document.
 
     `where` is how the request for an agent names the report.json the page
@@ -672,6 +693,12 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
     (`pages/dig_page.report_parts`): `ask`, markup for the request dialog;
     `noscript`, the same as a form for a browser with script off; and its
     own `css` and `js`. A page written to disk has none.
+
+    `timeline` gives the address of `echolot ui`'s page that opens a moment
+    of this report with its trace (#132), by the moment's index among
+    `timeline.moments(report)`, or None for one it cannot open. A page
+    written to disk has none: its links open Perfetto UI on the moment, and
+    say that the trace is opened there.
     """
     report = _read(report)
     ctx = plain._Ctx(report)
@@ -680,11 +707,17 @@ def render(report: dict[str, Any], where: str | None = None, last: bool = True, 
     hot = sum(1 for c in checks if c["hot"])
     w = report.get("window") or {}
     dig = dig if dig and hot else None
+    found = timeline_mod.moments(report)
+    links = {timeline_mod.url(m): served for i, m in enumerate(found)
+             if timeline and (served := timeline(i))}
+    window = timeline_mod.window_of(found)
     main = ('<main><div class="wide stack gap-6">'
-            + _verdict(report, ctx) + (limit or {}).get("html", "") + (_NO_SCRIPT_SERVED if dig else _NO_SCRIPT)
+            + _verdict(report, ctx) + (_timeline_html([window], timeline) if window else "")
+            + (limit or {}).get("html", "") + (_NO_SCRIPT_SERVED if dig else _NO_SCRIPT)
             + _table(checks, report, ctx) + _next_step(checks) + ((dig.get("noscript") or "") if dig else "")
-            + "<hr>" + _technical(report, ctx, several)
-            + "".join(_panel(c, ctx, several) for c in checks) + "</div></main>")
+            + "<hr>" + _technical(report, ctx, several, links)
+            + "".join(_panel(c, ctx, several, _timeline_html(timeline_mod.of_detector(found, c["id"]), timeline))
+                      for c in checks) + "</div></main>")
     lead, warned, tail = _request(report, where, last)
     body = (f'<div class="page">{kit.topbar([w.get("process"), report.get("scenario"), crumb], steps)}{main}</div>'
             + (kit.dock(hot, _start_words(checks)[1])

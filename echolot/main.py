@@ -56,7 +56,7 @@ from typing import TYPE_CHECKING, Any
 # the layer anyway, and the config with sandbox.
 from . import codex, files, flags, layer, plugin, recorder, sandbox, table, when
 from . import project as project_mod
-from .config import DEFAULT_PREFIX, PACKAGE, PROCESS, WHOLE_TRACE, Config, ConfigError
+from .config import DEFAULT_PREFIX, PACKAGE, PROCESS, WHOLE_TRACE, Config, ConfigError, NoWindow
 from .sandbox import SandboxError
 
 if TYPE_CHECKING:
@@ -882,12 +882,18 @@ def cmd_analyze(args) -> int:
                                      use_defaults=args.defaults, tp_source=tp_source)
             except launch_mod.Unfinished as e:
                 return {"trace": trace, _UNFINISHED: str(e)}
+            except NoWindow as e:
+                return {"trace": trace, _NO_WINDOW: str(e)}
         reports = parallel.in_order(traces, read, jobs)
         # A launch the recording stopped in the middle of is no repeat of
-        # the set: left out, and named, unless no repeat finished (#921).
-        reports, unfinished = _finished(reports)
+        # the set (#921), and nor is a trace that gives no window at all
+        # (#466): left out, and named, while the rest are more than half.
+        reports, unfinished, no_window = _with_window(reports)
         if unfinished:
             print(f"[!] {render_mod.unfinished_said(unfinished, len(reports))}",
+                  file=sys.stderr)
+        if no_window:
+            print(f"[!] {render_mod.no_window_said(no_window, len(reports))}",
                   file=sys.stderr)
         # In the order they were recorded, when every trace says when (#848).
         reports = _in_recording_order(reports)
@@ -907,6 +913,8 @@ def cmd_analyze(args) -> int:
             rep["ended_elsewhere"] = elsewhere
         if unfinished:
             rep["unfinished"] = unfinished
+        if no_window:
+            rep[_NO_WINDOW] = no_window
         if mixed:
             rep.setdefault("window", {})["activities"] = mixed
     except (ConfigError, hunt_mod.NotOpen) as e:
@@ -945,6 +953,8 @@ def cmd_analyze(args) -> int:
     w = rep.get("window") or {}
     if warm:
         recorder.note(not_cold=len(warm))
+    if rep.get(_NO_WINDOW):
+        recorder.note(no_window=len(rep[_NO_WINDOW]))
     recorder.note(
         traces=len(traces),
         fired=rep["summary"]["fired_ids"],
@@ -1050,24 +1060,55 @@ def cmd_analyze(args) -> int:
     return 0
 
 
-# What `analyze` keeps of a trace whose launch had not ended (#921), in
-# place of its report.
+# What `analyze` keeps of a trace whose launch had not ended (#921), and of
+# one that gave no window at all (#466), in place of its report. The second
+# is also the report's key for the traces left out so.
 _UNFINISHED = "unfinished"
+_NO_WINDOW = "no_window"
 
 
-def _finished(reports: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The reports of traces whose launch ended, and the traces whose launch
-    had not when the recording stopped, each with what was said of it.
+def _with_window(reports: list[dict[str, Any]]) -> tuple[
+        list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The reports of traces that gave a window, then the traces left out:
+    those whose launch had not ended when the recording stopped (#921), and
+    those that gave no window at all (#466), each with what was said of it.
 
-    One such repeat failed the whole set with "no launch" (#921). Left out,
-    the rest are a set; when no repeat's launch ended there is nothing to
-    read, and the first one's sentence is the error.
+    One such trace failed the whole set: one in fifteen of a macrobenchmark
+    round carried the app's process under a name cut to fifteen characters,
+    and the set ended in exit 2 with no report. Left out, the rest are a set.
+
+    Only while they are more than half of it. One recording that went wrong
+    is an accident of that recording; most of a set going wrong is a cause
+    they share, a mask, a scenario that starts nothing, a recording too short
+    for the build, and a report over the few that went through would speak
+    for the set from its odd ones: the launches that ended inside a short
+    recording are its fastest. With none left, the first one's sentence is
+    the error, as it is for a trace given alone.
     """
-    kept = [r for r in reports if _UNFINISHED not in r]
-    left = [{"trace": r["trace"], "said": r[_UNFINISHED]} for r in reports if _UNFINISHED in r]
+    kept = [r for r in reports if _UNFINISHED not in r and _NO_WINDOW not in r]
+    left = [r for r in reports if _UNFINISHED in r or _NO_WINDOW in r]
     if left and not kept:
-        raise launch_mod.Unfinished(left[0]["said"])
-    return kept, left
+        raise NoWindow(left[0].get(_UNFINISHED) or left[0][_NO_WINDOW])
+    if left and len(kept) * 2 <= len(reports):
+        raise NoWindow(_too_few_said(left, kept))
+    return (kept,
+            [{"trace": r["trace"], "said": r[_UNFINISHED]} for r in left if _UNFINISHED in r],
+            [{"trace": r["trace"], "said": r[_NO_WINDOW]} for r in left if _NO_WINDOW in r])
+
+
+def _too_few_said(left: list[dict[str, Any]], kept: list[dict[str, Any]]) -> str:
+    """Why a set is refused whose traces with a window are half of it or fewer."""
+    n, k = len(left) + len(kept), len(kept)
+    first = left[0].get(_UNFINISHED) or left[0][_NO_WINDOW]
+    first = first if first.endswith(".") else f"{first}."
+    rest = "the one that does is" if k == 1 else f"the {k} that do are"
+    give = "gives" if len(left) == 1 else "give"
+    return (f"{len(left)} of the {n} traces {give} no window to read, and {rest} not "
+            f"more than half of the set. A set goes on without the traces that went "
+            f"wrong while the ones left are most of it: a report over fewer would speak "
+            f"for recordings it did not read, and when most of a set went wrong, they "
+            f"likely share a cause. The first: {first} To read the "
+            f"{'one' if k == 1 else k} with a window, name {'it' if k == 1 else 'them'} alone.")
 
 
 def _noise_asked(args) -> None:

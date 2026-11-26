@@ -728,6 +728,11 @@ def _check(before: dict, after: dict,
     out.extend(_compile_moved(before, after))
     out.extend(drift_mod.warnings(before, after))
 
+    for side, rep in (("before", before), ("after", after)):
+        left = _left_out(rep)
+        if left:
+            out.append({"id": f"left-out-{side}", "text": _left_out_said(side, rep, left)})
+
     nb, na = _runs(before), _runs(after)
     if nb != na:
         out.append({
@@ -771,6 +776,40 @@ def _check(before: dict, after: dict,
                     "are listed as appeared or gone for that reason alone.",
         })
     return out, comparable
+
+
+# The recordings a report left out of its set, by the key it lists them
+# under, and the few words for why.
+LEFT_OUT = (("not_cold", "not a cold start"), ("ended_elsewhere", "ended on another activity"),
+            ("unfinished", "its launch had not ended"), ("no_window", "no window to read"))
+
+
+def _left_out(report: dict) -> list[tuple[str, str]]:
+    """(trace, why) for each recording the report's set left out of its
+    medians: what `analyze` read and did not keep (#466)."""
+    out = []
+    for key, why in LEFT_OUT:
+        entries = report.get(key)
+        for e in entries if isinstance(entries, list) else []:
+            if isinstance(e, dict) and e.get("trace"):
+                out.append((str(e["trace"]), why))
+    return out
+
+
+def _left_out_said(side: str, report: dict, left: list[tuple[str, str]]) -> str:
+    """The warning for one side whose set is smaller than what was recorded.
+
+    `runs` is the recordings the medians are over, and it is all `compare`
+    read of a set's size: a round of fifteen with one trace left out for
+    holding no window read as a round of fourteen, the same as one recorded
+    so. The reports say which they left out; this says it beside the
+    comparison."""
+    n = _runs(report)
+    each = "; ".join(f"`{Path(t).name}`, {why}" for t, why in left)
+    them = "that one is" if len(left) == 1 else "those are"
+    return (f"The {side} report's medians are over {n} of the {n + len(left)} "
+            f"recordings it was given. It left out {each}, and {them} in neither "
+            f"its rows nor this comparison.")
 
 
 # Every row, for `_tool_moved`: the rows of no particular detector.

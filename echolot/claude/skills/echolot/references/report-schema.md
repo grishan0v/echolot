@@ -19,7 +19,7 @@ produce. The keys only a merged report has are named under the block.
   "window": { "ts_start": …, "ts_end": …, "duration_ms": 772.3,
               "duration_ms_min": 751.8, "duration_ms_max": 790.4,
               "values": [751.8, 768.0, 772.3, 781.5, 790.4],
-              "process": "com.example.app", "pid": 4100,
+              "process": "com.example.app", "pid": 4100, "main_thread_name": "m.example.app",
               "start_anchor": { "glob": "bindApplication", "matches": 1 },
               "end_anchor":   { "glob": "…", "matches": 1 },
               "opened_inside": null,
@@ -86,7 +86,9 @@ produce. The keys only a merged report has are named under the block.
                   "runs": "5/5", "count": 4,
                   "self_ms": 125.4, "total_ms": 130.1, "max_ms": 61.2,
                   "spread": { "self_ms": { "min": …, "max": …, "values": [ … ] },
-                              "total_ms": { … }, "max_ms": { … } } } ],
+                              "total_ms": { … }, "max_ms": { … } },
+                  "at": { "ts": 10299990000, "dur": 61200000, "tid": 12903,
+                          "thread": "com.example.app", "run": 4 } } ],
       "error": null,
       "checked": true }
   ]
@@ -102,7 +104,8 @@ What the keys below the example mean is on this page for `traces` and `runs`,
 `toolchain`, a detector's `error` and `checked` are `echolot guide
 report-checks`; `environment` is `echolot guide report-environment`;
 `markers` is `echolot guide report-markers`; the columns of `rows`, with
-`spread`, `code` and `places`, are `echolot guide report-columns`.
+`spread`, `code`, `places` and `at`, are `echolot guide report-columns`, and
+`window.main_thread_name` is `echolot guide report-window`.
 
 **`traces` and `runs`** — the repeats behind a merged report, by path, and
 how many. One recording counts once however it was named: a path given twice,
@@ -116,7 +119,15 @@ on another activity than most of the set (`am start -W`'s `Activity:`, or the
 trace's last `performCreate:`): another journey, such as an app opening the
 page read last by itself; each has its `repeat`, its `activity` and the
 `others`' one. `window.activities` counts them instead when as many ended on
-each and none could be left out. `window.activity` is where a launch window's
+each and none could be left out. `unfinished` lists the launches left out
+because the recording stopped before their first frame, and `no_window` the
+traces left out because the window could not be taken from them at all: no
+process `project.process` matches, or no launch of it under `window: launch`.
+Each has its `trace` and `said`, the sentence `analyze` would have stopped on
+alone; for a trace where the mask took another process, it names that process
+and says the app's own is not in the trace under its name. A set is read
+without them only while the traces with a window are more than half of it, and
+`runs` counts those. `window.activity` is where a launch window's
 launches ended, `window.alias` the activity a launcher alias stands for,
 `window.handover` the splash's hand-over the window ran on through (`from`,
 `to`, `first_frame_ms`, `after_ms`, `launches`, `runs`; see `echolot guide
