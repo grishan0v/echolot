@@ -876,6 +876,9 @@ def _window_info(tp, cfg: Config, procs: list[dict], launch: dict | None = None)
     # this function lands somewhere else in the file — two of them arriving on
     # separate branches should not have to be merged by hand.
     window["main_thread"] = _main_thread_budget(tp, window)
+    # Read only where the budget found the main thread: with no states of it
+    # there is no idle to speak of, and zero would say there was none.
+    window["idle"] = _main_thread_idle(tp, window) if window["main_thread"] else None
     window["crowding"] = _crowding_info(tp)
     window["frames"] = _frames_info(tp, window)
     window["drawn"] = _drawn_info(tp, window)
@@ -1472,7 +1475,9 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     `sleeping` is left as one bucket on purpose. Idle at the message queue and
     blocked inside a message are both `S`, telling them apart needs the slices
     (see `_opened_inside`), and a budget that starts making that call stops
-    being arithmetic.
+    being arithmetic. The call is made beside it, by `_main_thread_idle`,
+    into a fact of its own (`window.idle`): the report's line splits the
+    bucket by it, and the sums here stay sums.
     """
     duration = window.get("duration_ms")
     if not duration:
@@ -1505,6 +1510,246 @@ def _main_thread_budget(tp, window: dict) -> dict | None:
     # explained" and "most of it was not looked at".
     out["accounted_pct"] = round(accounted / duration * 100, 1) if duration else None
     return out
+
+
+# --- the main thread idle at its message queue (#1030) -------------------------
+#
+# A sleep of the main thread with no message open, shorter than this, is the
+# space between two messages rather than an idle moment: `anr_risk`'s
+# `max_gap_ms`, for the same reason.
+IDLE_MOMENT_MS = 2.0
+# Work between two idle moments shorter than this does not end a stretch. The
+# looper serves short messages while it waits — an inset or a focus change, a
+# frame with nothing to draw — and each is under a frame at 120 Hz.
+IDLE_JOIN_MS = 8.0
+# A stretch with less idle in it than a frame at 60 Hz is not kept; how many
+# are kept is `report.IDLE_KEPT`.
+IDLE_KEPT_MS = 16.0
+
+
+def _main_thread_idle(tp, window: dict) -> dict | None:
+    """How long the main thread sat idle at its message queue, and what woke it.
+
+    The budget's `sleeping` is every `S` of the main thread, and two things
+    look exactly alike in it: the looper with nothing to do, asleep until a
+    message comes, and a call inside a message that blocked. The first is
+    not the app being slow, the second may be. Which one a sleep was is the
+    slices' call, made the way `_opened_inside`, `anr_risk` and
+    `main_thread_waits` make it: a sleep with no slice open on the main
+    thread is the looper's, the anchor that spans the window aside, since it
+    holds the idle moments too. `ms` is all of it, so the report can split
+    the bucket.
+
+    And for the longest stretches of it, what woke the main thread at the
+    end. Every sleep ends with a wakeup, and the trace keeps who sent it
+    (`waker_utid`) and whether it came from an interrupt (`irq_context`) on
+    the state after the sleep. A wakeup no thread sent is the looper's own
+    timeout coming due: a delayed message, `postDelayed` or a timer. One a
+    thread sent is a message that thread posted, a frame's vsync, an input
+    event, a binder call answered on a binder thread of the app. A stretch
+    still asleep when the window closed was woken by nothing inside it.
+
+    Made because an agent read `runLater(init, 100)` in a splash screen's
+    code and wrote down a hundred milliseconds of idle on the way to the
+    app's main screen. On fifteen cold starts the timer was real and the
+    main thread idle for 54 ms of it: the rest it drew the splash's frame
+    and served the messages that came in between. The report had said "28%
+    sleeping", and the 54 ms and the timer that ended them were in no line.
+
+    A stretch is idle moments of at least `IDLE_MOMENT_MS`, joined across the
+    work between them while that work is shorter than `IDLE_JOIN_MS`: that
+    same splash's 54 ms came in five to seven sleeps, the looper woken in
+    between to apply insets, change focus and draw frames with nothing in
+    them, and cut at each of those it read as several short waits woken by
+    the system. Each sleep inside a stretch counts in it, the short ones
+    too. Kept when it holds `IDLE_KEPT_MS` or more.
+
+    What it cannot see is what no slice names: a sleep inside a `Runnable`
+    nobody instrumented reads as idle, as it does for `_opened_inside` and
+    `anr_risk`. `uninstrumented_cpu` and `mark` are the way out of that.
+    """
+    start, end = window.get("ts_start"), window.get("ts_end")
+    if start is None or end is None:
+        return None
+    start, end = int(start), int(end)
+    try:
+        sleeps = _idle_sleeps(tp, start, end, "s.irq_context")
+    except Exception:  # a trace_processor older than `irq_context`
+        try:
+            sleeps = _idle_sleeps(tp, start, end, "NULL")
+        except Exception as e:  # the report stands without it, as without a detector
+            print(f"[!] main thread idle: {e}", file=sys.stderr)
+            return None
+    every = idle_stretches(sleeps, IDLE_MOMENT_MS * 1e6, IDLE_JOIN_MS * 1e6)
+    kept = sorted((i for i, s in enumerate(every) if s["ns"] >= IDLE_KEPT_MS * 1e6),
+                  key=lambda i: (-every[i]["ns"], every[i]["lo"]))[:report_mod.IDLE_KEPT]
+    try:
+        stretches = [_idle_stretch(tp, every, i, start, end) for i in sorted(kept)]
+    except Exception as e:  # the total stands without the stretches' names
+        print(f"[!] main thread idle stretches: {e}", file=sys.stderr)
+        stretches = []
+    return {"ms": round(sum(s["ns"] for s in sleeps) / 1e6, 2), "stretches": stretches}
+
+
+def _idle_sleeps(tp, start: int, end: int, irq: str) -> list[dict]:
+    """The main thread's sleeps in the window with no message open, in time
+    order: each one's idle part (`lo`, `hi`, `ns`), the thread that woke it
+    (`waker_utid`), whether an interrupt did (`irq`), and whether it was still
+    asleep when the window closed (`past_end`). `irq` is the column to read,
+    `NULL` on a trace_processor without it.
+
+    A message is the outermost slice on the main thread that does not span
+    the window: one whose parent is none, or the anchor. Laid against the
+    sleeps by SPAN_LEFT_JOIN, the part of each sleep that no message covers
+    is its idle part, so a slice whose end the trace stamped a little after
+    the thread went to sleep takes only its own microseconds off it.
+    """
+    main = ("(SELECT t.utid FROM thread t CROSS JOIN _proc p "
+            "WHERE t.upid = p.upid AND t.tid = p.pid ORDER BY t.utid DESC LIMIT 1)")
+    tp.exec_script(f"""
+        DROP VIEW IF EXISTS _main_sleep;
+        CREATE VIEW _main_sleep AS
+        SELECT utid, ts, dur, sleep_ts, waker_utid, irq, past_end FROM (
+            SELECT s.utid, s.state, s.ts AS sleep_ts,
+                   MAX(s.ts, {start}) AS ts,
+                   MIN(CASE WHEN s.dur < 0 THEN {end} ELSE s.ts + s.dur END, {end})
+                       - MAX(s.ts, {start}) AS dur,
+                   CASE WHEN s.dur < 0 OR s.ts + s.dur >= {end} THEN 1 ELSE 0 END AS past_end,
+                   LEAD(s.waker_utid) OVER (ORDER BY s.ts) AS waker_utid,
+                   LEAD({irq}) OVER (ORDER BY s.ts) AS irq
+            FROM thread_state s
+            WHERE s.utid = {main}
+        )
+        WHERE state = 'S' AND dur > 0;
+
+        DROP VIEW IF EXISTS _main_message;
+        CREATE VIEW _main_message AS
+        SELECT w.utid, w.ts_win AS ts, w.dur_win AS dur, 1 AS inside
+        FROM _slice_win w
+        JOIN slice x ON x.id = w.slice_id
+        LEFT JOIN slice up ON up.id = x.parent_id
+        WHERE w.is_main_thread = 1 AND w.dur_win > 0
+          AND NOT (w.ts <= {start} AND w.ts + w.dur >= {end})
+          AND (up.id IS NULL
+               OR (up.ts <= {start} AND (up.dur < 0 OR up.ts + up.dur >= {end})));
+
+        DROP TABLE IF EXISTS _main_idle;
+        CREATE VIRTUAL TABLE _main_idle
+        USING SPAN_LEFT_JOIN(_main_sleep PARTITIONED utid, _main_message PARTITIONED utid);
+    """)
+    rows = tp.query("""
+        SELECT sleep_ts, MIN(ts) AS lo, MAX(ts + dur) AS hi, SUM(dur) AS ns,
+               MAX(waker_utid) AS waker_utid, MAX(irq) AS irq, MAX(past_end) AS past_end
+        FROM _main_idle
+        WHERE inside IS NULL AND dur > 0
+        GROUP BY sleep_ts
+        ORDER BY sleep_ts
+    """)
+    return [dict(r) for r in rows]
+
+
+def idle_stretches(sleeps: list[dict], moment_ns: float, join_ns: float) -> list[dict]:
+    """The idle sleeps in stretches, in time order: `lo` and `hi`, the idle
+    time inside (`ns`), and the sleep that ended it (`last`).
+
+    `sleeps` are in time order, each with `lo`, `hi` and its idle `ns`. A
+    sleep of `moment_ns` or more is an idle moment, and a moment that begins
+    less than `join_ns` after the stretch before it ended belongs to it.
+    Shorter sleeps neither begin a stretch nor carry one on, and count in
+    the one they fall inside.
+    """
+    out: list[dict] = []
+    for s in sleeps:
+        if s["ns"] < moment_ns:
+            continue
+        if out and s["lo"] - out[-1]["hi"] < join_ns:
+            out[-1]["hi"], out[-1]["last"] = s["hi"], s
+        else:
+            out.append({"lo": s["lo"], "hi": s["hi"], "last": s})
+    # The sleeps do not overlap, so one pass places each in its stretch.
+    at = 0
+    for stretch in out:
+        stretch["ns"] = 0
+        while at < len(sleeps) and sleeps[at]["hi"] <= stretch["hi"]:
+            if sleeps[at]["lo"] >= stretch["lo"]:
+                stretch["ns"] += sleeps[at]["ns"]
+            at += 1
+    return out
+
+
+def _idle_stretch(tp, every: list[dict], i: int, start: int, end: int) -> dict:
+    """One stretch as the report keeps it: where it began in the window, its
+    idle time and its length, the work before it, the first slice after it,
+    and what woke the main thread at its end.
+
+    The work before is what ran since the stretch before this one, or since
+    the window opened, and of it the slice that ended last among those as
+    long as the work that ends a stretch (`IDLE_JOIN_MS`): the splash's
+    frame, not the `bindApplication` that ended before the frame began.
+    With none that long, the longest. The work after runs up to the next
+    stretch or the window's end. Names folded as every detector folds them
+    (`_name_family`).
+    """
+    stretch = every[i]
+    lo, hi = int(stretch["lo"]), int(stretch["hi"])
+    before = int(every[i - 1]["hi"]) if i else start
+    after = int(every[i + 1]["lo"]) if i + 1 < len(every) else end
+    spans = f"(s.ts <= {start} AND s.ts + s.dur >= {end})"
+    out: dict[str, Any] = {
+        "at_ms": round((lo - start) / 1e6, 2),
+        "ms": round(stretch["ns"] / 1e6, 2),
+        "span_ms": round((hi - lo) / 1e6, 2),
+    }
+    found = tp.query(f"""
+        SELECT COALESCE(f.family, s.name) AS name
+        FROM _slice_win s LEFT JOIN _name_family f ON f.name = s.name
+        WHERE s.is_main_thread = 1 AND NOT {spans}
+          AND s.ts + s.dur <= {lo} AND s.ts + s.dur >= {before}
+        ORDER BY s.dur >= {int(IDLE_JOIN_MS * 1e6)} DESC,
+                 CASE WHEN s.dur >= {int(IDLE_JOIN_MS * 1e6)} THEN s.ts + s.dur ELSE s.dur END DESC,
+                 s.depth, s.ts LIMIT 1
+    """)
+    out["after"] = found[0]["name"] if found else None
+    last = stretch["last"]
+    found = [] if last["past_end"] else tp.query(f"""
+        SELECT COALESCE(f.family, s.name) AS name
+        FROM _slice_win s LEFT JOIN _name_family f ON f.name = s.name
+        WHERE s.is_main_thread = 1 AND NOT {spans}
+          AND s.ts >= {hi} AND s.ts < {after}
+        ORDER BY s.ts, s.depth LIMIT 1
+    """)
+    out["until"] = found[0]["name"] if found else None
+    out.update(_woken_by(tp, last))
+    return out
+
+
+def _woken_by(tp, last: dict) -> dict:
+    """What ended the main thread's sleep: `woken_by` is `timer` (no thread:
+    an interrupt, or the CPU's idle task), `app` or `other` (a thread of the
+    app or of another process, named in `waker`), `end` (still asleep when the
+    window closed) or `unknown` (the trace kept no wakeup for it)."""
+    if last.get("past_end"):
+        return {"woken_by": "end"}
+    waker = last.get("waker_utid")
+    if last.get("irq") == 1 or waker == 0:
+        return {"woken_by": "timer"}
+    if waker is None:
+        return {"woken_by": "unknown"}
+    rows = tp.query(f"""
+        SELECT COALESCE(f.family, t.name) AS thread, pr.name AS process,
+               COALESCE(t.upid = (SELECT upid FROM _proc), 0) AS app
+        FROM thread t
+        LEFT JOIN process pr ON pr.upid = t.upid
+        LEFT JOIN _name_family f ON f.name = t.name
+        WHERE t.utid = {int(waker)}
+    """)
+    if not rows:
+        return {"woken_by": "unknown"}
+    row = rows[0]
+    if row["app"]:
+        return {"woken_by": "app", "waker": {"thread": row["thread"]}}
+    thread = names_mod.runtime_name(row["thread"]) if row["thread"] else None
+    return {"woken_by": "other", "waker": {"thread": thread, "process": row["process"]}}
 
 
 def _frames_info(tp, window: dict) -> dict | None:

@@ -1384,6 +1384,95 @@ def _(report):
                      ("SharedPreferenc", 1, 20.0, 20.0, "blocked in activityStart")], waits
 
 
+IDLE_CONFIG = {**FIXTURE_CONFIG, "scenario": {
+    "name": "splash", "start": {"name": "bindApplication"}, "end": {"name": "Screen.firstFrame"}}}
+
+
+@functools.cache
+def _idle_report() -> dict:
+    """`fixture.idle_looper` analysed, once for the checks below."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "idle.perfetto-trace"
+        path.write_bytes(fixture.idle_looper())
+        return _analyze(path, Config(IDLE_CONFIG))
+
+
+@check("main thread: its idle at the message queue is told from a sleep inside a message, "
+       "and a timer that ended it is named (#1030)")
+def _(report):
+    """A splash that posts its init with a delay (`fixture.idle_looper`): of
+    the main thread's 128 ms asleep, 108 is idle with no slice open and 20 a
+    wait inside `loadSettings`. The idle after the splash's frame is one
+    stretch of 68 ms over 70, the 2 ms `clientTransactionExecuted` a binder
+    thread woke it for inside it, ended by its own timeout: no thread woke
+    it. Read as "51% sleeping", it was where an agent put the 100 ms of a
+    `runLater(init, 100)` it read in the code, and the trace said 54. The
+    idle after `loadSettings` is `Loader`'s, a thread of the app."""
+    got = _idle_report()
+    assert got["window"]["main_thread"]["sleeping"] == 128.0, got["window"]["main_thread"]
+    idle = got["window"]["idle"]
+    assert idle["ms"] == 108.0, idle
+    assert idle["stretches"] == [
+        {"at_ms": 60.0, "ms": 68.0, "span_ms": 70.0, "after": "Choreographer#doFrame #",
+         "until": "loadSettings", "woken_by": "timer"},
+        {"at_ms": 200.0, "ms": 40.0, "span_ms": 40.0, "after": "loadSettings",
+         "until": "Screen.firstFrame", "woken_by": "app", "waker": {"thread": "Loader"}},
+    ], idle["stretches"]
+
+
+@check("report: the budget line splits sleeping into asleep inside a message and idle at the "
+       "queue, and names what woke the longest idle (#1030)")
+def _(report):
+    """The same splash in report.md: `sleeping` said in two, and a line per
+    stretch of idle with what woke it. A report without `window.idle`, one
+    written before it, keeps its `sleeping`."""
+    from . import report as report_mod
+    from .render import _budget_lines
+    got = _idle_report()
+    lines = report_mod.to_markdown(got).splitlines()
+    assert ("Main thread: 49% on a CPU · 8% asleep inside a message · "
+            "43% idle at the message queue") in lines, [x for x in lines if "Main thread" in x]
+    idle = [x for x in lines if x.startswith("Idle at the message queue")]
+    assert idle == [
+        "Idle at the message queue: **68.0 ms** over 70.0 ms, from 60.0 ms into the window, "
+        "after `Choreographer#doFrame #`, until `loadSettings` — woken by a timer: no thread "
+        "woke it, its own delayed message or timeout came due",
+        "Idle at the message queue: **40.0 ms**, from 200.0 ms into the window, after "
+        "`loadSettings`, until `Screen.firstFrame` — woken by `Loader`, a thread of the app",
+    ], idle
+    old = _budget_lines(got["window"]["main_thread"])
+    assert old[0] == "Main thread: 49% on a CPU · 51% sleeping", old
+    assert not any(x.startswith("Idle at") for x in old), old
+
+
+@check("report: a set keeps the idle stretches its repeats agree on, with how many had each (#1030)")
+def _(report):
+    """Three repeats of the splash, the third without the timer's stretch: it
+    is kept with `2/3` runs and the median of the two, `Loader`'s with `3/3`,
+    and the idle in all is the median of the three."""
+    import copy
+    from . import report as report_mod
+    first = _idle_report()
+    second = copy.deepcopy(first)
+    second["window"]["idle"]["ms"] = 100.0
+    second["window"]["idle"]["stretches"][0]["ms"] = 60.0
+    third = copy.deepcopy(first)
+    third["window"]["idle"]["ms"] = 40.0
+    third["window"]["idle"]["stretches"] = third["window"]["idle"]["stretches"][1:]
+    merged = report_mod.aggregate([first, second, third])["window"]["idle"]
+    assert merged["ms"] == 100.0 and merged["runs"] == "3/3", merged
+    got = [(s["until"], s["woken_by"], s["ms"], s["runs"]) for s in merged["stretches"]]
+    assert got == [("loadSettings", "timer", 64.0, "2/3"),
+                   ("Screen.firstFrame", "app", 40.0, "3/3")], got
+    # Had by one repeat of three, a stretch stays in the JSON and the window
+    # view, and is not one more line under the budget.
+    once = report_mod.aggregate([first, third, copy.deepcopy(third)])
+    said = [x for x in report_mod.to_markdown(once).splitlines() if x.startswith("Idle at")]
+    assert len(said) == 1 and "`Loader`" in said[0] and "(3/3 runs)" in said[0], said
+    from .render import window_view
+    assert "until `loadSettings`" in window_view(once), window_view(once)
+
+
 # A start where the other side of each wait is in every state a thread can
 # be in (#417, #418), as `(name, from ms, to ms, children)` per thread and
 # `(cpu, ms, tid in, tid out, the state it left in)` for the scheduler.
@@ -9928,6 +10017,34 @@ def _(report):
     ):
         for phrase in said:
             assert re.search(_CONCLUSION_FIELDS[field], phrase), (field, phrase)
+
+
+@check(".claude/ layer: a delay read in the code is a hypothesis until the trace and "
+       "compare measure it (#1030)")
+def _(report):
+    """An agent read a splash's `runLater(init, 100)` and wrote down 100 ms of
+    idle on the way to the map; the trace held 54, and taking the delay out
+    brought the map no earlier. The hunter is told the constant is not the
+    cost, where the measured idle is in the report — in the words the report
+    prints, so the two cannot drift apart — that the gain needs `compare`,
+    and how to mark such a place in its answer."""
+    from .layer import CLAUDE_DIR
+    from .render import IDLE_AT_QUEUE, _woken_words
+    hunter = (CLAUDE_DIR / "agents" / "perf-hunter.md").read_text(encoding="utf-8")
+    flat = " ".join(hunter.split())
+    assert "A delay you read in the code is a hypothesis, not a cost." in flat, \
+        "the hunter is not told a delay in the code is unmeasured"
+    for call in ("postDelayed", "runLater", "Handler", "delay()"):
+        assert call in flat, f"the rule does not name {call}"
+    said = IDLE_AT_QUEUE[0].upper() + IDLE_AT_QUEUE[1:]
+    assert f"`{said}: **54.0 ms**" in flat, "the rule quotes a line the report does not print"
+    assert _woken_words({"woken_by": "timer"}).startswith("woken by a timer"), \
+        "the report's words for a timer changed under the rule that quotes them"
+    assert "echolot compare" in flat.split("A delay you read in the code", 1)[1][:2000], \
+        "the rule does not send the gain to compare"
+    shape = hunter.split("## What to return upward", 1)[-1].split("```")[1]
+    assert "(from the code, not measured)" in shape, \
+        "the return shape has no mark for a delay read in the code"
 
 
 @check(".claude/ layer: the hunter leaves a value a person confirmed to them")

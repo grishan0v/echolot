@@ -159,6 +159,70 @@ def _merge_budget(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 
+# How many stretches of the main thread's idle a report keeps, the longest
+# (`analyze._main_thread_idle`); the page shows fewer (`render.IDLE_SHOWN`),
+# and the merge of a set reads every repeat's.
+IDLE_KEPT = 10
+
+
+def _merge_idle(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The main thread's idle at its message queue across repeats (#1030).
+
+    `ms` is the median, like a bucket of the budget. A stretch is one when
+    the repeats agree on what ended it: the slice the main thread woke for
+    and what woke it, the waking thread of the app or the other process by
+    name. Its numbers are medians over the repeats that had it, and `runs`
+    says how many of those that hold an account of idle did; the slice
+    before it is the one most of them name. The stretches kept are the ones
+    that held the most idle summed over the repeats, so one found in every
+    repeat ranks above a longer one found once, and they stay in time order.
+    Two of a repeat's stretches that agree are added up.
+    """
+    found = [r["window"]["idle"] for r in reports if (r.get("window") or {}).get("idle")]
+    if not found:
+        return None
+    groups: dict[tuple[str, str, str], dict[int, list[dict[str, Any]]]] = {}
+    for run, idle in enumerate(found):
+        for stretch in idle.get("stretches") or []:
+            waker = stretch.get("waker") or {}
+            who = (waker.get("thread") if stretch.get("woken_by") == "app"
+                   else waker.get("process")) or ""
+            key = (stretch.get("until") or "", stretch.get("woken_by") or "", who)
+            groups.setdefault(key, {}).setdefault(run, []).append(stretch)
+    merged = []
+    for key, by_run in groups.items():
+        runs = [sorted(by_run[r], key=lambda s: s["at_ms"]) for r in sorted(by_run)]
+        ms = [sum(s["ms"] for s in run) for run in runs]
+        befores: dict[str, int] = {}
+        threads: dict[str, int] = {}
+        for run in runs:
+            name = run[0].get("after")
+            if name:
+                befores[name] = befores.get(name, 0) + 1
+            thread = (run[0].get("waker") or {}).get("thread")
+            if thread:
+                threads[thread] = threads.get(thread, 0) + 1
+        first = runs[0][0]
+        entry: dict[str, Any] = {
+            "at_ms": round(median([run[0]["at_ms"] for run in runs]), 2),
+            "ms": round(median(ms), 2),
+            "span_ms": round(median([sum(s["span_ms"] for s in run) for run in runs]), 2),
+            "after": min(befores, key=lambda n: (-befores[n], n)) if befores else None,
+            "until": key[0] or None,
+            "woken_by": key[1],
+        }
+        if first.get("waker"):
+            entry["waker"] = dict(first["waker"])
+            if threads:
+                entry["waker"]["thread"] = min(threads, key=lambda n: (-threads[n], n))
+        entry["runs"] = f"{len(runs)}/{len(found)}"
+        merged.append((-sum(ms), key, entry))
+    merged.sort(key=lambda m: (m[0], m[1]))
+    kept = sorted((m[2] for m in merged[:IDLE_KEPT]), key=lambda e: (e["at_ms"], e["until"] or ""))
+    return {"ms": round(median([i.get("ms") or 0.0 for i in found]), 2), "stretches": kept,
+            "runs": f"{len(found)}/{len(reports)}"}
+
+
 def _merge_crowding(reports: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The app's crowd across repeats: medians, like the budget, and how many repeats had one."""
     found = [r["window"]["crowding"] for r in reports
@@ -889,6 +953,7 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
         # differ by more than their own runs do.
         merged["window"]["values"] = windows
         merged["window"]["main_thread"] = _merge_budget(reports)
+        merged["window"]["idle"] = _merge_idle(reports)
         merged["window"]["crowding"] = _merge_crowding(reports)
         merged["window"]["frames"] = _merge_frames(reports)
         merged["window"]["drawn"] = _merge_drawn(reports)

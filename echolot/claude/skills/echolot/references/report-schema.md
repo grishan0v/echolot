@@ -30,6 +30,11 @@ produce. The keys only a merged report has are named under the block.
                                "in_rows_ms": 401.6, "in_rows_pct": 52.0,
                                "in_rows_uncounted": [],
                                "runs": "5/5" },
+              "idle": { "ms": 61.2, "runs": "5/5",
+                        "stretches": [ { "at_ms": 175.0, "ms": 54.0, "span_ms": 61.0,
+                                         "after": "Choreographer#doFrame #",
+                                         "until": "loadSettings", "woken_by": "timer",
+                                         "runs": "5/5" } ] },
               "crowding": { "threads": 135, "cores": 8, "peak": 27,
                             "above_cores_ms": 245.0, "runs": "5/5" } },
   "environment": { "cpu": { "mean_mhz": 1481.2, "mean_mhz_min": 1452.0,
@@ -98,8 +103,8 @@ produce. The keys only a merged report has are named under the block.
 What the keys below the example mean is on this page for `traces` and `runs`,
 `budget_ms`, `verdict`, `attention` and `plain`, `identity`, `config`,
 `scenario` and `params_source`. The rest is a topic of its own:
-`window.main_thread`, `in_rows_pct`, `crowding`, `frames`, `drawn` and
-`startup` are `echolot guide report-window`; the anchors, `opened_inside`,
+`window.main_thread`, `in_rows_pct`, `window.idle`, `crowding`, `frames`,
+`drawn` and `startup` are `echolot guide report-window`; the anchors, `opened_inside`,
 `defined_by`, `process_alternatives`, `drift`, `summary`, `recording`,
 `toolchain`, a detector's `error` and `checked` are `echolot guide
 report-checks`; `environment` is `echolot guide report-environment`;

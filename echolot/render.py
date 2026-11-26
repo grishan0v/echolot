@@ -308,7 +308,14 @@ BUDGET_LABELS = (
 )
 
 
-def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
+# The budget's `sleeping` in two, where the report knows the main thread's
+# idle at its message queue (`window.idle`, #1030).
+ASLEEP_IN_MESSAGE = "asleep inside a message"
+IDLE_AT_QUEUE = "idle at the message queue"
+
+
+def _budget_lines(budget: dict[str, Any] | None,
+                  idle: dict[str, Any] | None = None) -> list[str]:
     """One line saying where the window went, above the findings that explain part of it.
 
     "Detectors fired: 5 of 12" counts detectors. This counts the window, which
@@ -319,6 +326,14 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
 
     Buckets under a percent are dropped from the line and kept in the JSON.
     A tail of "0% this, 0% that" is how a summary stops being read.
+
+    `idle` is `window.idle`, and with it `sleeping` is said in two: asleep
+    inside a message, which may be the app waiting, and idle at the message
+    queue, which is the looper with nothing to do. "28% sleeping" left a
+    reader to guess which, and the guess an agent made from a `runLater(…,
+    100)` in the code was a hundred milliseconds of idle where the trace
+    held 54 (#1030). The longest stretches of idle follow the line
+    (`_idle_lines`). A report without it says `sleeping`, as it always did.
     """
     if not budget:
         return []
@@ -329,6 +344,14 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
     parts = []
     for key, label in BUDGET_LABELS:
         ms = budget.get(key) or 0
+        if key == "sleeping" and idle and idle.get("ms") is not None:
+            # Medians of a set are each of their own runs, so the idle can
+            # come out a little above the sleeping it is part of.
+            quiet = min(float(idle["ms"]), float(ms))
+            for part, said in ((ms - quiet, ASLEEP_IN_MESSAGE), (quiet, IDLE_AT_QUEUE)):
+                if part / window * 100 >= 1:
+                    parts.append(f"{part / window * 100:.0f}% {said}")
+            continue
         share = ms / window * 100
         if share >= 1:
             parts.append(f"{share:.0f}% {label}")
@@ -344,6 +367,7 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
         return []
 
     out = ["Main thread: " + " · ".join(parts)]
+    out.extend(_idle_lines(idle))
     out.extend(_in_rows_line(budget))
     accounted = budget.get("accounted_pct")
     # Anything much short of the whole window means the thread had no state
@@ -367,6 +391,83 @@ def _budget_lines(budget: dict[str, Any] | None) -> list[str]:
             f"so the shares above are of what was seen, not of the scenario."
         )
     return out
+
+
+# How many of the idle stretches a report keeps (`report.IDLE_KEPT`) the page
+# shows under the budget line.
+IDLE_SHOWN = 3
+
+
+def _idle_lines(idle: dict[str, Any] | None, shown: int | None = IDLE_SHOWN,
+                lead: str = f"{IDLE_AT_QUEUE[0].upper()}{IDLE_AT_QUEUE[1:]}: ") -> list[str]:
+    """The main thread's longest stretches of idle at its message queue, in
+    time order, each with what woke it at the end (#1030).
+
+    The line a delay read in the code is checked against. A splash screen's
+    `runLater(init, 100)` reads as a hundred milliseconds the user waits; the
+    trace said the main thread was idle for 54 of them, after the splash's
+    frame, until the first slice of `init`, and that a timer woke it — no
+    thread, so nothing else the app did was holding it. Whether the window's
+    end waited for that idle is another question, and this line does not
+    answer it.
+
+    `idle` is `window.idle`: `stretches` with `at_ms` from the window's
+    start, the idle `ms` over `span_ms`, the work `after` which it began,
+    the first slice `until` which it lasted, `woken_by` and `waker`, and in
+    a set the `runs` that had it. `shown` is
+    how many, the longest; None for all of them, and then a set's stretches
+    that fewer than half its repeats had are listed too. `lead` begins each
+    line: the window view lists them under its own total, as bullets. Under the budget
+    they are not: on fifteen cold starts the one stretch every repeat had
+    came with one that a single repeat had, the same idle cut in two where
+    a longer frame fell in its middle, and it read as one more thing to
+    look at.
+    """
+    stretches = (idle or {}).get("stretches") or []
+    if shown is not None:
+        stretches = [st for st in stretches if _most_runs(st.get("runs"))]
+    longest = sorted(stretches, key=lambda st: -(st.get("ms") or 0))[:shown]
+    out = []
+    for st in sorted(longest, key=lambda st: st.get("at_ms") or 0):
+        line = f"{lead}**{st.get('ms') or 0:.1f} ms**"
+        span = st.get("span_ms")
+        if span is not None and span - (st.get("ms") or 0) >= 0.05:
+            line += f" over {span:.1f} ms"
+        line += f", from {st.get('at_ms') or 0:.1f} ms into the window"
+        if st.get("after"):
+            line += f", after `{st['after']}`"
+        if st.get("until"):
+            line += f", until `{st['until']}`"
+        line += " — " + _woken_words(st)
+        if st.get("runs"):
+            line += f" ({st['runs']} runs)"
+        out.append(line)
+    return out
+
+
+def _most_runs(runs: Any) -> bool:
+    """Whether `runs` (`3/15`) is more than half, or there is no set to count."""
+    had, _, of = str(runs or "").partition("/")
+    if not had.isdigit() or not of.isdigit():
+        return True
+    return int(had) * 2 > int(of)
+
+
+def _woken_words(stretch: dict[str, Any]) -> str:
+    """What ended a stretch of idle, as `_idle_lines` says it."""
+    kind = stretch.get("woken_by")
+    waker = stretch.get("waker") or {}
+    if kind == "timer":
+        return ("woken by a timer: no thread woke it, its own delayed message "
+                "or timeout came due")
+    if kind == "app" and waker.get("thread"):
+        return f"woken by `{waker['thread']}`, a thread of the app"
+    if kind == "other" and waker.get("process"):
+        thread = f"`{waker['thread']}` of " if waker.get("thread") else ""
+        return f"woken by {thread}`{waker['process']}`"
+    if kind == "end":
+        return "still idle when the window closed"
+    return "the trace does not say what woke it"
 
 
 # The share of the CPUs' time in the window other processes may take before
@@ -1075,7 +1176,7 @@ def to_markdown(report: dict[str, Any]) -> str:
     moments = timeline_mod.moments(report)
     out.extend(_timeline_window_lines(moments))
 
-    out.extend(_budget_lines(w.get("main_thread")))
+    out.extend(_budget_lines(w.get("main_thread"), w.get("idle")))
     out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), launch_mod.is_launch(w)))
@@ -1532,7 +1633,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
     if alts:
         out.append(f"⚠️ {w.get('process_alternatives_total') or len(alts)} other "
                    f"process(es) matched the mask; the largest was taken")
-    out.extend(_budget_lines(w.get("main_thread")))
+    out.extend(_budget_lines(w.get("main_thread"), w.get("idle")))
     out.extend(_crowding_lines(w.get("crowding")))
     out.extend(_outside_lines(w.get("crowding")))
     out.extend(_startup_lines(w.get("startup"), launch_mod.is_launch(w)))
@@ -1745,6 +1846,11 @@ def window_view(report: dict[str, Any]) -> str:
             if mt.get(key)]
         out.append("Main thread: " + " · ".join(parts)
                    + f", {mt.get('accounted_ms')} of {mt['window_ms']} ms accounted for")
+        idle = w.get("idle")
+        if isinstance(idle, dict) and idle.get("ms") is not None:
+            # Every stretch the report kept, not only the page's few (#1030).
+            out.append(f"Of the sleeping, {IDLE_AT_QUEUE}: {idle['ms']} ms")
+            out.extend(_idle_lines(idle, shown=None, lead="- "))
         if mt.get("in_rows_ms") is not None:
             out.append(f"In the findings: {mt['in_rows_ms']} ms ({mt.get('in_rows_pct')}%)")
     frames = w.get("frames")

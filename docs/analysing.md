@@ -425,8 +425,10 @@ posted the next message. An app that shows a WebView has one of Chromium's
 threads doing that hundreds of times a run, and counted as waits it ranked
 first by seconds. So a launch that sits idle until its background work posts,
 as a Compose app's first launch on an A51 did for 0.7 s of 2.1 s while Room
-filled its database, has no row here; the start's breakdown shows the main
-thread sleeping, and `uninstrumented_cpu` the threads that worked. A lock's
+filled its database, has no row here; the budget line shows the main thread
+idle at the message queue, the lines under it the longest stretches of it
+and what woke it ([Idle at the message queue](#idle-at-the-message-queue)),
+and `uninstrumented_cpu` the threads that worked. A lock's
 wait stays with `monitor_contention`, a binder reply with `binder_txn`, and a
 sleep that `RenderThread` or another process ended is left out.
 
@@ -1077,6 +1079,59 @@ The links depend on nothing but the report, so a set gives the same
 The UI could also select the slice, by its `ts` and `dur`; the link does not
 ask for it, because in Perfetto UI v59 the selection moves the view after the
 zoom has started and the zoom is lost.
+
+## Idle at the message queue
+
+The budget line's `sleeping` is every moment the main thread was asleep, and
+two things look alike in it: the looper with nothing to do, waiting for the
+next message, and a call inside a message that blocked. The first is the app
+behaving; the second may be what is slow. Where the trace says which, the
+line says them apart, and the longest stretches of idle follow it:
+
+```
+Main thread: 63% on a CPU · 1% waiting for a CPU · 21% asleep inside a message · 8% idle at the message queue · 5% before the process started
+Idle at the message queue: **52.9 ms** over 59.5 ms, from 181.3 ms into the window, after `Choreographer#doFrame #`, until `loadSettings` — woken by a timer: no thread woke it, its own delayed message or timeout came due (15/15 runs)
+```
+
+That is fifteen cold starts of a map app whose splash screen draws a frame
+and posts the app's init with `runLater(init, 100)`. An agent reading the
+code wrote down 100 ms of idle on the way to the map. The trace says 53: for
+the rest of the 100 the main thread drew the splash and served the short
+messages that came in between. And it says what ended the wait: no thread,
+the delayed message coming due.
+
+- **Idle** is a sleep with no slice open on the main thread, the anchor that
+  spans the window aside: the rule the window's start check and `anr_risk`
+  already use. `window.idle.ms` is all of it; `window.main_thread.sleeping`
+  stays every sleep, as before.
+- **A stretch** is idle moments of 2 ms or more, joined across the work
+  between them while it stays under 8 ms, so the inset, focus and
+  empty-frame messages the looper serves while it waits do not cut one wait
+  into five. Every sleep inside counts, the short ones too. A stretch is kept
+  from 16 ms of idle; the header shows the three longest, `echolot report
+  --window` every one kept.
+- **`after`** is the work before it, the last slice of 8 ms or more that
+  ended before the stretch began; **`until`** is the first slice after it,
+  the message the main thread woke for.
+- **What woke it** comes from the wakeup that ended the stretch's last sleep:
+  `a timer` when no thread sent it (the kernel raised it from an interrupt,
+  or from an idle CPU): the looper's own timeout, a delayed message, a
+  `postDelayed`; a thread of the app, by name; a thread of another process,
+  with the process (`InputDispatcher` of `system_server`, surfaceflinger's
+  vsync); or `still idle when the window closed`, a stretch the window's end
+  did not wait for.
+
+In a set, the stretches are one when the repeats agree on what ended them —
+the slice the main thread woke for and what woke it — each number a median
+over the repeats that had it, and `(15/15 runs)` says how many did. The
+header shows the ones more than half the repeats had.
+
+What it does not say is whether the window's end waited for that idle. On
+the same app, taking the delay out brought the init 58 ms earlier and the
+map no earlier: the time went to the system and to a race with another
+init. Only `compare` on two builds says that. And the slices are its only
+evidence: a sleep inside a `Runnable` no slice names reads as idle, which
+`uninstrumented_cpu` and `mark` are for.
 
 ## Where a cold start went
 

@@ -1741,6 +1741,79 @@ def looper_waits() -> bytes:
     return builder.serialize()
 
 
+# --- the looper idle until a timer ---------------------------------------------
+#
+# `idle_looper()` only, a scene of its own (#1030): a splash screen that draws
+# its frame and posts the app's init with a delay, in the shape a real one's
+# cold starts have. After the frame the main thread's looper sleeps with no
+# slice open, is woken once by a binder thread of the app to run a short
+# `clientTransactionExecuted`, and sleeps again until its own timeout comes
+# due: no thread wakes it, the delayed message does, and `loadSettings` runs.
+# Inside it the main thread waits 20 ms for `Loader`, a thread of the app:
+# a wait inside a message, not idle. After it the looper sleeps until
+# `Loader` posts the message that draws `Screen.firstFrame`.
+#
+# The budget's `sleeping` is all 128 ms; 108 of it is idle, in two stretches:
+# 68 ms over 70 after the splash's frame, until `loadSettings`, woken by the
+# timer (the 2 ms of `clientTransactionExecuted` does not cut it), and 40 ms
+# after `loadSettings`, until `Screen.firstFrame`, woken by `Loader`.
+IDLE_BINDER, IDLE_LOADER = 4321, 4322
+IDLE_THREADS = {TID_MAIN: APP_NAME[-15:], IDLE_BINDER: f"binder:{APP_PID}_2",
+                IDLE_LOADER: "Loader"}
+IDLE_MAIN = [
+    ("bindApplication", 100, 30, []),
+    ("Choreographer#doFrame 101", 130, 30, [("traversal", 131, 28, [])]),
+    ("clientTransactionExecuted", 180, 2, []),
+    ("loadSettings", 230, 70, []),
+    ("Screen.firstFrame", 340, 10, []),
+]
+# The main thread's sleeps: (from, to, the thread that woke it, None for a
+# timer).
+IDLE_SLEEPS = [
+    (160, 180, IDLE_BINDER),   # idle: a message posted by a binder thread
+    (182, 230, None),          # idle: its own delayed message came due
+    (250, 270, IDLE_LOADER),   # inside loadSettings: a wait
+    (300, 340, IDLE_LOADER),   # idle: Loader posts the frame
+]
+# How the kernel marks an event raised in a hard interrupt (`common_flags`):
+# a timer's expiry wakes the thread from there, and trace_processor reads it
+# as `irq_context`.
+HARDIRQ = 0x08
+
+
+def idle_looper() -> bytes:
+    """The scene above: `com.example.app` from `bindApplication` to the end of
+    `Screen.firstFrame`, 250 ms, the main thread on CPU 0 between its sleeps,
+    each thread that wakes it on a CPU of its own for the millisecond before,
+    and the timer's wakeup raised on CPU 0 while it idled."""
+    builder = TraceProtoBuilder()
+    process_tree(builder, [(APP_PID, APP_NAME, IDLE_THREADS)])
+    seq = iter(range(10**6))
+    main = IDLE_THREADS[TID_MAIN]
+    by_cpu: dict[int, list] = {0: []}
+    on = 100
+    for start, end, waker in IDLE_SLEEPS:
+        by_cpu[0] += [(ms(on), next(seq), "sched", "swapper/0", 0, R, main, TID_MAIN),
+                      (ms(start), next(seq), "sched", main, TID_MAIN, S, "swapper/0", 0)]
+        if waker is None:
+            by_cpu[0].append((ms(end) - 1, next(seq), "waking", 0, TID_MAIN, main, 0, HARDIRQ))
+        else:
+            cpu, name = 1 + [*IDLE_THREADS].index(waker), IDLE_THREADS[waker]
+            by_cpu.setdefault(cpu, []).extend([
+                (ms(end - 1), next(seq), "sched", f"swapper/{cpu}", 0, R, name, waker),
+                (ms(end) - 1, next(seq), "waking", waker, TID_MAIN, main, 0),
+                (ms(end), next(seq), "sched", name, waker, S, f"swapper/{cpu}", 0),
+            ])
+        on = end
+    by_cpu[0] += [(ms(on), next(seq), "sched", "swapper/0", 0, R, main, TID_MAIN),
+                  (ms(360), next(seq), "sched", main, TID_MAIN, S, "swapper/0", 0)]
+    for ts, order, kind, name in _flatten(IDLE_MAIN, [], seq):
+        buf = f"B|{APP_PID}|{name}\n" if kind == "B" else f"E|{APP_PID}\n"
+        by_cpu[0].append((ts, order, "print", TID_MAIN, buf))
+    ftrace(builder, by_cpu)
+    return builder.serialize()
+
+
 # --- a pool under one name -------------------------------------------------------
 #
 # `pool()` only, a scene of its own (#511). The kernel keeps fifteen characters
@@ -2353,7 +2426,8 @@ def ftrace(builder, by_cpu: dict[int, list]) -> None:
     An event is a tuple: its timestamp, a sequence number that orders events
     of one timestamp, its kind, and the fields the kind needs — `sched`
     (prev_comm, prev_pid, prev_state, next_comm, next_pid), `waking` (waker
-    tid, wakee tid, wakee's name, wakee's CPU), `blocked` (tid, io_wait),
+    tid, wakee tid, wakee's name, wakee's CPU, and the kernel's
+    `common_flags` when it was raised in an interrupt), `blocked` (tid, io_wait),
     `freq` (cpu, khz), `temp` (zone, millidegrees), `cdev` (device, level),
     `binder` (tid, debug id, the process and thread it goes to, whether it is
     an answer), `received` (tid, debug id) and `print` (tid, atrace line).
@@ -2379,8 +2453,10 @@ def ftrace(builder, by_cpu: dict[int, list]) -> None:
                 sw.next_pid = next_pid
                 sw.next_prio = 120
             elif kind == "waking":
-                _, _, _, waker, wakee, wakee_comm, wakee_cpu = item
+                _, _, _, waker, wakee, wakee_comm, wakee_cpu, *flags = item
                 event.pid = waker
+                if flags:
+                    event.common_flags = flags[0]
                 wk = event.sched_waking
                 wk.comm = wakee_comm
                 wk.pid = wakee

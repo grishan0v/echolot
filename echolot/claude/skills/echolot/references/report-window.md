@@ -19,7 +19,35 @@ blocked in the kernel against 1% for one whose pages were already cached.
 `sleeping` is one bucket and stays ambiguous on purpose: an idle looper and a
 blocking call inside a message are both `S`, and telling them apart needs the
 slices rather than the states. A high `sleeping` share is a question, not a
-finding.
+finding. `window.idle` answers it, beside the budget rather than in it.
+
+**`window.idle`** — the main thread idle at its message queue: `ms`, the part
+of `sleeping` with no slice open on the main thread (the anchor that spans
+the window aside), and `stretches`, the longest runs of it, each with
+`at_ms` (from the window's start), `ms` (idle in it) over `span_ms`, `after`
+(the last slice of 8 ms or more that ended before it), `until` (the first
+slice after it, the message the main thread woke for), and `woken_by`:
+`timer` (no thread sent the wakeup: the looper's own timeout came due, a
+delayed message or a `postDelayed`), `app` or `other` (a thread of the app, or
+of another process, in `waker`: `thread`, and `process` for another), `end`
+(still idle when the window closed) or `unknown`. A stretch is idle moments of
+2 ms or more joined across work under 8 ms, kept from 16 ms of idle, ten at
+most. The header splits the budget's `sleeping` into `asleep inside a
+message` and `idle at the message queue` by it, and lists the three longest
+stretches: `Idle at the message queue: **54.0 ms** over 61.0 ms, from 175.0
+ms into the window, after <the frame>, until <the init> — woken by a timer`.
+Merged, `ms` is the median, a stretch is one when the repeats agree on `until`
+and on what woke it, its numbers are medians over the repeats that had it,
+and `runs` says how many; the header shows those more than half had,
+`echolot report --window` all.
+
+Read it against a delay in the code. `postDelayed(r, 100)` is not 100 ms of
+the scenario: what it costs is the idle a stretch measured, and only where a
+timer ended it. A stretch a thread ended was waiting for that thread. And idle
+on the main thread is not time the window loses: whether the window's end
+waited for it is what `compare` on two builds says, with the delay and
+without. A sleep inside code no slice names reads as idle — the slices are the
+only evidence.
 
 `accounted_pct` short of 100 means the main thread was not there for the whole
 window — the process started inside it, or the recording has a hole. The
