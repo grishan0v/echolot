@@ -1,9 +1,11 @@
-"""Draw the plugin's icon for Claude's plugin directory.
+"""Draw the plugin's icon for Claude's plugin directory, and the site's.
 
     uv run --no-project --with pillow python docs/assets/icon.py
 
 writes plugins/echolot/.claude-plugin/icon.png, the path the directory reads
-when plugin.json names no icon. The picture is the logo's sphere of dots:
+when plugin.json names no icon, and the same picture at 128 px a side as
+docs/assets/site-icon.png, the documentation site's favicon and the logo in
+its header (mkdocs.yml). The picture is the logo's sphere of dots:
 points spread evenly over a sphere, tilted so its pole does not face the
 viewer, the half in front drawn as dots that grow and brighten toward the
 viewer. Its colours are the logo's: the slate plate, and the sphere's mint,
@@ -11,7 +13,9 @@ teal and blue from the top of the sphere down.
 
 The directory does not pick a new icon up from a release: it is uploaded
 in the listing by hand. So this script is kept for the next picture rather
-than to redraw this one. Pillow is in neither extra: nothing else here needs it.
+than to redraw this one; the site takes its copy from the tree, and the
+script writes the two together so they stay one picture. Pillow is in
+neither extra: nothing else here needs it.
 """
 from __future__ import annotations
 
@@ -23,8 +27,10 @@ from PIL import Image, ImageDraw
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE.parent.parent / "plugins" / "echolot" / ".claude-plugin" / "icon.png"
+SITE = HERE / "site-icon.png"
 
 SIZE = 1024
+SITE_SIZE = 128  # sharp in a browser tab and a header at twice their pixel density
 SCALE = 4  # drawn four times larger and scaled down, for smooth edges
 RADIUS = 0.36  # of the side
 POINTS = 420  # over the whole sphere; a little over half are in front
@@ -89,5 +95,8 @@ def draw() -> Image.Image:
 
 
 if __name__ == "__main__":
-    draw().save(OUT, optimize=True)
-    print(f"{OUT.relative_to(HERE.parent.parent)}: {OUT.stat().st_size} bytes")
+    icon = draw()
+    icon.save(OUT, optimize=True)
+    icon.resize((SITE_SIZE, SITE_SIZE), Image.LANCZOS).save(SITE, optimize=True)
+    for path in (OUT, SITE):
+        print(f"{path.relative_to(HERE.parent.parent)}: {path.stat().st_size} bytes")

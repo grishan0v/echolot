@@ -73,23 +73,28 @@ code blocks.
   with libimagequant: a quarter of the size, and no difference the eye can
   find.
 - **The card for links, not drawn here either.** `social-preview.png` is what
-  GitHub shows where a link to the repository is shared: the plate version of
+  GitHub shows where a link to the repository is shared, and what the
+  documentation site gives as `og:image` for a link to any of its pages: the plate version of
   the logo in the middle of a 1280 × 640 plate of the same slate, the size
   GitHub asks for. The logo takes the middle 550 × 446, so an app that crops
   the card to a square still shows all of it. GitHub takes the card only in
   Settings → General → Social preview and has no API for it, so a new one is
   uploaded there by hand. `tests/test_readme_pictures.py` holds it to that
   size and to GitHub's limit of 1 MB.
-- **The plugin's icon, drawn here but not by render.py.**
+- **The plugin's icon and the site's, drawn here but not by render.py.**
   `plugins/echolot/.claude-plugin/icon.png` is what Claude's plugin directory
-  shows beside the plugin's name: a circle's outline and the same circle
-  shifted right four times, each copy's left arc ending on the outline, in
-  the slate and the sphere's three colours. [icon.py](icon.py) draws it,
-  1024 × 1024, with Pillow, which neither extra carries:
+  shows beside the plugin's name: the logo's sphere of dots on the slate, the
+  dots growing and brightening toward the viewer, in the sphere's three
+  colours from the top down. [icon.py](icon.py) draws it, 1024 × 1024, with
+  Pillow, which neither extra carries:
   `uv run --no-project --with pillow python docs/assets/icon.py`. The
   directory takes the icon once, at the first submission, so the script is
   kept for the next picture. `tests/test_plugin.py` holds the file to the
-  directory's rules: a square PNG, 512 to 2048 px a side, under 2 MB.
+  directory's rules: a square PNG, 512 to 2048 px a side, under 2 MB. The
+  same run writes `site-icon.png`, the same picture at 128 × 128, which the
+  documentation site shows in its header and on the browser's tab. The
+  slate stays behind the sphere there too: without it, at a tab's 16 px,
+  the mint dots fade into a white page.
 - **Flat SVG, system fonts.** GitHub's own font stacks, no web fonts: an SVG
   served from this repository cannot load them.
 - **Full addresses.** The README names each picture at
