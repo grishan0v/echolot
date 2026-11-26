@@ -335,6 +335,20 @@ nothing. Started by hand (Actions → perfetto-canary → Run workflow), it take
 a version to try instead of the newest — a version known to differ is how to
 see that it still names what fails.
 
+Until a release reaches PyPI, the newest package there is the pin, and that
+leg learns nothing. A second leg asks the same three questions of Perfetto's
+`main`: the pinned package with the `trace_processor` Perfetto's CI built from
+the newest commit it built for Linux, fetched from Perfetto's artifact storage
+(`perfetto-luci-artifacts/<commit>/linux-amd64/`). Its summary names the
+commit. `main` differs from the pin for good, so that leg splits what it
+finds in two. Text held byte for byte to what the pin prints — the README's
+sample, the pages of docs that quote the tool; the tests that hold it are
+marked `pinned_output` — and the fixture's report, value by value, are
+listed under "What the next release changes" and fail nothing: at the bump,
+`python docs/assets/render.py` or an edit of the page puts them right. A
+breakage turns the leg red: `doctor` failing, a report that cannot be
+built, any other test failing. Read the summary before raising the pin.
+
 ### Your own binary
 
 A trace_processor of your own goes in one of two ways:

@@ -36,6 +36,13 @@ protobuf message or a method the standard library calls by name, add the name
 to `vulture_whitelist.py` with the reason. `vulture --min-confidence 60` also
 lists the functions nothing names, which need checking by hand.
 
+A test that holds text committed to the repository — a README sample, a page
+of docs — to what the pinned perfetto prints, byte for byte, is marked
+`@pytest.mark.pinned_output`. Raising the pin moves such text by design, and
+the canary's leg on Perfetto's `main` reports these tests as what the next
+release changes rather than as a breakage
+([docs/determinism.md](docs/determinism.md#notice-before-the-bump)).
+
 A new detector takes more than a new `.sql` file; the checklist is in
 [docs/detectors.md](docs/detectors.md#adding-a-detector). The README's
 pictures are drawn by a script, and [docs/assets/README.md](docs/assets/README.md)

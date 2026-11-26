@@ -139,6 +139,15 @@ testpaths = ["tests"]
 # and a deprecation inside a dependency's own code, is reported the way pytest
 # always reports it, in the summary at the end.
 filterwarnings = ["error::DeprecationWarning:echolot.*"]
+# `pinned_output`: a test that holds text committed to the repository — a
+# README sample, a page of docs — to what the pinned perfetto prints, byte
+# for byte. Raising the pin moves it by design, and `python
+# docs/assets/render.py` or an edit of the page puts it right. The canary's
+# leg on Perfetto's main runs these apart from the rest: what they say there
+# is what the next release changes, not a breakage (perfetto-canary.yml).
+markers = [
+    "pinned_output: holds committed text to what the pinned perfetto prints, byte for byte",
+]
 
 [tool.coverage.run]
 source = ["echolot"]

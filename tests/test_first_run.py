@@ -318,6 +318,7 @@ def test_the_destination_announced_is_the_one_perfetto_writes(tmp_path, monkeypa
     check("and no download", calls(tmp_path / "curl.log") == [])
 
 
+@pytest.mark.pinned_output
 @pytest.mark.skipif(sys.platform == "win32", reason="the sample is a POSIX path")
 def test_the_samples_in_determinism_md_are_what_the_tool_prints(monkeypatch):
     """docs/determinism.md shows the notice and the error for an Intel Mac

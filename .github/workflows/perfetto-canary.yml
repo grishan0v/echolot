@@ -34,6 +34,31 @@ name: perfetto-canary
 # workflow here writes to issues, and a weekly run that did would need
 # `issues: write` and a way not to open the same one every Tuesday until the
 # pin moves. pip-audit.yml reports its scheduled findings the same way.
+#
+# PyPI is late notice, though. Perfetto releases a trace_processor every few
+# weeks, and until the package that carries it is out, the newest version on
+# PyPI is the pin and this asks nothing new. What the next release will
+# change is already on Perfetto's main, and Perfetto's CI publishes a
+# trace_processor built from it: per commit, at
+# perfetto-luci-artifacts/<commit>/<platform>/ in its storage. So the same
+# three questions are asked a second time, in a leg of their own, of the
+# newest build of main — the pinned package with that binary in place of the
+# one its manifest names. #1035 is what it finds: on the build of main of
+# 2026-11-26 every check passed, and the demo's startup breakdown moved.
+#
+# That leg asks them in two kinds. Main differs from the pin for good, so
+# whatever is held to the pin's own output moves there and stays moved until
+# the pin does: the README's sample is the demo's report, byte for byte,
+# and v60's startup breakdown gives 19 ms of it to another reason. Those
+# tests carry `@pytest.mark.pinned_output` (pyproject.toml), and in this leg
+# they run in a step of their own whose failures are listed, with their
+# diffs, under "what the next release changes"; the fixture's report, value
+# by value, is listed there too. Neither turns the leg red. What does is a
+# breakage: doctor failing, a report that cannot be built, and any test
+# without the marker — a traceback, an SQL error, a claim that no longer
+# holds. A red main leg is a release on its way that breaks echolot, and
+# worth the mail. Were every difference red, the leg would be red every
+# Tuesday for a known reason, and nobody reads that one.
 
 on:
   schedule:
@@ -45,7 +70,7 @@ on:
       perfetto:
         # How to check the canary itself: a version known to differ from the
         # pin has to come back red and name what failed.
-        description: "perfetto version to try instead of the newest on PyPI, e.g. 0.58.2"
+        description: "perfetto version for the PyPI leg to try instead of the newest, e.g. 0.58.2"
         required: false
         default: ""
   # A change to this file is checked by running it, the way pip-audit.yml
@@ -65,9 +90,16 @@ concurrency:
 
 jobs:
   canary:
-    name: perfetto-canary
+    name: perfetto-canary (${{ matrix.tried }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # `pypi`: the newest perfetto package, and the trace_processor its
+        # manifest names. `main`: the pin's package, and trace_processor as
+        # Perfetto's main builds it today.
+        tried: [pypi, main]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -89,10 +121,21 @@ jobs:
       # perfetto asks for a newer one, as a pin bump would.
       #
       # The pin keeps a virtualenv of its own, for one thing only: the report
-      # the newest version's report is compared with.
-      - name: Install the pin, and the newest perfetto over it
+      # the tried version's report is compared with.
+      #
+      # The main leg keeps the pinned package and fetches the binary. Which
+      # build: the newest commit on main that Perfetto's CI built for this
+      # runner — not every commit gets one, and `latest/` in the same storage
+      # also takes release-branch builds. The storage says each file's MD5,
+      # and the file is checked against it; there is no SHA-256 to check, as
+      # no manifest names an unreleased build. Then the binary goes where the
+      # pinned one would be, under a home of the leg's own (`tried_home`),
+      # for pytest: the tests start trace_processor as a user's command does,
+      # from the pin's path, and take no `--tp-binary`.
+      - name: Install the pin, and what is tried over it
         id: install
         env:
+          TRIED: ${{ matrix.tried }}
           WANT: ${{ inputs.perfetto }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -108,22 +151,59 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
-          python -m pip install --upgrade "perfetto${WANT:+==$WANT}"
 
           # The version of each, and the trace_processor its manifest names,
           # in the words `doctor` uses for them.
           versions='from echolot.tp import toolchain_info as t; i = t(); print(i["perfetto_package"], i["trace_processor"] or "unknown")'
           line=$("$RUNNER_TEMP/pinned/bin/python" -c "$versions")
           read -r pinned pinned_tp <<< "$line"
-          line=$(python -c "$versions")
-          read -r tried tried_tp <<< "$line"
+
+          tp_binary=""
+          tried_home=""
+          commit=""
+          committed=""
+          if [ "$TRIED" = pypi ]; then
+            python -m pip install --upgrade "perfetto${WANT:+==$WANT}"
+            line=$(python -c "$versions")
+            read -r tried tried_tp <<< "$line"
+          else
+            bucket=perfetto-luci-artifacts
+            file=linux-amd64/trace_processor_shell
+            for sha in $(gh api 'repos/google/perfetto/commits?sha=main&per_page=100' --jq '.[].sha'); do
+              if curl -sfI -o /dev/null "https://storage.googleapis.com/$bucket/$sha/$file"; then
+                commit=$sha
+                break
+              fi
+            done
+            if [ -z "$commit" ]; then
+              echo "::error::none of the last 100 commits on perfetto's main has a $file in $bucket"
+              exit 1
+            fi
+            committed=$(gh api "repos/google/perfetto/commits/$commit" --jq .commit.committer.date)
+            tp_binary="$RUNNER_TEMP/main/trace_processor_shell"
+            mkdir -p "$(dirname "$tp_binary")"
+            curl -sfL -o "$tp_binary" "https://storage.googleapis.com/$bucket/$commit/$file"
+            said=$(curl -sf "https://storage.googleapis.com/storage/v1/b/$bucket/o/${commit}%2F${file//\//%2F}?fields=md5Hash" \
+              | python -c 'import json, sys; print(json.load(sys.stdin)["md5Hash"])')
+            got=$(openssl md5 -binary "$tp_binary" | base64)
+            if [ "$said" != "$got" ]; then
+              echo "::error::$commit/$file: MD5 $got, where the storage says $said"
+              exit 1
+            fi
+            chmod +x "$tp_binary"
+            tried=$pinned
+            tried_tp=$("$tp_binary" --version | head -n 1)
+            tried_home="$RUNNER_TEMP/tried-home"
+            pin_path=$(HOME="$tried_home" python -c 'from echolot.tp import pinned_build; print(pinned_build().path)')
+            install -D -m 755 "$tp_binary" "$pin_path"
+          fi
 
           # Whether perfetto has released a trace_processor no package on
           # PyPI carries yet. The package's number is not its build's:
           # 0.58.2 carries v57.2, and v58.2 came out the same day. So the
           # next package can bring a build newer than the newest one tried
-          # here. Said, not tried — echolot never runs a build outside a
-          # package's manifest, and neither does a pin bump.
+          # here. Said, not tried in the PyPI leg — echolot never runs a
+          # build outside a package's manifest, and neither does a pin bump.
           released=$(gh api repos/google/perfetto/releases/latest --jq .tag_name 2>/dev/null || echo unknown)
 
           {
@@ -132,6 +212,10 @@ jobs:
             echo "tried=$tried"
             echo "tried_tp=$tried_tp"
             echo "released=$released"
+            echo "tp_binary=$tp_binary"
+            echo "tried_home=$tried_home"
+            echo "commit=$commit"
+            echo "committed=$committed"
           } >> "$GITHUB_OUTPUT"
           echo "the pin: perfetto $pinned, trace_processor $pinned_tp"
           echo "tried:   perfetto $tried, trace_processor $tried_tp"
@@ -140,14 +224,17 @@ jobs:
       # From a directory of its own, as the `package` job runs it: doctor
       # reads echolot.yml and the agent layer of the directory it is run in,
       # and the self-check is about neither. stdout alone goes into the
-      # summary; the download's progress bar stays in the log.
+      # summary; the download's progress bar stays in the log. The main leg
+      # names its binary, and doctor's first line then says which build ran.
       - name: doctor
         id: doctor
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          TP_BINARY: ${{ steps.install.outputs.tp_binary }}
         run: |
           set -o pipefail
           cd "$RUNNER_TEMP"
-          echolot doctor -q | tee "$RUNNER_TEMP/doctor.txt"
+          echolot doctor -q ${TP_BINARY:+--tp-binary "$TP_BINARY"} | tee "$RUNNER_TEMP/doctor.txt"
 
       # The report `doctor` checks, built once on each version and compared
       # value by value. A check states what must hold; it does not notice a
@@ -160,22 +247,34 @@ jobs:
       # `generated_at`. Two builds of the same version agree on everything
       # else. Detectors are matched by id, so one more or one fewer moves no
       # other detector's rows.
+      #
+      # In the main leg a value that moved is notice, and the step passes
+      # (`moved` says so to the summary); a report that cannot be built
+      # fails it in both legs.
       - name: The fixture's report, pinned against tried
         id: report
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          TRIED: ${{ matrix.tried }}
+          TP_BINARY: ${{ steps.install.outputs.tp_binary }}
         run: |
           set -euo pipefail
           build='import json, sys
           from echolot.selftest import build_report
-          json.dump(build_report(), open(sys.argv[1], "w", encoding="utf-8"),
+          json.dump(build_report(sys.argv[2] or None),
+                    open(sys.argv[1], "w", encoding="utf-8"),
                     indent=1, sort_keys=True, default=str)'
           # A version that cannot build the report at all says so in the
           # summary by its last line, the exception; the traceback is above it
           # in the log.
           for side in pinned tried; do
             py=python
-            [ "$side" = pinned ] && py="$RUNNER_TEMP/pinned/bin/python"
-            if ! "$py" -c "$build" "$RUNNER_TEMP/report-$side.json" 2> "$RUNNER_TEMP/report-$side.err"; then
+            binary=$TP_BINARY
+            if [ "$side" = pinned ]; then
+              py="$RUNNER_TEMP/pinned/bin/python"
+              binary=""
+            fi
+            if ! "$py" -c "$build" "$RUNNER_TEMP/report-$side.json" "$binary" 2> "$RUNNER_TEMP/report-$side.err"; then
               cat "$RUNNER_TEMP/report-$side.err"
               echo "no report from the $side version: $(tail -n 1 "$RUNNER_TEMP/report-$side.err")" \
                 | tee "$RUNNER_TEMP/report.txt"
@@ -227,27 +326,71 @@ jobs:
               print(f"- {k}: {pinned[k]!r}")
           for k in new:
               print(f"+ {k}: {tried[k]!r}")
-          sys.exit(1)
+          # Not 1, which is also what an exception exits with.
+          sys.exit(3)
           PY
           cat "$RUNNER_TEMP/report.txt"
+          if [ "$status" = 3 ]; then
+            echo "moved=yes" >> "$GITHUB_OUTPUT"
+            [ "$TRIED" = main ] && exit 0
+            exit 1
+          fi
           exit "$status"
 
       # As `checks` runs it, less the coverage gate, which measures the tests
       # rather than perfetto. A test that fails here is one the bump's pull
       # request will fail. `-rfE` lists each failure and error on a line of
       # its own at the end, and the summary below takes those lines.
+      #
+      # The main leg runs it in the home where the main build sits at the
+      # pin's path, less the tests held to the pin's output (the next step
+      # has them) and less one test more: it hands the file at the pin's
+      # path to a fake curl and expects the pin's SHA-256 of what arrives,
+      # which a build of main never has.
       - name: pytest
         id: pytest
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          TRIED_HOME: ${{ steps.install.outputs.tried_home }}
         run: |
           set -o pipefail
-          pytest -q -n auto -rfE | tee "$RUNNER_TEMP/pytest.txt"
+          only=()
+          if [ -n "$TRIED_HOME" ]; then
+            export HOME="$TRIED_HOME"
+            only=(-m "not pinned_output"
+                  --deselect "tests/test_first_run.py::test_a_first_names_json_is_json_and_the_notice_is_on_stderr")
+          fi
+          pytest -q -n auto -rfE "${only[@]}" | tee "$RUNNER_TEMP/pytest.txt"
+
+      # The main leg only: the tests held to the pin's own output, which a
+      # build of main moves by design (see the top of the file). They fail
+      # nothing here; what they say goes into the summary as what the next
+      # release changes, the diff each test prints included. A test with no
+      # marker that reads the same thing — the demo's report — is in the step
+      # above, so a demo that no longer builds is a breakage there.
+      - name: What the next release changes in the pin's output
+        id: pinned
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.tried == 'main' }}
+        continue-on-error: true
+        env:
+          TRIED_HOME: ${{ steps.install.outputs.tried_home }}
+        run: |
+          export HOME="$TRIED_HOME"
+          status=0
+          pytest -q -rfE -m pinned_output > "$RUNNER_TEMP/pinned.txt" || status=$?
+          cat "$RUNNER_TEMP/pinned.txt"
+          # 5 is pytest's "no tests collected": nothing marked, nothing moved.
+          [ "$status" = 5 ] && status=0
+          exit "$status"
 
       # One page for the run, whichever steps failed. The job is already red
       # if any did: this only says why, without opening three logs.
       - name: Summary
         if: always()
         env:
+          LEG: ${{ matrix.tried }}
+          COMMIT: ${{ steps.install.outputs.commit }}
+          COMMITTED: ${{ steps.install.outputs.committed }}
           PINNED: ${{ steps.install.outputs.pinned }}
           PINNED_TP: ${{ steps.install.outputs.pinned_tp }}
           TRIED: ${{ steps.install.outputs.tried }}
@@ -256,7 +399,9 @@ jobs:
           INSTALL: ${{ steps.install.outcome }}
           DOCTOR: ${{ steps.doctor.outcome }}
           REPORT: ${{ steps.report.outcome }}
+          REPORT_MOVED: ${{ steps.report.outputs.moved }}
           PYTEST: ${{ steps.pytest.outcome }}
+          PINNED_TESTS: ${{ steps.pinned.outcome }}
         run: |
           verdict() {
             case "$1" in
@@ -276,7 +421,11 @@ jobs:
             echo '````'
           }
           {
-            echo "### perfetto canary"
+            if [ "$LEG" = main ]; then
+              echo "### perfetto canary — trace_processor from Perfetto's main"
+            else
+              echo "### perfetto canary — the newest perfetto on PyPI"
+            fi
             echo
             if [ "$INSTALL" != success ]; then
               echo "The install did not go through, so nothing was tried: see the log of its step."
@@ -285,11 +434,18 @@ jobs:
             echo "| | perfetto | trace_processor |"
             echo "|---|---|---|"
             echo "| the pin, in pyproject.toml | $PINNED | $PINNED_TP |"
-            echo "| tried | $TRIED | $TRIED_TP |"
+            if [ "$LEG" = main ]; then
+              echo "| tried | $TRIED, the pin's | $TRIED_TP |"
+            else
+              echo "| tried | $TRIED | $TRIED_TP |"
+            fi
             echo
             echo "The newest trace_processor perfetto has released: $RELEASED."
             echo
-            if [ "$PINNED" = "$TRIED" ]; then
+            if [ "$LEG" = main ]; then
+              echo "> Built by Perfetto's CI from main at [\`${COMMIT:0:9}\`](https://github.com/google/perfetto/commit/$COMMIT), committed $COMMITTED: what the next release carries so far. Only trace_processor is tried; the Python package is the pin's. This leg is red for a breakage only; what main moves in the pin's own output is listed at the end and fails nothing."
+              echo
+            elif [ "$PINNED" = "$TRIED" ]; then
               echo "> The pin is the version tried: nothing new to learn about perfetto, and the run shows the canary itself still works."
               echo
             fi
@@ -297,16 +453,50 @@ jobs:
             echo
             [ -s "$RUNNER_TEMP/doctor.txt" ] && block "$RUNNER_TEMP/doctor.txt" 40
             echo
-            echo "**The fixture's report, against the pin's** — $(verdict "$REPORT")"
+            if [ "$LEG" = main ] && [ "$REPORT_MOVED" = yes ]; then
+              echo "**The fixture's report, against the pin's** — built on both; what moved is at the end"
+            else
+              echo "**The fixture's report, against the pin's** — $(verdict "$REPORT")"
+              echo
+              [ -s "$RUNNER_TEMP/report.txt" ] && block "$RUNNER_TEMP/report.txt" 60
+            fi
             echo
-            [ -s "$RUNNER_TEMP/report.txt" ] && block "$RUNNER_TEMP/report.txt" 60
-            echo
-            echo "**pytest** — $(verdict "$PYTEST")"
+            if [ "$LEG" = main ]; then
+              echo "**pytest, less the tests held to the pin's output** — $(verdict "$PYTEST")"
+            else
+              echo "**pytest** — $(verdict "$PYTEST")"
+            fi
             echo
             if [ -s "$RUNNER_TEMP/pytest.txt" ]; then
               grep -E '^(FAILED|ERROR) ' "$RUNNER_TEMP/pytest.txt" > "$RUNNER_TEMP/pytest-failed.txt" || true
               tail -n 1 "$RUNNER_TEMP/pytest.txt" > "$RUNNER_TEMP/pytest-tally.txt"
               cat "$RUNNER_TEMP/pytest-tally.txt" "$RUNNER_TEMP/pytest-failed.txt" > "$RUNNER_TEMP/pytest-summary.txt"
               block "$RUNNER_TEMP/pytest-summary.txt" 60
+            fi
+            if [ "$LEG" = main ]; then
+              echo
+              echo "#### What the next release changes"
+              echo
+              echo "Not failures: the pin's own output, as main moves it. At the bump, \`python docs/assets/render.py\` or an edit of the page puts each right."
+              echo
+              if [ "$REPORT_MOVED" = yes ]; then
+                echo "The fixture's report, against the pin's:"
+                echo
+                block "$RUNNER_TEMP/report.txt" 60
+              else
+                echo "The fixture's report: no value moved."
+              fi
+              echo
+              case "$PINNED_TESTS" in
+                success)
+                  echo "The tests held to the pin's output (\`pinned_output\`): all pass, nothing moved." ;;
+                failure)
+                  echo "The tests held to the pin's output (\`pinned_output\`) that differ, with what each says:"
+                  echo
+                  grep -E '^(FAILED|ERROR) |^E ' "$RUNNER_TEMP/pinned.txt" > "$RUNNER_TEMP/pinned-summary.txt" || true
+                  block "$RUNNER_TEMP/pinned-summary.txt" 100 ;;
+                *)
+                  echo "The tests held to the pin's output did not run ($PINNED_TESTS)." ;;
+              esac
             fi
           } >> "$GITHUB_STEP_SUMMARY"
