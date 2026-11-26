@@ -60,7 +60,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigError
+from .config import ConfigError, NoWindow
 from .tp import sql_value
 
 # `window.defined_by`: what closed a launch window. A window cut by the
@@ -127,7 +127,8 @@ def grant_said(package: str, ungranted: list[str] | None = None) -> str:
             f"`granted=false` under `runtime permissions`")
 
 
-def _no_launch(process: str, trace: str | None, launches: list[dict]) -> str:
+def _no_launch(process: str, trace: str | None, launches: list[dict],
+               stranger: dict[str, Any] | None = None) -> str:
     """Why the trace holds no launch of `process`, from what it holds instead
     and from what `collect` kept beside it, and what to do.
 
@@ -136,9 +137,15 @@ def _no_launch(process: str, trace: str | None, launches: list[dict]) -> str:
     sentence used to send a person recorded with `runner.mode: launch` to
     set `runner.mode: launch` (#810). That advice is kept for a trace whose
     recording is not known to have started the app.
+
+    `stranger` is `_stranger`'s: the process the mask took is not the app's
+    own. Then the sentence is about the app, and says which process was
+    found in its place (#466).
     """
     from . import recording
 
+    if stranger:
+        return _not_the_app(process, trace, launches, stranger)
     package = process.split(":", 1)[0]
     where = f" {Path(trace).name}" if trace else ""
     head = f"no launch of {process} in trace{where}"
@@ -171,7 +178,48 @@ def _no_launch(process: str, trace: str | None, launches: list[dict]) -> str:
             f"`end` instead.")
 
 
-class NoLaunch(ConfigError):
+def _stranger(tp, process: str, app: str | None) -> dict[str, Any] | None:
+    """`{"app", "own"}` when the process the mask took is not the app's own:
+    `app` is the config's `project.package`, and `own` the app's process
+    that is in the trace all the same, or None when none is under its name.
+    None when the process is the app's, or the config names no package."""
+    if not app or process.split(":", 1)[0] == app:
+        return None
+    own = tp.query(f"SELECT name FROM process WHERE name = '{sql_value(app)}' "
+                   f"OR name GLOB '{sql_value(app)}:*' ORDER BY name LIMIT 1")
+    return {"app": app, "own": own[0]["name"] if own else None}
+
+
+def _not_the_app(process: str, trace: str | None, launches: list[dict],
+                 stranger: dict[str, Any]) -> str:
+    """What is said of a trace whose process, by the mask, is another app's.
+
+    A startup macrobenchmark's trace has carried the app's process under a
+    name cut to its last fifteen characters, as the kernel names a thread,
+    one trace in fifteen of a round. `com.example.app*` then matched only the
+    benchmark's own process, which launches nothing, and the sentence named
+    that one: `no launch of com.example.app.benchmark` sent the reader to a
+    process nobody asked about (#466).
+    """
+    app, own = stranger["app"], stranger["own"]
+    where = f" {Path(trace).name}" if trace else ""
+    head = f"no launch of {app} in trace{where}: `project.process` took {process} in it"
+    if own:
+        return (f"{head}, which is not the app's own process; the app's, {own}, is in the "
+                f"trace too. Narrow `project.process` to `{own}`.")
+    said = (f"{head}, which is not the app's own process, and {app}'s process is not in "
+            f"this trace under its name.")
+    if any(s.get("package") == app for s in launches):
+        return (f"{said} The platform recorded {app}'s launch, so the app was started "
+                f"and its process is in the trace under another name: a name cut to "
+                f"its last fifteen characters, as the kernel names a thread, is how a "
+                f"macrobenchmark's trace has carried it. `project.process = "
+                f"'*{app[-15:]}'` matches that name too.")
+    return (f"{said} Look at the names it holds: `echolot probe` on the trace lists "
+            f"them.")
+
+
+class NoLaunch(NoWindow):
     """A trace with no launch of the process, under `window: launch`: the
     window cannot be taken, and the message says why and what to do."""
 
@@ -202,13 +250,16 @@ def _unfinished(tp, process: str, trace: str | None, began: int) -> str:
             f"recording outlasts the launch.")
 
 
-def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
+def find(tp, upid: int, trace: str | None = None,
+         app: str | None = None) -> dict[str, Any]:
     """The launch window of the process `upid`: its bounds and what closed it.
 
     Runs after `context.sql`, whose `_proc` and `_slice` it reads. Raises
     ConfigError for a trace that holds no launch of the process: there is no
     window to fall back to, and the whole trace under a scenario called a
-    launch would be a report about something else.
+    launch would be a report about something else. `app` is the config's
+    `project.package`: when the process is not the app's, that is what the
+    sentence says.
 
     The launch is the process's own: the one the standard library ties to
     its main thread, and the first of them when the process was brought to
@@ -250,7 +301,8 @@ def find(tp, upid: int, trace: str | None = None) -> dict[str, Any]:
         """)
         if still:
             raise Unfinished(_unfinished(tp, process, trace, still[0]["ts"]))
-        raise NoLaunch(_no_launch(process, trace, launches))
+        raise NoLaunch(_no_launch(process, trace, launches,
+                                  _stranger(tp, process, app)))
     chosen = mine[0]
     start, launch_end = chosen["ts"], chosen["ts_end"]
     # The launches the app went on to by itself are the same start (#1008).

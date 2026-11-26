@@ -23,6 +23,14 @@ class ConfigError(Exception):
     pass
 
 
+class NoWindow(ConfigError):
+    """A trace the window cannot be taken from at all: no process the mask
+    matches, a process with no thread slices, or, under `window: launch`, no
+    launch of it. Alone, it is refused, as any trace the config does not fit.
+    In a set, `analyze` leaves it out and names it, as long as the traces
+    that do give a window are more than half of the set (#466)."""
+
+
 # No anchor configured. The string is substituted where an anchor is matched,
 # as a name and as a GLOB (#1012), and must match no real slice name either
 # way; context.sql then collapses onto the whole trace.

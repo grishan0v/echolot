@@ -264,7 +264,12 @@ Look not at the findings but at `window`:
   says the launch was. `analyze` stopping at `no launch of <process>` means
   the app was not started inside the recording: use `runner.mode: launch`.
   When it says a permission dialog took the launch, run the `pm grant` it
-  names (or tap Allow on the phone) and record again
+  names (or tap Allow on the phone) and record again. A set goes on without
+  such a trace while the rest are more than half of it, and names it under
+  the Traces line (`Left out: … no window to read`): read that sentence, it
+  is the same one. When it says `project.process` took another process than
+  the app's, the app's came under another name in that trace, and the
+  config is right for the rest
 - the window is nearly as long as the recording — the anchors did not work
 - **every detector screaming at once** — almost certainly the process or the
   boundaries are off

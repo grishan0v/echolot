@@ -470,9 +470,13 @@ another module is read too. When no declaration is found, the draft keeps
 
 The class filter in `gradle_args` runs every test of the class. A test that
 starts no launch inside its recording writes a trace with no launch in it,
-and `analyze` refuses such a trace under this window, naming it. One refused
-trace stops `analyze` for the whole set: move the trace it names out of
-`.echolot/traces` and run it again.
+and `analyze` refuses such a trace under this window, naming it. In a set it
+leaves that trace out and names it, on stderr and under the report's Traces
+line, while the traces with a launch are more than half of the set; so does a
+trace that carried the app's process under a name cut to fifteen characters,
+which a round of fifteen has held once, and the sentence then names the
+process the mask took in its place. See
+[A trace that gives no window](analysing.md#a-trace-that-gives-no-window).
 
 The macrobenchmark chose what to record, so this mode builds no trace config
 of its own. `environment`, `atrace_categories`, `buffer_kb`, `duration_ms`,

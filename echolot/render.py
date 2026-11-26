@@ -216,6 +216,48 @@ def unfinished_said(left: list[dict[str, Any]], read: int) -> str:
             f"outlasts the launch.")
 
 
+def no_window_said(left: list[dict[str, Any]], read: int) -> str:
+    """The sentence for the traces `analyze` left out because they gave no
+    window at all (#466): no process the mask matches, or no launch of it
+    under `window: launch`. Each with its reason, the traces of one reason
+    together, which in a set is all of them as a rule."""
+    groups: dict[str, list[str]] = {}
+    for e in left:
+        name = Path(e["trace"]).name
+        reason = str(e["said"]).replace(f" in trace {name}", "")
+        groups.setdefault(reason if reason.endswith(".") else f"{reason}.", []).append(f"`{name}`")
+    named = ", ".join(n for names in groups.values() for n in names)
+    if len(groups) == 1:
+        (reason, _), = groups.items()
+        said = f"{'It gives' if len(left) == 1 else 'They give'} no window to read: {reason}"
+    else:
+        said = "They give no window to read. " + " ".join(
+            f"{', '.join(names)}: {reason}" for reason, names in groups.items())
+    return f"Left out: {named}. {said} The numbers are over the other {read}."
+
+
+def left_out_lines(report: dict[str, Any]) -> list[str]:
+    """What a merged report says of the recordings it is not over, each kind
+    in its own words: one recording named twice, starts that were not cold,
+    launches that ended elsewhere or had not ended, traces with no window.
+    The report's header and the overview say them under the runs, and the
+    page beside the window's length: each is a set smaller than recorded."""
+    traces = report.get("traces")
+    read = len(traces or [None])
+    out = []
+    if report.get("same_recording"):
+        out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
+    if report.get("not_cold"):
+        out.append(f"> ⚠️ {not_cold_said(report['not_cold'], read)}")
+    if report.get("ended_elsewhere"):
+        out.append(f"> ⚠️ {elsewhere_said(report['ended_elsewhere'], read)}")
+    if report.get("unfinished"):
+        out.append(f"> ⚠️ {unfinished_said(report['unfinished'], read)}")
+    if report.get("no_window"):
+        out.append(f"> ⚠️ {no_window_said(report['no_window'], read)}")
+    return out
+
+
 def not_cold_said(left: list[dict[str, Any]], read: int) -> str:
     """The sentence for the traces `analyze` left out as not cold (#523)."""
     k = len(left)
@@ -996,14 +1038,7 @@ def to_markdown(report: dict[str, Any]) -> str:
         out.append(_traces_line(traces))
     else:
         out.append(f"Trace: `{report['trace']}`")
-    if report.get("same_recording"):
-        out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
-    if report.get("not_cold"):
-        out.append(f"> ⚠️ {not_cold_said(report['not_cold'], len(traces or [None]))}")
-    if report.get("ended_elsewhere"):
-        out.append(f"> ⚠️ {elsewhere_said(report['ended_elsewhere'], len(traces or [None]))}")
-    if report.get("unfinished"):
-        out.append(f"> ⚠️ {unfinished_said(report['unfinished'], len(traces or [None]))}")
+    out.extend(left_out_lines(report))
     if report.get("scenario"):
         out.append(f"Scenario: `{report['scenario']}`")
     if w.get("process"):
@@ -1445,14 +1480,7 @@ def _header_lines(report: dict[str, Any]) -> list[str]:
                        (report.get("summary") or {}).get("detectors_run"))
     if other:
         out.append(f"⚠️ {other}")
-    if report.get("same_recording"):
-        out.append(f"> ⚠️ {same_recording_said(report['same_recording'])}")
-    if report.get("not_cold"):
-        out.append(f"> ⚠️ {not_cold_said(report['not_cold'], len(traces or [None]))}")
-    if report.get("ended_elsewhere"):
-        out.append(f"> ⚠️ {elsewhere_said(report['ended_elsewhere'], len(traces or [None]))}")
-    if report.get("unfinished"):
-        out.append(f"> ⚠️ {unfinished_said(report['unfinished'], len(traces or [None]))}")
+    out.extend(left_out_lines(report))
     out.extend(_diverged_lines(w))
     anchors = []
     for key, label in (("start_anchor", "start"), ("end_anchor", "end")):
