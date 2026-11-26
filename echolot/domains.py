@@ -463,6 +463,11 @@ def scan(root: Path) -> tuple[list[Site], dict[str, ModuleStat]]:
         bare_ok = bool(_BARE_IMPORT.search(text))
         kotlin = _kotlin(path)
         for index, line in enumerate(lines):
+            # Every pattern below is a call, and a line with no parenthesis
+            # holds none: most lines, read past here without five regexes
+            # each (#559).
+            if "(" not in line:
+                continue
             literals = [m.group(1) for m in _QUALIFIED.finditer(line)]
             if bare_ok:
                 literals += [m.group(1) for m in _BARE.finditer(line)
