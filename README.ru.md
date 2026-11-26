@@ -147,7 +147,8 @@ Scenario: `coldStart`
 Process: `com.example.app` (pid 12903 in `coldStart_iter000`, the first of 5)
 Scenario window: **1136.05 ms** (from 1084.25 to 1214.18 across repeats)
 Timeline: [the scenario window, 1084.2 ms, in `coldStart_iter000`](https://ui.perfetto.dev/#!/?visStart=10100000000&visEnd=11184250000&startupCommands=%5B%7B%22id%22%3A%22dev.perfetto.PinTracksByRegex%22%2C%22args%22%3A%5B%22%5Ecom%5C%5C.example%5C%5C.app%2012903%24%22%5D%7D%5D). Each link opens Perfetto UI on the moment: open the trace it names there (Open trace file, or drop it on the page) and the view goes to it. On the report's page in `echolot ui` one click opens it with its trace.
-Main thread: 40% on a CPU · 1% waiting for a CPU · 9% blocked in the kernel · 49% sleeping
+Main thread: 40% on a CPU · 1% waiting for a CPU · 9% blocked in the kernel · 5% asleep inside a message · 43% idle at the message queue
+Idle at the message queue: **450.0 ms**, from 541.5 ms into the window, after `Choreographer#doFrame #`, until `Choreographer#doFrame #` — the trace does not say what woke it (5/5 runs)
 Covered by the findings below: **42%** of the main thread's window, each moment counted once
 Startup: cold, **1174 ms** from the launch to the first frame: 42% sleeping · 17% `choreographer_do_frame` · 17% `inflate` · 6% blocked in the kernel · 5% `monitor_contention` · 3% `launch_delay` · 2% `bind_application` · 2% `activity_start`
 That is the platform's measure rather than the window: the startup began 38 ms before the window opened, and ended with it.

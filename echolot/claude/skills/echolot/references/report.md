@@ -130,7 +130,7 @@ text from the command:
 |---|---|
 | `echolot explain <id>` | one detector: what it reads, its thresholds here, its columns, what to watch for in its rows |
 | `echolot guide report-schema` | `report.json` key by key: the repeats and those left out, `verdict` and `plain`, `identity`, `config`, `scenario`, `params_source`; which topic has every other key |
-| `echolot guide report-window` | `window.main_thread`, `in_rows_pct`, `crowding`, `frames`, `drawn`, `startup` |
+| `echolot guide report-window` | `window.main_thread`, `in_rows_pct`, `window.idle`, `crowding`, `frames`, `drawn`, `startup` |
 | `echolot guide report-environment` | the device: clock, temperature, memory, compile state, callstack sampling, composable names |
 | `echolot guide report-markers` | the markers table: `unfinished`, `absent`, `parents`, `mixed`, `unbuilt`, `removed` |
 | `echolot guide report-checks` | every check above and the rest, each with what to do: `defined_by`, `recording`, `toolchain`, a merged report's misses |

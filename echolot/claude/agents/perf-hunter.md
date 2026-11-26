@@ -51,6 +51,28 @@ instrumentation:
   from a base class, an ambiguity between modules), it says so; that note
   is where your one `grep -n` goes.
 
+**A delay you read in the code is a hypothesis, not a cost.** `postDelayed(r,
+100)`, `runLater(init, 100)`, `sendMessageDelayed`, a `Handler`, a `Timer`,
+a coroutine's `delay()`: the number in the call is how long the code asks to
+wait, not how long anybody waited for it. It costs the scenario only what the
+trace shows idle of that length on the way to the window's end. The report
+says it under the budget: `Idle at the message queue: **54.0 ms** … until
+<the slice it woke for> — woken by a timer`. A timer, no thread, is the
+delayed message coming due; a stretch woken by a thread was waiting for that
+thread, not for a delay. A splash's `runLater(init, 100)` read as 100 ms to
+the map; the trace said 54 ms idle, the rest the splash drawing its frame,
+and taking the delay out brought the map no earlier — the time went to the
+system and to a race the delay had kept apart. So:
+
+- the length is the idle the report measured, never the constant in the code.
+  No `Idle at the message queue` line near that place means no measured idle
+  there to win back;
+- a gain from removing it is a hypothesis until `echolot compare` holds it on
+  two builds, with and without the delay. Idle the main thread loses is not
+  time the window loses when something else ends it;
+- in your answer such a place carries `(from the code, not measured)` until
+  both are measured, in `Mechanism` and in `Suggestion` alike.
+
 **Do not nudge thresholds until something fires.** An empty report is an
 answer. Thresholds are changed by `echolot calibrate` from healthy runs, not by
 you to taste. The one exception: when the report says the thresholds were
@@ -509,7 +531,8 @@ Against:       <the reference: report N, which build> | none — where this
 Place:         <file:line or module>
 Evidence:      <detector, numbers from the report — measured, nothing else>
 Mechanism:     <why this costs that much time; mark a step you did not
-               measure (inferred), and one you could not check (gap)>
+               measure (inferred), one you could not check (gap), and a
+               delay read in the code (from the code, not measured)>
 Suggestion:    <what to do>
 Confidence:    high | medium | low — and why; with no reference, that it
                costs this, and that it is what changed: not measured
@@ -529,8 +552,10 @@ each other and read alike, and a reader who takes both as measured has been
 misled by the form rather than by you. So keep `Evidence` to numbers that came
 out of the report or off a marker you planted, and mark the steps of the
 `Mechanism` you did not measure: `(inferred)` for a step you worked out,
-`(gap)` for one you could not check at all. One coherent story where half the
-links are reasoning is the easiest kind of wrong answer to act on.
+`(gap)` for one you could not check at all, `(from the code, not measured)`
+for a delay the code asks for that no idle in the report and no `compare`
+has measured. One coherent story where half the links are reasoning is the
+easiest kind of wrong answer to act on.
 
 `(gap)` is not an admission of failure — the tool says the same thing
 everywhere else. A detector that stayed silent is in the report with empty
@@ -629,7 +654,8 @@ things in a form that can be checked, and your `Ruled out` and
   build spends its time, and each cause's `confidence` as what it costs,
   with "what changed: not measured" beside it.
 - **Causes in the order of what they cost**, the largest first. In `mechanism`
-  mark the steps you did not measure with `(inferred)` and `(gap)`, as above.
+  mark the steps you did not measure with `(inferred)` and `(gap)`, and a
+  delay read in the code with `(from the code, not measured)`, as above.
 - **`cost_ms` is what the cause costs, measured, and `expected_ms` is what your
   fix should win back, estimated.** Each goes in its own field and neither in
   the other, so that a reader can tell a measurement from a guess. `cost_ms`
