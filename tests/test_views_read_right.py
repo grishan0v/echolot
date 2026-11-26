@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from echolot import fixture, recorder  # noqa: E402
 from echolot import main as main_mod  # noqa: E402
 from echolot import render as render_mod  # noqa: E402
+from echolot.analyze import DETECTOR_DIR  # noqa: E402
 from echolot.main import main  # noqa: E402
 from tests.support import check  # noqa: E402
 
@@ -93,7 +94,7 @@ def test_the_startup_names_each_plain_reason_once() -> None:
 # --- 3. runnable_starvation ----------------------------------------------------
 
 def test_runnable_starvation_does_not_repeat_its_state_column() -> None:
-    sql = (main_mod.DETECTOR_DIR / "runnable_starvation.sql").read_text(encoding="utf-8")
+    sql = (DETECTOR_DIR / "runnable_starvation.sql").read_text(encoding="utf-8")
     check("no `'state ' ||` in detail", "'state ' || s.state" not in sql, sql[-600:])
 
 

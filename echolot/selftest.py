@@ -7077,8 +7077,8 @@ def _(report):
     """
     import copy
 
+    from . import analyze as analyze_mod
     from . import hunt as hunt_mod
-    from . import main as main_mod
 
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp)
@@ -7087,8 +7087,9 @@ def _(report):
         before = hunt_mod.load(project)
         trace, config = str(project / "a.perfetto-trace"), str(project / "echolot.yml")
         Path(trace).write_bytes(b"a trace")
-        real = main_mod.analyze_trace
-        main_mod.analyze_trace = lambda *a, **kw: copy.deepcopy(report)
+        # Patched where it lives: `analyze` imports it from there when it runs.
+        real = analyze_mod.analyze_trace
+        analyze_mod.analyze_trace = lambda *a, **kw: copy.deepcopy(report)
         try:
             code, said = _quietly(["analyze", trace, "-c", config])
             assert code == 0, said[-400:]
@@ -7104,7 +7105,7 @@ def _(report):
 
             code, said = _quietly(["analyze", trace, "-c", config, "--hunt", "1"])
         finally:
-            main_mod.analyze_trace = real
+            analyze_mod.analyze_trace = real
         after = hunt_mod.load(project)
         assert code == 0 and (project / ".echolot/hunts/1/reports/001.json").is_file(), said[-400:]
         assert after["analyzes"] == 1 and after["touched_at"] != _STALE, after
@@ -7128,6 +7129,7 @@ def _(report):
     import io
     import json
 
+    from . import analyze as analyze_mod
     from . import main as main_mod
     from . import report as report_mod
 
@@ -7146,8 +7148,8 @@ def _(report):
             encoding="utf-8")
         trace = project / "a.perfetto-trace"
         trace.write_bytes(b"a trace")
-        real, here = main_mod.analyze_trace, Path.cwd()
-        main_mod.analyze_trace = lambda *a, **kw: copy.deepcopy(report)
+        real, here = analyze_mod.analyze_trace, Path.cwd()
+        analyze_mod.analyze_trace = lambda *a, **kw: copy.deepcopy(report)
         try:
             # From the config's directory, the way the layer runs it: there
             # `echolot report` with no path reads what `analyze` just wrote.
@@ -7158,7 +7160,7 @@ def _(report):
             written = json.loads((project / ".echolot/out/report.json").read_text(encoding="utf-8"))
         finally:
             os.chdir(here)
-            main_mod.analyze_trace = real
+            analyze_mod.analyze_trace = real
 
     assert "# Marker Report" not in piped, f"a pipe got the whole report: {piped[:300]}"
     assert piped.startswith(shown), (
@@ -9334,6 +9336,74 @@ def _(report):
     assert "==SUPPRESS==" not in help_text, "a subparser was given help=SUPPRESS"
     for title in ("Yours:", "The pipeline:", "The agent's:"):
         assert title in help_text, f"the {title} group is missing from --help"
+
+
+# What every command imports before argparse has read which command it is
+# (#561): the parser, which reads the layer's clients, the guide's topics and
+# flags.py, and `main`, which finds the project and opens its run log. The
+# layer brings codex, hosts, plugin and sandbox, and sandbox the config.
+BEFORE_ANY_COMMAND = frozenset({
+    "echolot", "echolot.main", "echolot.codex", "echolot.config", "echolot.files",
+    "echolot.flags", "echolot.hosts", "echolot.layer", "echolot.plugin",
+    "echolot.project", "echolot.recorder", "echolot.sandbox", "echolot.table",
+    "echolot.when",
+})
+
+# Parsed, not run: each would import its own modules once it ran.
+PARSED_ONLY = (["status"], ["analyze", "a.perfetto-trace", "--noise"],
+               ["compare", "a.json", "b.json"], ["reflect", "--last"])
+
+
+def imported_before_any_command(argv: list[str]) -> set[str]:
+    """The modules of echolot and of rich a fresh interpreter has loaded
+    once `echolot <argv>` is parsed and before the command would run.
+
+    A fresh one, since this one has imported every command by now. From a
+    folder of its own, so that an `echolot/` in the working directory is not
+    the one imported, with the package this self-check is part of first.
+    """
+    import json
+    import subprocess
+    import sys
+
+    probe = ("import json, sys\n"
+             "from echolot.main import build_parser\n"
+             f"build_parser().parse_args({json.dumps(argv)})\n"
+             "print(json.dumps(sorted(n for n in sys.modules\n"
+             "                        if n.split('.')[0] in ('echolot', 'rich'))))\n")
+    root = str(Path(__file__).resolve().parent.parent)
+    path = os.pathsep.join(p for p in (root, os.environ.get("PYTHONPATH")) if p)
+    with tempfile.TemporaryDirectory() as tmp:
+        run = subprocess.run([sys.executable, "-c", probe], cwd=tmp, capture_output=True,
+                             text=True, env={**os.environ, "PYTHONPATH": path}, timeout=120)
+    assert run.returncode == 0, f"parsing `echolot {' '.join(argv)}` failed: {run.stderr[-600:]}"
+    return set(json.loads(run.stdout))
+
+
+@check("CLI: a command is parsed before anything only some commands need is imported")
+def _(report):
+    """`echolot --version` used to start as slowly as `echolot analyze` (#561).
+
+    `main` imported every module a command stands on, and the parser made a
+    Rich formatter for every argument it added: some 270 modules, the
+    trace_processor client and the HTML pages among them, before argparse
+    knew the command. Every call an agent makes paid for them, `echolot` and
+    `echolot guide` included. Now a command imports its own modules when it
+    runs (`_OnFirstUse` in main.py), the numbers the parser prints come from
+    flags.py, and rich is imported when something is printed.
+
+    The set is exact on purpose: a module that joins it is paid for by every
+    command, and that is a decision to make here, in sight.
+    """
+    for argv in PARSED_ONLY:
+        loaded = imported_before_any_command(argv)
+        rich = sorted(n for n in loaded if n.split(".")[0] == "rich")
+        assert not rich, f"`echolot {' '.join(argv)}` imported rich before printing anything: {rich}"
+        more = sorted(loaded - BEFORE_ANY_COMMAND)
+        assert not more, (
+            f"`echolot {' '.join(argv)}` imported {more} before the command ran. Import "
+            f"it in the command that needs it, or add it to BEFORE_ANY_COMMAND if every "
+            f"command does")
 
 
 @check("CLI: status reports and does not mutate")

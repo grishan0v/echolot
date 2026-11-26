@@ -17,7 +17,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import main as main_mod  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot import recording, runner  # noqa: E402
 from echolot.config import Config  # noqa: E402
@@ -91,11 +90,11 @@ class _Window:
         @contextlib.contextmanager
         def session(trace, binary=None, **kw):
             yield object()
-        monkeypatch.setattr(main_mod, "TraceSession", session)
-        monkeypatch.setattr(main_mod, "_resolve_process",
+        monkeypatch.setattr("echolot.tp.TraceSession", session)
+        monkeypatch.setattr("echolot.analyze._resolve_process",
                             lambda tp, glob, trace=None, **kw: [{"upid": 1}])
-        monkeypatch.setattr(main_mod, "_setup_context", lambda *a, **kw: {})
-        monkeypatch.setattr(main_mod, "_window_info", lambda *a, **kw: window)
+        monkeypatch.setattr("echolot.analyze._setup_context", lambda *a, **kw: {})
+        monkeypatch.setattr("echolot.analyze._window_info", lambda *a, **kw: window)
 
 
 @pytest.mark.parametrize("window, stop, note", [

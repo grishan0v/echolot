@@ -28,12 +28,17 @@ What a command stands on lives beside it, one file per job:
     domains.py   slice name → a place in the code
     reflect/     the same idea as a report, pointed at an agent session
     selftest.py  what doctor runs; fixture.py builds the trace it runs on
+    flags.py     the values the parser prints, so that building it imports no command
+
+A command imports its own modules when it runs; this file imports only what
+parsing needs (`_OnFirstUse`, #561).
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib
 import json
 import os
 import re
@@ -43,55 +48,79 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import median
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
-
-from . import atomic
-from . import compare as compare_mod
-from . import hunt as hunt_mod
-from . import codex, files, layer, parallel, plugin, recorder, sandbox, state, table, when
-from . import launch as launch_mod
-from . import moves as moves_mod
-from . import place as place_mod
+# What every invocation needs before it knows its command: the parser, which
+# reads the layer's clients and the guide's topics, and `main`, which finds
+# the project and opens its run log. codex, plugin and sandbox come in with
+# the layer anyway, and the config with sandbox.
+from . import codex, files, flags, layer, plugin, recorder, sandbox, table, when
 from . import project as project_mod
-from . import plain as plain_mod
-from . import names as names_mod
-from . import noise as noise_mod
-from . import tpshell
-from . import report as report_mod
-from . import render as render_mod
-from . import verdict as verdict_mod
-from .analyze import (
-    ASYNC_THREAD,
-    ASYNC_TRACK,
-    DETECTOR_DIR,
-    _detector_masks,
-    _include_modules,
-    _require_named_processes,
-    _resolve_process,
-    _setup_context,
-    _window_info,
-    analyze_trace,
-    plan_detectors,
-)
 from .config import DEFAULT_PREFIX, PACKAGE, PROCESS, WHOLE_TRACE, Config, ConfigError
-from .runner import DEVICE, ITERATIONS, MODE, PROJECT_ROOT
-from .mark import Markers
-from .pages import answer_page
-from .pages import compare_page
-from .pages import report_page
-from .reflect.cli import cmd_reflect
 from .sandbox import SandboxError
-from .tp import (
-    ToolchainError,
-    TraceSession,
-    load_detectors,
-    resolve_binary_path,
-    sql_value,
-    toolchain_info,
-)
+
+if TYPE_CHECKING:
+    from .tp import ToolchainError
+
+
+class _OnFirstUse:
+    """A module a command stands on, imported when a command first reads it (#561).
+
+    Every invocation builds the parser and runs one command, and most of the
+    modules this file names serve a few commands each: `compare` the delta,
+    `report` and `render` the Marker Report, `launch` the cold start's
+    phases, `state` where a project stands. Imported at the top, all of them
+    were paid for before argparse had read the command: `echolot --version`
+    took as long to start as `echolot analyze`, and so did each of an
+    agent's `echolot`, `echolot guide` and `echolot hunt` calls, some 70 ms
+    of imports that command never used (the PR of #561 has the numbers).
+
+    This stands in a module's place here. The first attribute read off it
+    imports the module and puts the module itself in that place, so after
+    the first use the name is the module and costs nothing more. A name read
+    from a module rather than the module (`analyze_trace`, `TraceSession`)
+    is imported inside the functions that use it, which is also where a test
+    patches it: on the module that defines it.
+    """
+
+    __slots__ = ("_as", "_module")
+
+    def __init__(self, as_name: str, module: str) -> None:
+        object.__setattr__(self, "_as", as_name)
+        object.__setattr__(self, "_module", module)
+
+    def _load(self):
+        module = importlib.import_module(self._module, __package__)
+        # A test that put its own object in this place keeps it.
+        if globals().get(self._as) is self:
+            globals()[self._as] = module
+        return module
+
+    def __getattr__(self, name: str):
+        return getattr(self._load(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(self._load(), name, value)
+
+    def __delattr__(self, name: str) -> None:
+        delattr(self._load(), name)
+
+
+atomic = _OnFirstUse("atomic", ".atomic")
+compare_mod = _OnFirstUse("compare_mod", ".compare")
+hunt_mod = _OnFirstUse("hunt_mod", ".hunt")
+launch_mod = _OnFirstUse("launch_mod", ".launch")
+moves_mod = _OnFirstUse("moves_mod", ".moves")
+names_mod = _OnFirstUse("names_mod", ".names")
+noise_mod = _OnFirstUse("noise_mod", ".noise")
+parallel = _OnFirstUse("parallel", ".parallel")
+place_mod = _OnFirstUse("place_mod", ".place")
+plain_mod = _OnFirstUse("plain_mod", ".plain")
+render_mod = _OnFirstUse("render_mod", ".render")
+report_mod = _OnFirstUse("report_mod", ".report")
+state = _OnFirstUse("state", ".state")
+tpshell = _OnFirstUse("tpshell", ".tpshell")
+verdict_mod = _OnFirstUse("verdict_mod", ".verdict")
 
 
 def cmd_probe(args) -> int:
@@ -150,6 +179,8 @@ def _binary_config(args, then: str, strict: bool = False) -> Config | None:
 
 
 def _probe(args, tp_binary: str | None, cfg: Config | None = None) -> int:
+    from .analyze import ASYNC_TRACK, _require_named_processes, _resolve_process
+    from .tp import TraceSession, sql_value
     process = args.process
     source = "--process"
     if not process and cfg is not None:
@@ -274,6 +305,8 @@ def _anchor_candidates(tp, upid: int) -> None:
     with 4728 names — lost members before it was counted, and `n` came out
     short (#729). Only the rows shown are limited.
     """
+    from .analyze import ASYNC_THREAD, ASYNC_TRACK
+    from .tp import sql_value
     skip = " ".join(f"AND name NOT GLOB '{sql_value(g)}'" for g in _NOT_ANCHORS)
     rows = tp.query(" ".join(f"""
         SELECT name, MIN(thread) AS thread, COUNT(*) AS n, MAX(dur) AS dur
@@ -359,6 +392,8 @@ def _start_candidates(tp, upid: int) -> tuple[list[dict], float | None]:
     first match, and the earliest of these is where the journey began: the
     tap before the activity it opens, the intent before the resume.
     """
+    from .analyze import ASYNC_THREAD, ASYNC_TRACK
+    from .tp import sql_value
     globs = ", ".join(f"('{sql_value(g)}')" for g, _ in START_EVENTS)
     rows = tp.query(" ".join(f"""
         WITH g(start) AS (VALUES {globs}),
@@ -471,6 +506,8 @@ def _note_detectors(cfg: Config) -> None:
     sections nobody configured. It also answers the question the change
     raises: how do I turn one off now.
     """
+    from .analyze import DETECTOR_DIR
+    from .tp import load_detectors
     shipped = {d.id for d in load_detectors(DETECTOR_DIR)}
     # Shipped ids only: a misspelled one is refused by `plan_detectors`, and
     # counted here it made a sum that did not add up.
@@ -763,6 +800,9 @@ def parse_set(values: list[str], detectors) -> dict[str, dict]:
 
 
 def cmd_analyze(args) -> int:
+    from .analyze import DETECTOR_DIR, analyze_trace
+    from .pages import report_page
+    from .tp import load_detectors, resolve_binary_path
     _resolved_config(args)
     try:
         # A set's directory is the set: what `collect --hunt` and `hunt` set
@@ -1325,6 +1365,7 @@ def _markers_against_code(rep: dict[str, Any], cfg: Config) -> None:
     code puts together at run time is matched by its fixed start. A config
     that lives in memory has no checkout to read.
     """
+    from .runner import MODE
     from . import mark as mark_mod
 
     markers = rep.get("markers") or {}
@@ -1648,6 +1689,7 @@ def _resolved_config(args) -> None:
 
 def cmd_compare(args) -> int:
     """The delta between two Marker Reports."""
+    from .pages import compare_page
     _resolved_config(args)
     unloaded = None
     try:
@@ -1912,6 +1954,8 @@ def cmd_names(args) -> int:
     THIS device names GC, locks and binder — and whether the detector masks
     land on those names.
     """
+    from .analyze import ASYNC_THREAD, ASYNC_TRACK, _detector_masks, _resolve_process
+    from .tp import TraceSession
     _resolved_config(args)
     overrides, tp_bin, prefix, process, source, off = _names_setup(args)
     try:
@@ -2066,6 +2110,7 @@ def _name_sections(families: dict, floor_ns: float, pattern,
 def _bucket(families: dict, shapes, assigned: set[str], floor_ns: float,
             pattern, prefix: str | None = None) -> list[tuple[str, dict]]:
     """The families one section takes, marked as taken, and of them the ones it shows."""
+    from .analyze import ASYNC_THREAD
     picked = []
     for fam, data in families.items():
         # The section is decided by the slice NAME and nothing else.
@@ -2111,6 +2156,7 @@ def _names_json(args, proc: dict, async_rows: list, sections: list, missed: list
 
 def _names_text(args, async_rows: list, pattern, families: int, sections: list,
                 missed: list, wide: bool) -> None:
+    from .analyze import ASYNC_THREAD, _detector_masks
     top = args.top or 15
     if async_rows:
         print(f"{sum(r['n'] for r in async_rows)} async section(s) on "
@@ -2265,6 +2311,7 @@ def _held_verdict(project: Path, config: str, last: dict[str, Any], source: str,
     be read. Recording is the caller's and happens only after this: `closing`
     picks the words, so that a check says what would happen.
     """
+    from .mark import Markers
     try:
         raw = sys.stdin.read() if source == "-" else \
             Path(source).read_text(encoding="utf-8")
@@ -2459,6 +2506,7 @@ def _write_answer(project: Path, config: str, hunt: dict[str, Any]) -> Path:
     now. Raises OSError when it cannot be written, and ValueError for a
     record with no number, which has no directory of its own.
     """
+    from .pages import answer_page
     page = hunt_mod.page_path(project, hunt)
     if page is None:
         raise ValueError("it has no number, and so no directory of its own to put a page in")
@@ -2544,6 +2592,8 @@ def cmd_hunt(args) -> int:
     of traces aside, says what the last one left behind — and names the half
     it cannot: the loop needs an agent. `/echolot hunt <q>` does both.
     """
+    from .mark import Markers
+    from .runner import MODE
     project, config = _where(args).folder, str(_where(args).config)
     question = " ".join(args.question) if args.question else None
     conclusion = args.done
@@ -2798,6 +2848,7 @@ def cmd_status(args) -> int:
     branch that applies. Two commands are all a person needs to know —
     `echolot init` and `echolot` — and the agent knows the rest.
     """
+    from .tp import toolchain_info
     if _named_config_missing(args):
         return 2
     project, config = _where(args).folder, str(_where(args).config)
@@ -2932,6 +2983,7 @@ def _anchor_lines(cfg: Config | None, st: dict) -> list[str]:
     `status --next`, `init` and the start page decide nothing on it. A
     scenario's last report vouches for an anchor its recordings held.
     """
+    from .runner import MODE
     from . import anchors
     if cfg is None:
         return []
@@ -3175,6 +3227,7 @@ def cmd_mark(args) -> int:
     one call hop from setContent), so the answer is the same on any project
     and says "not found" where it cannot see. See mark.py.
     """
+    from .mark import Markers
     from . import mark as mark_mod
 
     # The project `main` resolved and its checkout: `--root`, else
@@ -3380,6 +3433,7 @@ def cmd_mark(args) -> int:
 
 def _record_modes(cfg: Config) -> set[str]:
     """`runner.mode` of every scenario the config names; empty when it cannot be read."""
+    from .runner import MODE
     chosen = cfg.scenario_key
     try:
         return {str(cfg.select(name).value(MODE)) for name in cfg.scenarios}
@@ -3451,6 +3505,7 @@ def cmd_collect(args) -> int:
     stand on the distribution across repeats. Below three there is hardly any
     point.
     """
+    from .runner import DEVICE, ITERATIONS, MODE, PROJECT_ROOT
     _resolved_config(args)
     from . import runner
 
@@ -3670,6 +3725,8 @@ def _scenario_ran(cfg: Config, trace: Path, args=None) -> tuple[str | None, str 
     launch takes every one after it (#810). Any other trace this cannot read
     says nothing: `analyze` will.
     """
+    from .analyze import _resolve_process, _setup_context, _window_info
+    from .tp import TraceSession
     import io
 
     # What analyze would say on the way is analyze's to say: collect's output
@@ -4279,6 +4336,7 @@ def _init_finish(args, target: Path, chosen: list, rule: str | None) -> int:
     nothing, printed no next step, and `--no-doctor` had nothing to skip,
     while the help promised all three for every run.
     """
+    from .tp import toolchain_info
     # The environment, briefly, and where to go from here. The doctor lines
     # are the ones `doctor -q` prints, three or four where Codex is used; a
     # failure is said and the exit code carries it, but the layer is installed
@@ -4346,6 +4404,8 @@ def cmd_calibrate(args) -> int:
     section and a human looks at the numbers and decides. Thresholds define
     what counts as normal, and that decision is not handed to a script.
     """
+    from .analyze import DETECTOR_DIR, _include_modules, _resolve_process, _setup_context
+    from .tp import TraceSession, load_detectors
     _resolved_config(args)
     try:
         cfg = Config.load(args.config, args.local, scenario=args.scenario)
@@ -4541,6 +4601,8 @@ def _calibrate_check(traces: list[str], tp_binary, cfg, measured: dict,
     section moves run again with it, and the rows are counted as `analyze`
     would count them, beside the count with the thresholds in effect now.
     """
+    from .analyze import _include_modules, _resolve_process, _setup_context
+    from .tp import TraceSession
     moved = {}
     for det_id, values in proposed.items():
         now = dict(overrides.get(det_id) or {})
@@ -4624,6 +4686,7 @@ def _calibrated(c, d, given: dict, runs: list[list[dict]], failed: int,
     default 40 went from no rows to 28. `below_defaults` takes the lower
     number all the same, and its line says how far below the default it is.
     """
+    from statistics import median
     def keep(why: str, rare: int = 0, floored: int = 0) -> _Calibrated:
         if c.param in given:
             return _Calibrated(f"    {c.param}: {_yaml_scalar(given[c.param])}    "
@@ -4799,6 +4862,7 @@ def cmd_doctor(args) -> int:
     The trace_processor it checks is the one `analyze` would run from here:
     the flag, then `toolchain.tp_binary` from the config, then the pin.
     """
+    from .tp import ToolchainError, resolve_binary_path, toolchain_info
     _resolved_config(args)
     import platform as py_platform
 
@@ -4945,6 +5009,7 @@ def _doctor_quiet(args, info: dict, project: Path | None = None,
     is a check that failed and also a self-check that never started, and
     `init`, which ends in this, says which of the two it was.
     """
+    from .tp import ToolchainError
     import platform as py_platform
 
     if _refused_without_asserts():
@@ -5080,6 +5145,7 @@ def cmd_report(args) -> int:
     for every command unless ECHOLOT_NO_RECORD is set. `--html` is the
     exception: it writes the report as a page, beside the report it read.
     """
+    from .pages import report_page
     _resolved_config(args)
     project = _where(args).folder
     try:
@@ -5159,6 +5225,8 @@ def _report_cmd(path: str | None) -> str:
 def cmd_explain(args) -> int:
     """One detector in words, with the values this project runs it on; or the
     list of them, a line each (#494). See explain.py."""
+    from .analyze import DETECTOR_DIR, plan_detectors
+    from .tp import load_detectors
     _resolved_config(args)
     from . import explain as explain_mod
 
@@ -5250,6 +5318,13 @@ def cmd_ui(args) -> int:
                     tp_binary=getattr(args, "tp_binary", None))
 
 
+def cmd_reflect(args) -> int:
+    """`echolot reflect`, which lives in reflect/cli.py with the rest of reflect."""
+    from .reflect.cli import cmd_reflect as reflect
+
+    return reflect(args)
+
+
 # structural the split lived only in prose: `echolot --help` showed twelve
 # equal verbs, and a person reasonably tried `probe` and got a wall of
 # reconnaissance meant for an agent.
@@ -5312,6 +5387,7 @@ class _Versions(argparse.Action):
                          default=default, nargs=0, help=help)
 
     def __call__(self, parser, namespace, values, option_string=None):
+        from .tp import toolchain_info
         import platform as py_platform
         info = toolchain_info()
         print(f"echolot {recorder.version()} · trace_processor "
@@ -5375,18 +5451,17 @@ def _hunt_number(text: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    # rich-argparse title-cases the section headings — "Usage:", "Options:",
-    # "Positional Arguments:". Every other Python program on the same machine
-    # writes them the way argparse does, and colour is the whole reason the
-    # formatter is here; the wording is not part of the deal. `str` leaves the
-    # headings alone. Set on the base class, which the Raw variant inherits.
-    RichHelpFormatter.group_name_formatter = str
-
+    # Built with argparse's own formatters, and handed Rich's at the end
+    # (`_in_colour`). argparse makes a formatter for every argument it adds,
+    # to check the metavar, and one for the subcommands' usage prefix, and a
+    # Rich formatter imports rich the first time one is made: some 45 modules,
+    # paid by every command for a help nobody asked for (#561). argparse's
+    # is all those checks need; Rich's is made when something is printed.
     p = argparse.ArgumentParser(
         prog="echolot", description=__doc__,
         # Without Raw, argparse collapses the newlines and the command list in
         # the header congeals into a single paragraph.
-        formatter_class=RawDescriptionRichHelpFormatter)
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--tp-binary", help="path to your own trace_processor_shell")
     p.add_argument("-V", "--version", action=_Versions,
                    help="print the versions — echolot, the trace_processor it "
@@ -5410,7 +5485,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=False, metavar="<command>",
                            help="one of the above", parser_class=(
         lambda **kw: argparse.ArgumentParser(
-            parents=[common], formatter_class=RichHelpFormatter, **kw)))
+            parents=[common], formatter_class=argparse.HelpFormatter, **kw)))
     p.set_defaults(func=cmd_status, cmd="status")
 
     # Each verb declares its audience here and nowhere else, and the header
@@ -5428,7 +5503,7 @@ def build_parser() -> argparse.ArgumentParser:
     stt.add_argument("-c", "--config", default="echolot.yml", help=argparse.SUPPRESS)
     stt.add_argument("--next", action="store_true",
                      help="print only the next step, one word: "
-                          + " | ".join(state.NEXT_KINDS) + " — what /echolot switches on")
+                          + " | ".join(flags.NEXT_KINDS) + " — what /echolot switches on")
     stt.set_defaults(func=cmd_status)
 
     # The investigation, with a name a person can find. `hunt` means the same
@@ -5781,14 +5856,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "halves the way compare does, and say how many rows hold with "
                          "nothing changed: this scenario's own noise, and the floor that "
                          "quiets it. Printed after the report and written beside it, "
-                         f"noise.md and noise.json. Needs {noise_mod.MIN_RUNS} traces "
+                         f"noise.md and noise.json. Needs {flags.MIN_RUNS} traces "
                          "or more")
     an.add_argument("--splits", type=_splits, default=None, metavar="N",
-                    help=f"with --noise: how many random splits (default: {noise_mod.SPLITS}, "
+                    help=f"with --noise: how many random splits (default: {flags.SPLITS}, "
                          "or every split there is when there are fewer)")
     an.add_argument("--seed", type=int, default=None, metavar="N",
                     help=f"with --noise: the seed the splits are drawn from (default: "
-                         f"{noise_mod.SEED}); the same seed gives the same numbers")
+                         f"{flags.SEED}); the same seed gives the same numbers")
     an.set_defaults(func=cmd_analyze)
 
     cp = add("compare", "pipeline", "[<before.json> [<after.json>]]",
@@ -5812,15 +5887,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="where comparison.md and comparison.json go (default "
                          ".echolot/out next to the config; with two reports named, "
                          "nowhere: the comparison is printed)")
-    cp.add_argument("--floor-ms", type=float, default=compare_mod.FLOOR_MS,
+    cp.add_argument("--floor-ms", type=float, default=flags.FLOOR_MS,
                     metavar="MS",
                     help="a move at or below this many ms is steady "
-                         f"(default: {compare_mod.FLOOR_MS:g})")
+                         f"(default: {flags.FLOOR_MS:g})")
     cp.add_argument("--floor-pct", type=float,
-                    default=compare_mod.FLOOR_RATIO * 100, metavar="PCT",
+                    default=flags.FLOOR_RATIO * 100, metavar="PCT",
                     help="or at or below this share of the earlier value; "
                          "the larger floor applies "
-                         f"(default: {compare_mod.FLOOR_RATIO * 100:g})")
+                         f"(default: {flags.FLOOR_RATIO * 100:g})")
     cp.add_argument("--plain", action="store_true",
                     help="the comparison in plain words, for a person: better, worse or no "
                          "clear change, and which way each check moved. It is kept in "
@@ -5831,7 +5906,7 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--names", action="store_true",
                     help="print every slice name that is in every run of one side and in "
                          "no run of the other, in place of the comparison, which lists "
-                         f"{compare_mod.NAMES_SHOWN} a side")
+                         f"{flags.NAMES_SHOWN} a side")
     cp.set_defaults(func=cmd_compare)
 
     gd = add("guide", "agent", "[<topic>]",
@@ -5988,7 +6063,27 @@ def build_parser() -> argparse.ArgumentParser:
     web.set_defaults(func=cmd_ui)
 
     p.description = _describe(entries)
+    _in_colour(p, sub.choices.values())
     return p
+
+
+def _in_colour(main_parser: argparse.ArgumentParser, commands) -> None:
+    """Rich's formatters for what the parsers print, from here on.
+
+    Importing rich-argparse imports no rich; making the first formatter
+    does, and that happens only for a help, a usage line or an error.
+    """
+    from rich_argparse import RawDescriptionRichHelpFormatter, RichHelpFormatter
+
+    # rich-argparse title-cases the section headings — "Usage:", "Options:",
+    # "Positional Arguments:". Every other Python program on the same machine
+    # writes them the way argparse does, and colour is the whole reason the
+    # formatter is here; the wording is not part of the deal. `str` leaves the
+    # headings alone. Set on the base class, which the Raw variant inherits.
+    RichHelpFormatter.group_name_formatter = str
+    main_parser.formatter_class = RawDescriptionRichHelpFormatter
+    for parser in commands:
+        parser.formatter_class = RichHelpFormatter
 
 
 # What this tool prints that a legacy code page has no room for: the arrows

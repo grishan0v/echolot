@@ -156,14 +156,13 @@ def test_importing_the_cli_pulls_in_two_distributions() -> None:
     `[project.dependencies]` says.
     """
     # rich-argparse is the decision this test exists to force, and it was made
-    # rather than avoided. `build_parser()` runs on every invocation and needs
-    # the formatter class to construct the parsers, so moving the import inside
-    # a function would relocate the cost, not remove it. What keeps it cheap is
-    # that rich-argparse imports rich lazily: `import echolot.main` loads no
-    # rich, and every command loads about 43 `rich.*` modules when it builds
-    # the parser, as pyproject.toml says; none ever loads pygments,
-    # markdown-it-py or mdurl. Measured, and the reason it is one name here
-    # rather than five.
+    # rather than avoided. What keeps it cheap is that rich-argparse imports
+    # rich lazily, when the first formatter is made, and `build_parser()`
+    # makes none (#561): it builds with argparse's own and hands Rich's to the
+    # parsers at the end. So a command loads no `rich.*` module unless it
+    # prints a help, a usage line or an error, as pyproject.toml says, and
+    # none ever loads pygments, markdown-it-py or mdurl. Measured, and the
+    # reason it is one name here rather than five.
     allowed = {"PyYAML", "rich-argparse"}
     probe = (
         "import sys\n"

@@ -24,8 +24,8 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from echolot import demo  # noqa: E402
-from echolot import main as main_mod  # noqa: E402
 from echolot.config import Config  # noqa: E402
+from echolot.analyze import DETECTOR_DIR  # noqa: E402
 from echolot.main import main as cli  # noqa: E402
 from echolot.tp import Calibration, Detector, load_detectors  # noqa: E402
 from tests.support import check  # noqa: E402
@@ -55,7 +55,7 @@ def block_calibrated(monkeypatch):
             if d.id == "main_thread_block":
                 d.calibrations = [Calibration("min_slice_ms", "top", 10, "self_ms", 1.5)]
         return out
-    monkeypatch.setattr(main_mod, "load_detectors", load)
+    monkeypatch.setattr("echolot.tp.load_detectors", load)
 
 
 def _calibrate(app: Path, n: int, config: str = "echolot.yml",
@@ -114,7 +114,7 @@ def test_a_detector_that_failed_is_not_rare(app: Path, monkeypatch) -> None:
 
 
 def test_the_shipped_main_thread_block_is_not_calibrated() -> None:
-    shipped = {d.id: d for d in load_detectors(main_mod.DETECTOR_DIR)}
+    shipped = {d.id: d for d in load_detectors(DETECTOR_DIR)}
     check("where the main thread's time went has a frame for its bar, not a tail",
           shipped["main_thread_block"].calibrations == [], shipped["main_thread_block"])
 

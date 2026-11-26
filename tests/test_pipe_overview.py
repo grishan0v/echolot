@@ -21,7 +21,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from echolot import main as main_mod  # noqa: E402
 from echolot import recorder  # noqa: E402
 from echolot import report as report_mod  # noqa: E402
 from echolot import render as render_mod  # noqa: E402
@@ -48,7 +47,7 @@ def _project(tmp_path: Path, monkeypatch, marker_report) -> Path:
     (tmp_path / "echolot.yml").write_text(CONFIG, encoding="utf-8")
     trace = tmp_path / "a.perfetto-trace"
     trace.write_bytes(b"a trace")
-    monkeypatch.setattr(main_mod, "analyze_trace", lambda *a, **kw: copy.deepcopy(marker_report))
+    monkeypatch.setattr("echolot.analyze.analyze_trace", lambda *a, **kw: copy.deepcopy(marker_report))
     monkeypatch.chdir(tmp_path)
     return trace
 

@@ -30,7 +30,6 @@ from pathlib import Path
 import pytest
 
 from echolot import hunt as hunt_mod
-from echolot import main as main_mod
 from echolot import mark, recorder
 from echolot import report as report_mod
 from echolot.main import NOT_RUN, main
@@ -146,7 +145,7 @@ def opened(monkeypatch) -> list:
                 return [{"upid": 1, "pid": 4100, "name": "com.example.app", "slices": 0}]
             return []
 
-    monkeypatch.setattr(main_mod, "TraceSession", Session)
+    monkeypatch.setattr("echolot.tp.TraceSession", Session)
     return seen
 
 

@@ -17,7 +17,7 @@ import os
 import shlex
 from pathlib import Path, PurePath
 
-from . import codex, files, hosts, layer, plugin, recorder, runner
+from . import codex, files, flags, hosts, layer, plugin, recorder, runner
 from . import hunt as hunt_mod
 from .anchors import UNPICKED
 from .config import Config, ConfigError
@@ -560,15 +560,10 @@ def collect_line(st: dict) -> str | None:
 
 
 # The next step as one word — what `/echolot` in Claude Code switches on —
-# and as the line a person reads, both from the same decision. This is the
-# vocabulary, not the routing order — `next_kind` below is that. The
-# order here is the one `status --help` lists, and it is also what keeps that
-# help the same under Rich and under argparse at 80 columns: argparse breaks a
-# line at a hyphen and Rich does not, so a hyphenated word that lands at a
-# line's end renders two ways (tests/test_cli_help.py). Adding a word, check
-# that test before settling where it goes.
-NEXT_KINDS = ("upgrade", "init", "init-force", "doctor", "setup", "fix-config",
-              "resume-or-new", "fix-settings", "hunt")
+# and as the line a person reads, both from the same decision. The words,
+# and why their order matters, are in flags.py: `status --help` lists them,
+# and the parser reads them there without importing this module.
+NEXT_KINDS = flags.NEXT_KINDS
 
 
 def next_kind(st: dict) -> str:
