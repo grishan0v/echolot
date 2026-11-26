@@ -32,6 +32,17 @@ body:
       label: Compatibility and determinism impact
       description: Explain whether this changes detector semantics, report output, supported Python versions, or trace reproducibility.
 
+  - type: input
+    id: llm
+    attributes:
+      label: LLM assistance
+      description: |
+        `none`, or the tool, the model and what it wrote. The problem above is
+        one you ran into yourself. See
+        [CONTRIBUTING](https://github.com/grishan0v/echolot/blob/main/CONTRIBUTING.md#llm-assistance).
+    validations:
+      required: true
+
   - type: checkboxes
     id: checks
     attributes:

@@ -100,3 +100,49 @@ The title opens with the kind of change: `feat:`, `fix:`, `docs:`, `build:`,
 `fix(report): …`. A workflow labels the pull request from it, and the release
 notes are grouped by that label; [docs/publishing.md](docs/publishing.md#how-the-notes-are-grouped)
 has the sections.
+
+## LLM assistance
+
+A change written with an LLM is reviewed here on the same terms as any other.
+What it has to carry is a plain account of how it was made, and a person who
+answers for it.
+
+**Say what the model did.** The pull request template has a section for it.
+It says either that no LLM was used, or which tool ran one, which model, at
+what effort (the reasoning level the tool was set to, `default` if none was
+set) and which parts the model wrote or changed: the code, the tests, the
+docs, the description itself. A model that only finished a line or fixed a
+typo still counts; one sentence says so.
+
+**The author is the person, not the model.** Whoever opens the pull request
+has read the whole diff and can say why each line is there. They ran `pytest`
+and `ruff` themselves instead of taking a model's word that they pass, and
+they answer the questions asked in review themselves, rather than handing them
+to a model and pasting its answer back.
+
+The reason is where the cost of a change lands. A pull request a model wrote
+from the text of an issue looks finished: it has tests, a description and a
+confident tone. Whether it is right is found out in review, often by reading
+it as closely as it would take to write the change, and it is the reviewer who
+notices that a test asserts what the code does rather than what the issue
+asked for, or that a detector was changed without a trace ever being opened.
+Knowing that a model wrote a part tells the reviewer where to read harder, and
+an author who understands the diff is someone the review can talk to.
+
+A pull request with this section left empty, or one made of generated code its
+author cannot explain, may be closed without a review. That closes the pull
+request, not the idea: the issue stays open, and a change that answers for
+itself is welcome.
+
+The same holds for an issue. A model may help with the words, but the command,
+the output and the steps in a bug report come from a run on the reporter's own
+machine, and a bug that a model found by reading the source, with no run
+behind it, is not a bug report. The issue forms ask about LLM assistance too.
+
+The `disclosure` workflow reads the section on every pull request opened from
+outside the project and fails when it is missing, when neither answer is
+ticked, when a model was used and the tool, the model, the effort or what it
+did is left out, or when the last box is not ticked. It can see whether the
+section was answered, not whether the answer is true; that stays with the
+author. Pull requests from the repository's owner, members and collaborators,
+and from apps installed on it such as dependabot, are not checked.

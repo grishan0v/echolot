@@ -89,6 +89,18 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: llm
+    attributes:
+      label: LLM assistance
+      description: |
+        `none`, or the tool, the model and what it wrote. A model may help
+        with the words; the command, the output and the steps above come from
+        a run on your own machine. See
+        [CONTRIBUTING](https://github.com/grishan0v/echolot/blob/main/CONTRIBUTING.md#llm-assistance).
+    validations:
+      required: true
+
   - type: checkboxes
     id: checks
     attributes:

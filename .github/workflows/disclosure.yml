@@ -1,0 +1,147 @@
+name: disclosure
+
+# Reads the LLM assistance section of a pull request's description and fails
+# when it is not answered. CONTRIBUTING.md#llm-assistance has the policy and
+# the reason for it: review is where a generated change costs the project.
+# A program that walks repositories and opens generated pull requests writes
+# a description of its own, without the template's sections, and that is the
+# case this catches, along with a template opened and left as it came. It
+# does not catch an answer that is false; nothing that reads only the text
+# could, and the policy leaves that to the author.
+#
+# Who is checked. Pull requests from the repository's owner, members and
+# collaborators are not: they answer for their changes to the project
+# already, and the owner's own stacks would otherwise queue for a runner for
+# nothing (#331). Apps are not checked either. Dependabot opens its pull
+# requests as a `Bot` whose association is `CONTRIBUTOR`, with a description
+# of its own, and would fail on every bump. A person running an agent from
+# their own account is a `User`, and stays checked. The condition sits on the
+# job, so a skipped run takes no runner, and a skipped job counts as passed if
+# the check is ever made required.
+#
+# When. `opened` and `reopened` read the description as it first comes, and
+# `edited` reads it again once the author fills it in, which turns a red run
+# green without a push. `synchronize` reads an unchanged description again on
+# every push: a check is reported per commit, and without it the newest commit
+# would carry no result, which a required check reads as still waiting.
+#
+# Why this is safe on a fork's pull request. `pull_request`, not
+# `pull_request_target`: a fork's run gets a read-only token and no secrets,
+# and this job asks for no permissions on top of that. Nothing is checked out
+# and no action runs; the one step is the python below. The description
+# reaches it through the environment, never inside the script, because it is
+# text anyone opening a pull request writes, and the program never prints it
+# back: a line of it that starts with `::` would be read by the runner as a
+# command. tests/test_disclosure.py runs the program against the template and
+# holds this file to all of the above.
+#
+# `pull_request` runs this file as the pull request has it, so a pull request
+# can edit the check into passing. That edit is in the diff the reviewer
+# reads, which is where this check sends them anyway.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+# A description edited twice in a row: the second run has the one that counts.
+concurrency:
+  group: disclosure-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  llm:
+    name: LLM assistance
+    if: >-
+      github.event.pull_request.user.type != 'Bot'
+      && !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the LLM assistance section of the description
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+
+          POLICY = (f"https://github.com/{os.environ['GITHUB_REPOSITORY']}"
+                    "/blob/main/CONTRIBUTING.md#llm-assistance")
+          # The boxes of the section, by how their line starts.
+          BOXES = {
+              "no llm was used": "none",
+              "an llm was used": "used",
+              "i have read and understand": "read",
+          }
+          # The lines under "An LLM was used", by their label.
+          FIELDS = {
+              "tool": "the tool",
+              "model": "the model",
+              "effort": "the effort",
+              "what the model wrote or changed": "what the model wrote or changed",
+          }
+          # Answers that name nothing. Effort is exempt: "default" and
+          # "no such setting" are answers, and so is anything else written.
+          EMPTY = {"", "n/a", "na", "none", "no", "tbd", "todo", "unknown",
+                   "same", "see above", "see diff"}
+
+          # Comments are the template's hints, not the author's answers.
+          body = re.sub(r"<!--.*?-->", "", os.environ.get("BODY", ""), flags=re.S)
+          body = body.replace("\r\n", "\n")
+          found = re.search(r"^#{1,6}[ \t]*LLM assistance[ \t]*$(.*?)(?=^#{1,6}[ \t]|\Z)",
+                            body, re.S | re.M | re.I)
+
+          ticked, values, errors = {}, {}, []
+          field = None
+          for line in (found.group(1) if found else "").splitlines():
+              box = re.match(r"\s*[-*+]\s+\[([ xX])\]\s*(.*)", line)
+              label = re.match(r"\s*[-*+]\s+([^:\[]+?)\s*:(.*)", line)
+              if box:
+                  field = None
+                  for start, name in BOXES.items():
+                      if box.group(2).lower().startswith(start):
+                          ticked[name] = box.group(1) != " "
+              elif label and label.group(1).lower() in FIELDS:
+                  field = label.group(1).lower()
+                  values[field] = [label.group(2)]
+              elif field:
+                  values[field].append(line)
+
+
+          def answer(name):
+              """What a line says, without the punctuation that says nothing."""
+              text = " ".join(values.get(name, []))
+              return re.sub(r"[\s.,;:!?*_`'\"()\[\]\-–—]+", " ", text).strip().lower()
+
+
+          if not found:
+              errors.append("The description has no LLM assistance section. "
+                            "The pull request template has one; copy it in and answer it.")
+          else:
+              none, used = ticked.get("none"), ticked.get("used")
+              if none and used:
+                  errors.append("Both 'No LLM was used' and 'An LLM was used' are ticked; "
+                                "tick the one that is true.")
+              elif not none and not used:
+                  errors.append("Neither 'No LLM was used' nor 'An LLM was used' is ticked.")
+              elif used:
+                  for name, words in FIELDS.items():
+                      said = answer(name)
+                      if not said or (name != "effort" and said in EMPTY):
+                          errors.append(f"An LLM was used, and {words} is not named.")
+              elif any(answer(name) not in EMPTY for name in FIELDS):
+                  errors.append("'No LLM was used' is ticked, and the lines under "
+                                "'An LLM was used' name one anyway.")
+              if not ticked.get("read"):
+                  errors.append("The box saying you read and understand every line of the "
+                                "diff, and ran the checks yourself, is not ticked.")
+
+          # None of the description is printed: see the note at the top of the file.
+          for error in errors:
+              print(f"::error title=LLM assistance::{error}")
+          if errors:
+              print(f"Editing the description runs this check again. Why it asks: {POLICY}")
+              sys.exit(1)
+          print("LLM assistance: answered, "
+                + ("an LLM was used and named." if ticked.get("used") else "no LLM was used."))
+          PY
