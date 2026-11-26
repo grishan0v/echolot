@@ -117,3 +117,23 @@ SELECT COALESCE(MAX(k.ce), n.ts) AS ts,
 FROM named n
 LEFT JOIN kids k ON k.slice_id = n.slice_id
 GROUP BY n.slice_id;
+
+-- @longest
+--
+-- The longest slice of each row's name on its thread: `max_ms` is the
+-- longest of them. One still open at the window's end runs to it, as it is
+-- counted.
+
+SELECT location, detail, ts, dur, tid
+FROM (
+    SELECT r.location, r.detail, s.ts, s.dur, s.tid,
+           ROW_NUMBER() OVER (PARTITION BY r.location, r.detail
+                              ORDER BY s.dur DESC, s.ts) AS k
+    FROM _slice_win s
+    LEFT JOIN _name_family fn ON fn.name = s.name
+    LEFT JOIN _name_family ft ON ft.name = s.thread_name
+    JOIN _rows r ON r.location = COALESCE(fn.family, s.name)
+                AND r.detail = COALESCE(ft.family, s.thread_name)
+    WHERE s.is_main_thread = 1 AND s.dur > 0
+)
+WHERE k = 1;

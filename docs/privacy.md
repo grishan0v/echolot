@@ -116,9 +116,20 @@ localhost:5037, which reaches the phone over USB or your local network.
 `echolot ui` is a third, while it runs: a server on 127.0.0.1 that shows the
 project to your browser. It listens on no other address, answers only a
 request that carries the token made at that start, serves the pages it draws
-and no file, and its pages reach no other address. [The page in the
+and, to one of them, a recording a report names, and its pages reach no
+other address but one: the page that opens a moment of a report holds
+Perfetto UI (`ui.perfetto.dev`) in a frame and hands it the recording in
+your browser. Perfetto UI is Google's page, loaded from Google when you open
+that page; it reads a trace handed to it that way in the browser and sends
+it to no server. [The page in the
 browser](ui.md#what-the-server-answers-and-what-it-refuses) says what it
 refuses.
+
+`report.md` links to Perfetto UI too ([On the
+timeline](analysing.md#on-the-timeline)): a link carries the moment's
+timestamps and the name and id of a thread of your app, and no trace. The
+part after `#` is not sent with the request for the page: Perfetto UI reads
+it in your browser.
 
 The agent you run reads echolot's output, and sends what it reads to its
 model as part of the session. That traffic is the agent's, under its

@@ -23,7 +23,7 @@ from . import launch as launch_mod
 from . import names as names_mod
 from . import needs as needs_mod
 from . import recording as recording_mod
-from .merge import _FLOORED, _OVER, _merge_debuggable, merge_rows, short_runs
+from .merge import AT, _FLOORED, _OVER, _merge_debuggable, merge_rows, short_runs
 
 # Importable from here for one release more (#992): `to_markdown` and
 # `to_json` live in render.py now, as `merge_rows`, imported above, in merge.py.
@@ -500,6 +500,29 @@ FLOOR_MS = 1.0
 
 
 
+def _placed(det: dict[str, Any], run: int) -> dict[str, Any]:
+    """One repeat's entry of a detector, each row's place on the timeline
+    stamped with the repeat it is in: its index in `traces` (#132). The rows
+    under the bar too: the merge takes a row's place from the repeat whose
+    longest it is, shown there or not.
+
+    A copy, and the rows that carry a place copies of their own: a report
+    handed to the merge is not written into, whoever else reads it.
+    """
+    def stamped(rows: Any) -> Any:
+        if not isinstance(rows, list) or not any(
+                isinstance(r, dict) and isinstance(r.get(AT), dict) for r in rows):
+            return rows
+        return [{**r, AT: {**r[AT], "run": run}}
+                if isinstance(r, dict) and isinstance(r.get(AT), dict) else r for r in rows]
+
+    out = dict(det)
+    for key in ("rows", UNDER_ROWS):
+        if key in out:
+            out[key] = stamped(out[key])
+    return out
+
+
 def _merge_detector(runs: list[dict[str, Any]], identity: tuple[str, ...],
                     total: int) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """One detector's rows over its repeats, and its `below`.
@@ -518,7 +541,13 @@ def _merge_detector(runs: list[dict[str, Any]], identity: tuple[str, ...],
         shown: list[dict[str, Any]] = []
         under: list[dict[str, Any]] = []
         for row in merge_rows(per_run, identity, total):
-            (shown if row.pop(_OVER, False) else under).append(row)
+            if not row.pop(_OVER, False):
+                # A row under the bar is looked up by `compare`, and opened
+                # from no link (#132).
+                row.pop(AT, None)
+                under.append(row)
+            else:
+                shown.append(row)
         return shown, {"floor_ms": FLOOR_MS, "rows": under}
     return merge_rows([run.get("rows") or [] for run in runs], identity, total), None
 
@@ -822,7 +851,7 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
             # one report used a path of its own, a pool's `threads` and the
             # rows under the bar came out otherwise (#714, #845). It has no
             # repeats to count or spread, so its rows keep neither.
-            rows, below = _merge_detector([det], identity_of(det), 1)
+            rows, below = _merge_detector([_placed(det, 0)], identity_of(det), 1)
             det.pop(UNDER_ROWS, None)
             det["rows"] = [{k: v for k, v in row.items() if k not in ("runs", "spread")}
                            for row in rows]
@@ -871,9 +900,9 @@ def _merge_runs(reports: list[dict[str, Any]]) -> dict[str, Any]:
     merged["recording"] = recording_mod.merge([r.get("recording") for r in reports])
 
     by_id: dict[str, list[dict]] = {}
-    for report in reports:
+    for i, report in enumerate(reports):
         for det in report["detectors"]:
-            by_id.setdefault(det["id"], []).append(det)
+            by_id.setdefault(det["id"], []).append(_placed(det, i))
 
     detectors = []
     for runs in by_id.values():

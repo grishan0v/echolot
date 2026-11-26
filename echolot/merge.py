@@ -87,6 +87,9 @@ def _one_run(rows: list[dict[str, Any]]) -> dict[str, Any]:
     tops = [r["max_ms"] for r in rows if r.get("max_ms") is not None]
     if tops:
         out["max_ms"] = max(tops)
+    at = _longest_at(rows)
+    if at is not None:
+        out[AT] = at
     return out
 
 
@@ -98,8 +101,33 @@ _OVER = "over_bar"
 
 # What `merge_rows` sets itself, or leaves out on purpose, rather than take
 # from the worst repeat with the rest of its columns.
+# Where a row's longest occurrence is on the timeline (#132): `analyze` puts
+# it on a row, and `report._merge_runs` adds which repeat it is in.
+AT = "at"
+
 _MERGED_ELSEWHERE = frozenset({*NUMERIC, THREADS, "runs", "fired", "spread", "variants",
-                               "stacks", _OVER})
+                               "stacks", _OVER, AT})
+
+
+def _longest_at(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The place of the longest occurrence among rows that carry one.
+
+    The longest by `max_ms`, which is the number a row prints as its longest,
+    and then by the occurrence's own length; the earlier repeat on a tie, so
+    that the same set always opens on the same place. None when no row has a
+    place: a detector without `@longest`, or reports written before it.
+    """
+    placed = [r for r in rows if isinstance(r.get(AT), dict)]
+    if not placed:
+        return None
+
+    def length(row: dict[str, Any]) -> tuple[float, int]:
+        top = row.get("max_ms")
+        return (float(top) if isinstance(top, (int, float)) else 0.0,
+                int(row[AT].get("dur") or 0))
+
+    best = max(length(r) for r in placed)
+    return next(r[AT] for r in placed if length(r) == best)
 
 
 def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
@@ -235,6 +263,12 @@ def merge_rows(per_run: list[list[dict[str, Any]]], identity: tuple[str, ...],
         for col, value in worst.items():
             if col not in row and col not in _MERGED_ELSEWHERE:
                 row[col] = value
+        # The place to open is the longest occurrence any repeat saw, as
+        # `max_ms` is: from the repeat whose longest that is, of those that
+        # said where it was (#132).
+        at = _longest_at([values_by_run[i] for i in sorted(values_by_run)])
+        if at is not None:
+            row[AT] = at
         out.append(row)
     return sorted(out, key=standing, reverse=True)
 

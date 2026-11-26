@@ -953,7 +953,11 @@ def test_the_technical_report_holds_what_report_md_holds(demo_report, fixture_re
         fold = [d for d in page.all("details") if d.one("summary").text == "The full technical report"][0]
         got = squeezed(fold.one("div", "md").text)
         text = report_mod.to_markdown(plain.annotate(copy.deepcopy(rep)))
-        lines = [re.sub(r"</?sub>", "", line) for line in text.split("\n")]
+        # A link to Perfetto UI is its words on the page, which names no
+        # address outside itself (#132).
+        lines = [re.sub(r"\[((?:[^\]\\]|\\.)+)\]\(https://ui\.perfetto\.dev/[^)]*\)", r"\1", line)
+                 .replace("\\[", "[").replace("\\]", "]") for line in text.split("\n")]
+        lines = [re.sub(r"</?sub>", "", line) for line in lines]
         missing = [line for line in lines if squeezed(line) and squeezed(line) not in got]
         check(f"{name}: every line of report.md is under the fold", not missing, missing[:3])
 

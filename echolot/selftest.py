@@ -648,6 +648,108 @@ def _(report):
         b["in_rows_ms"] / b["window_ms"] * 100, 1), b
 
 
+# Detectors whose `max_ms` is the length of the longest occurrence their
+# `@longest` names, so that the place a link opens is the number the row
+# prints (#132). `frame_jank`'s is the frame that overran its deadline the
+# most, and its `max_ms` the overrun; `anr_risk` holds no stall here.
+_LONGEST_IS_MAX = ("binder_txn", "gc_pressure", "io_wait", "main_thread_block",
+                   "main_thread_outlier", "monitor_contention", "runnable_starvation")
+
+
+@check("timeline: every row of a detector with `@longest` says where its longest occurrence is")
+def _(report):
+    # The place a report's link opens (#132): `at`, in the trace's own
+    # nanoseconds, inside the trace, and as long as the row's `max_ms` says
+    # its longest is. A query that stopped finding its way back from a row to
+    # its occurrence leaves the row with no link, and is a failure here.
+    from .analyze import DETECTOR_DIR
+    from .tp import load_detectors
+    placed = {d.id for d in load_detectors(DETECTOR_DIR) if d.longest_sql}
+    assert set(_LONGEST_IS_MAX) | {"frame_jank", "anr_risk"} <= placed, sorted(placed)
+    w = report["window"]
+    seen = set()
+    for det in report["detectors"]:
+        if det["id"] not in placed:
+            assert all("at" not in r for r in det["rows"]), det["id"]
+            continue
+        for row in det["rows"]:
+            at = row.get("at")
+            assert isinstance(at, dict), (det["id"], row.get("location"), "has no place")
+            assert isinstance(at["ts"], int) and isinstance(at["dur"], int) and at["dur"] > 0, at
+            assert at["ts"] < w["ts_end"] and at["ts"] + at["dur"] > w["ts_start"], (det["id"], at, w)
+            if det["id"] in _LONGEST_IS_MAX:
+                assert abs(at["dur"] / 1e6 - row["max_ms"]) <= 0.01, (det["id"], row["location"], at, row["max_ms"])
+            if "tid" in at:
+                assert at.get("thread"), (det["id"], at)
+            seen.add(det["id"])
+    assert set(_LONGEST_IS_MAX) | {"frame_jank"} <= seen, sorted(seen)
+    # The main thread of the window, whose track its link shows first.
+    assert w.get("main_thread_name") == fixture.THREADS[fixture.TID_MAIN], w.get("main_thread_name")
+
+
+@check("timeline: `@longest` decides no row, and is no part of what `compare` holds a detector to")
+def _(report):
+    # Its rows and numbers are the first query's: written into a detector,
+    # the fourth query leaves its `sha` as it was, so a report from before it
+    # keeps its verdicts in `compare` (#507, #132).
+    from dataclasses import replace
+    from .analyze import DETECTOR_DIR
+    from .tp import load_detectors
+    for d in load_detectors(DETECTOR_DIR):
+        if d.longest_sql:
+            assert replace(d, longest_sql="").sha == d.sha, d.id
+
+
+@check("timeline: a set opens each row on the repeat whose longest occurrence it is, and the row under the bar nowhere")
+def _(report):
+    # Three repeats of the fixture, the second's longest binder transaction
+    # made the longest of the three: the merged row's `max_ms` is that
+    # repeat's, and so is its place, with the repeat's index in `traces`.
+    import copy
+    from . import report as report_mod
+    runs = [copy.deepcopy(report) for _ in range(3)]
+    for i, run in enumerate(runs):
+        run["trace"] = f"run{i}.perfetto-trace"
+        det = next(d for d in run["detectors"] if d["id"] == "binder_txn")
+        det["rows"][0]["max_ms"] += 10.0 if i == 1 else 0.0
+        det["rows"][0]["at"]["ts"] += i
+    merged = report_mod.aggregate(runs)
+    row = next(d for d in merged["detectors"] if d["id"] == "binder_txn")["rows"][0]
+    original = next(d for d in report["detectors"] if d["id"] == "binder_txn")["rows"][0]
+    assert row["at"]["run"] == 1 and row["at"]["ts"] == original["at"]["ts"] + 1, row["at"]
+    assert merged["traces"][row["at"]["run"]] == "run1.perfetto-trace", merged["traces"]
+    # The repeats handed to the merge are not written into.
+    assert all("run" not in r.get("at", {}) for run in runs for d in run["detectors"] for r in d["rows"])
+    for det in merged["detectors"]:
+        assert all("at" not in r for r in (det.get("below") or {}).get("rows") or []), det["id"]
+
+
+@check("timeline: report.md links the window and each row to Perfetto UI, the same text for the same set")
+def _(report):
+    # The trace has no address a browser can fetch, so the link opens the UI
+    # on the moment and the trace is opened there; the UI zooms to `visStart`
+    # and `visEnd` and pins the thread. Nothing in it is of this machine or
+    # this run (#132).
+    import copy
+    from urllib.parse import unquote
+    from . import render, timeline
+    text = render.to_markdown(copy.deepcopy(report))
+    assert text == render.to_markdown(copy.deepcopy(report))
+    w = report["window"]
+    window = f"{timeline.UI}/#!/?visStart={w['ts_start']}&visEnd={w['ts_end']}&startupCommands="
+    assert window in text, text[:600]
+    pin = f'"^{fixture.THREADS[fixture.TID_MAIN].replace(".", chr(92) + ".")} {fixture.TID_MAIN}$"'
+    assert pin.replace(chr(92), chr(92) * 2) in unquote(text), "the main thread is pinned by its track's title"
+    assert timeline.HOW in text
+    found = timeline.moments(report)
+    for det in report["detectors"]:
+        mine = timeline.of_detector(found, det["id"])
+        assert len(mine) == min(timeline.PER_DETECTOR, sum(1 for r in det["rows"] if "at" in r)), det["id"]
+        for _, m in mine:
+            assert f"({timeline.url(m)})" in text, (det["id"], m)
+    assert "127.0.0.1" not in text and "localhost" not in text
+
+
 @check("a detector's own tables are named after it, written over each run, "
        "and read by none other")
 def _(report):

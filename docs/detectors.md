@@ -617,6 +617,50 @@ What decides the query:
   process while another repeat's did not; then the worst of those with
   stacks does.
 
+## Where to look on the timeline
+
+A line reading `-- @longest` starts a fourth query, which says where each
+row's longest occurrence is, so that the report can open the trace on it in
+Perfetto UI ([On the timeline](analysing.md#on-the-timeline)).
+`monitor_contention` has one:
+
+```sql
+-- @longest
+SELECT location, ts, dur, tid
+FROM (
+    SELECT r.location, c.ts, c.dur, c.tid,
+           ROW_NUMBER() OVER (PARTITION BY r.location ORDER BY c.dur DESC, c.ts) AS k
+    FROM _det_monitor_contention c
+    JOIN _rows r ON r.location = c.thread_name
+    WHERE c.dur > 0
+)
+WHERE k = 1;
+```
+
+It sees the same `_rows` as the other two and returns one line per row: the
+columns that name the row, `ts` and `dur` of the occurrence as the trace has
+them, in nanoseconds, and `tid`, the thread it happened on, where it has one.
+The row gets `at` in the json: those numbers, the thread's name, and in a set
+the repeat it is in.
+
+What decides the query:
+
+- **Longest by what `max_ms` is the longest of**, so the place opened is the
+  number the row prints. For `frame_jank` that is the frame that overran its
+  deadline the most, and `dur` is that frame's own length.
+- **The occurrence as the trace has it**, not clipped to the window where a
+  slice runs past it: the link zooms to the slice the UI shows.
+- **It decides nothing.** Rows and numbers are the first query's, so
+  `@longest` is no part of the detector's `sha`, and a report from before
+  it keeps its verdicts in `compare`.
+- **Every row it measured**, under the bar too: a set takes a row's place
+  from the repeat whose longest it is, shown there or not.
+
+Nine shipped detectors have one: `anr_risk`, `binder_txn`, `frame_jank`,
+`gc_pressure`, `io_wait`, `main_thread_block`, `main_thread_outlier`,
+`monitor_contention` and `runnable_starvation`. A detector without it has no
+link under its rows.
+
 ## What trips people up
 
 Three things that cost an afternoon each. All three are about trace_processor

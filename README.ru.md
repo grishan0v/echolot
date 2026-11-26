@@ -146,6 +146,7 @@ Traces: `coldStart_iter000`, `coldStart_iter001`, `coldStart_iter002`, `coldStar
 Scenario: `coldStart`
 Process: `com.example.app` (pid 12903 in `coldStart_iter000`, the first of 5)
 Scenario window: **1136.05 ms** (from 1084.25 to 1214.18 across repeats)
+Timeline: [the scenario window, 1084.2 ms, in `coldStart_iter000`](https://ui.perfetto.dev/#!/?visStart=10100000000&visEnd=11184250000&startupCommands=%5B%7B%22id%22%3A%22dev.perfetto.PinTracksByRegex%22%2C%22args%22%3A%5B%22%5Ecom%5C%5C.example%5C%5C.app%2012903%24%22%5D%7D%5D). Each link opens Perfetto UI on the moment: open the trace it names there (Open trace file, or drop it on the page) and the view goes to it. On the report's page in `echolot ui` one click opens it with its trace.
 Main thread: 40% on a CPU · 1% waiting for a CPU · 9% blocked in the kernel · 49% sleeping
 Covered by the findings below: **42%** of the main thread's window, each moment counted once
 Startup: cold, **1174 ms** from the launch to the first frame: 42% sleeping · 17% `choreographer_do_frame` · 17% `inflate` · 6% blocked in the kernel · 5% `monitor_contention` · 3% `launch_delay` · 2% `bind_application` · 2% `activity_start`
@@ -170,6 +171,8 @@ _the platform classifies every frame itself, and says whose fault it was. The on
 |---|---|---|---|---|---|
 | App Deadline Missed | 5/5 | 4 | 427.51 | 172.0 | Self Jank · 4 of 19 frames · longest 188.7 ms |
 
+On the timeline: [the longest of `App Deadline Missed`, 188.7 ms, in `coldStart_iter003`](https://ui.perfetto.dev/#!/?visStart=10312249999&visEnd=10500949999)
+
 <sub>detector `frame_jank`, params: {'min_frames': 3, 'min_overrun_ms': 4}</sub>
 
 ## Where the main thread spent its time
@@ -182,6 +185,8 @@ _measured as SELF time, children subtracted — otherwise one event lands in the
 | TextLayout:initLayout | 5/5 | 51 | 73.95 | 73.95 | 1.62 | com.example.app |
 | Lock contention on a monitor lock (owner tid: #) | 5/5 | 9 | 61.6 | 61.6 | 25.09 | com.example.app |
 
+On the timeline: [the longest of `inflate`, 86.2 ms, in `coldStart_iter001`](https://ui.perfetto.dev/#!/?visStart=10329310000&visEnd=10415510000&startupCommands=%5B%7B%22id%22%3A%22dev.perfetto.PinTracksByRegex%22%2C%22args%22%3A%5B%22%5Ecom%5C%5C.example%5C%5C.app%2012903%24%22%5D%7D%5D) · [the longest of `draw`, 38.1 ms, in `coldStart_iter004`](https://ui.perfetto.dev/#!/?visStart=10299990000&visEnd=10338070000&startupCommands=%5B%7B%22id%22%3A%22dev.perfetto.PinTracksByRegex%22%2C%22args%22%3A%5B%22%5Ecom%5C%5C.example%5C%5C.app%2012903%24%22%5D%7D%5D) · [the longest of `TextLayout:initLayout`, 1.6 ms, in `coldStart_iter004`](https://ui.perfetto.dev/#!/?visStart=10207630000&visEnd=10209250000&startupCommands=%5B%7B%22id%22%3A%22dev.perfetto.PinTracksByRegex%22%2C%22args%22%3A%5B%22%5Ecom%5C%5C.example%5C%5C.app%2012903%24%22%5D%7D%5D)
+
 <sub>detector `main_thread_block`, params: {'min_slice_ms': 16}</sub>
 
 ## Single occurrences far longer than the same work usually takes
@@ -191,6 +196,8 @@ _the pair to main_thread_block. That one asks where the main thread's time went 
 |---|---|---|---|---|---|
 | inflate | 2/5 | 1 | 86.2 | 86.2 | median 12.1 ms of 15 · worst 7.1× |
 
+On the timeline: [the longest of `inflate`, 86.2 ms, in `coldStart_iter001`](https://ui.perfetto.dev/#!/?visStart=10329310000&visEnd=10415510000&startupCommands=%5B%7B%22id%22%3A%22dev.perfetto.PinTracksByRegex%22%2C%22args%22%3A%5B%22%5Ecom%5C%5C.example%5C%5C.app%2012903%24%22%5D%7D%5D)
+
 <sub>detector `main_thread_outlier`, params: {'factor': 4, 'min_abs_ms': 40, 'min_occurrences': 5}</sub>
 
 ## Monitor contention
@@ -199,6 +206,8 @@ _ART writes a "Lock contention on ..." slice with the owner's tid — ready-made
 | Where | Threads | Runs | N | Total, ms | Max of any run, ms | In the code | Evidence |
 |---|---|---|---|---|---|---|---|
 | main | 1 | 5/5 | 9 | 61.6 | 25.09 | owner at StoreRepository.kt:30 · blocked at StoreRepository.kt:61 | monitor contention with owner DefaultDispatcher-worker-3 (12931) at void com.example.app.data.StoreRepository.update(com.example.app.data.Item)(StoreRepository.kt:30) waiters=0 blocking from com.example.app.data.Item com.example.app.data.StoreRepository.find(long)(StoreRepository.kt:61) · owner: running 100% |
+
+On the timeline: [the longest of `main`, 25.1 ms, in `coldStart_iter004`](https://ui.perfetto.dev/#!/?visStart=10272660000&visEnd=10297750000&startupCommands=%5B%7B%22id%22%3A%22dev.perfetto.PinTracksByRegex%22%2C%22args%22%3A%5B%22%5Ecom%5C%5C.example%5C%5C.app%2012903%24%22%5D%7D%5D)
 
 <sub>detector `monitor_contention`, params: {'min_block_ms': 8, 'max_total_ms': 50, 'name_glob': 'Lock contention on a monitor lock*', 'name_glob_alt': 'monitor contention with owner*'}</sub>
 

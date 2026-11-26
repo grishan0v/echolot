@@ -189,3 +189,23 @@ SELECT s.ts, s.dur
 FROM _det_gc_pressure s
 JOIN _rows r ON r.location = s.name AND r.thread IS s.thread_name
 WHERE s.is_main_thread = 1;
+
+-- @longest
+--
+-- The longest collection, or wait for one, of each row on its thread:
+-- `max_ms` is the longest of them. The detector's table keeps no thread id,
+-- and the slice it came from gives it back.
+
+SELECT location, thread, ts, dur,
+       (SELECT w.tid FROM _slice_win w
+        WHERE w.ts = l.ts AND w.dur = l.dur
+        ORDER BY w.is_main_thread DESC LIMIT 1) AS tid
+FROM (
+    SELECT r.location, r.thread, g.ts, g.dur,
+           ROW_NUMBER() OVER (PARTITION BY r.location, r.thread
+                              ORDER BY g.dur DESC, g.ts) AS k
+    FROM _det_gc_pressure g
+    JOIN _rows r ON r.location = g.name AND r.thread IS g.thread_name
+    WHERE g.dur > 0
+) l
+WHERE k = 1;

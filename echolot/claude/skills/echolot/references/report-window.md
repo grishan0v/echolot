@@ -131,3 +131,8 @@ the most time with the window. For a launch window it is the launch the
 window was built from, whatever came after it: the startup then begins with
 the window, and `from_window_end_ms` is how long before the window's end the
 first frame came, zero when no `reportFullyDrawn()` call moved the end.
+
+**`window.main_thread_name`** — the main thread's name as the trace has it,
+of the first repeat as `pid` is: Perfetto UI titles its track by it and the
+tid, and the window's link in `report.md` pins that track (`at` in `echolot
+guide report-columns`). Absent from a report written before it.

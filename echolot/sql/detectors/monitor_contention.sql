@@ -271,3 +271,18 @@ SELECT ts_win AS ts, dur_win AS dur
 FROM _det_monitor_contention
 WHERE is_main_thread = 1 AND dur_win > 0
   AND 'main' IN (SELECT location FROM _rows);
+
+-- @longest
+--
+-- The longest wait of each row's threads, as ART wrote its slice: `max_ms`
+-- is the longest of them.
+
+SELECT location, ts, dur, tid
+FROM (
+    SELECT r.location, c.ts, c.dur, c.tid,
+           ROW_NUMBER() OVER (PARTITION BY r.location ORDER BY c.dur DESC, c.ts) AS k
+    FROM _det_monitor_contention c
+    JOIN _rows r ON r.location = c.thread_name
+    WHERE c.dur > 0
+)
+WHERE k = 1;

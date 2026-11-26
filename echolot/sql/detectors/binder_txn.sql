@@ -314,3 +314,21 @@ FROM _det_binder_txn t
 WHERE t.is_main_thread = 1
   AND EXISTS (SELECT 1 FROM _rows r
               WHERE r.location = t.thread_name AND r.thread = 'main thread');
+
+-- @longest
+--
+-- The longest transaction of each row's threads, main or not as the row
+-- says: `max_ms` is the longest of them.
+
+SELECT location, thread, ts, dur, tid
+FROM (
+    SELECT r.location, r.thread, t.ts, t.dur, t.tid,
+           ROW_NUMBER() OVER (PARTITION BY r.location, r.thread
+                              ORDER BY t.dur DESC, t.ts) AS k
+    FROM _det_binder_txn t
+    JOIN _rows r ON r.location IS t.thread_name
+                AND r.thread = CASE WHEN t.is_main_thread = 1
+                                    THEN 'main thread' ELSE 'background' END
+    WHERE t.dur > 0
+)
+WHERE k = 1;
